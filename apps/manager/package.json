@@ -4,7 +4,7 @@
     "private": true,
     "description": "Manager control panel for interactive art system",
     "scripts": {
-        "dev": "vite dev --port 5173",
+        "dev": "vite dev --port 5173 --host",
         "build": "vite build",
         "preview": "vite preview",
         "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

@@ -85,10 +85,17 @@ export class ClientSDK {
 
         this.socket = io(this.config.serverUrl, {
             query: { role: 'client' },
-            transports: ['websocket', 'polling'],
+            // Use polling first for better mobile compatibility, then upgrade to websocket
+            transports: ['polling', 'websocket'],
+            // Increase timeouts for mobile networks
+            timeout: 20000,
+            // Reconnection settings
             reconnection: this.config.autoReconnect,
             reconnectionAttempts: this.config.reconnectionAttempts,
             reconnectionDelay: this.config.reconnectionDelay,
+            reconnectionDelayMax: 5000,
+            // Force new connection
+            forceNew: true,
         });
 
         this.setupSocketListeners();

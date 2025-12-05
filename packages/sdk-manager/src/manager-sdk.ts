@@ -94,10 +94,17 @@ export class ManagerSDK {
 
         this.socket = io(this.config.serverUrl, {
             query: { role: 'manager' },
-            transports: ['websocket', 'polling'],
+            // Use polling first for better compatibility, then upgrade to websocket
+            transports: ['polling', 'websocket'],
+            // Increase timeouts
+            timeout: 20000,
+            // Reconnection settings
             reconnection: this.config.autoReconnect,
             reconnectionAttempts: this.config.reconnectionAttempts,
             reconnectionDelay: this.config.reconnectionDelay,
+            reconnectionDelayMax: 5000,
+            // Force new connection
+            forceNew: true,
         });
 
         this.setupSocketListeners();

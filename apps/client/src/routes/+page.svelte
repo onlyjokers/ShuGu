@@ -25,6 +25,12 @@
       const savedUrl = localStorage.getItem('shugu-server-url');
       if (savedUrl) {
         serverUrl = savedUrl;
+      } else if (
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1'
+      ) {
+        // Assume server is on the same host if we are accessing via IP
+        serverUrl = `http://${window.location.hostname}:3001`;
       }
     }
   });
