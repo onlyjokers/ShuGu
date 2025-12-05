@@ -19,16 +19,21 @@
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get('server');
+    const isAccessingViaIP =
+      window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+
     if (urlParam) {
       serverUrl = urlParam;
     } else {
       const savedUrl = localStorage.getItem('shugu-server-url');
-      if (savedUrl) {
+
+      // If accessing via IP but saved URL is localhost, ignore the saved URL
+      const savedIsLocalhost =
+        savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1'));
+
+      if (savedUrl && !(isAccessingViaIP && savedIsLocalhost)) {
         serverUrl = savedUrl;
-      } else if (
-        window.location.hostname !== 'localhost' &&
-        window.location.hostname !== '127.0.0.1'
-      ) {
+      } else if (isAccessingViaIP) {
         // Assume server is on the same host if we are accessing via IP
         serverUrl = `http://${window.location.hostname}:3001`;
       }
