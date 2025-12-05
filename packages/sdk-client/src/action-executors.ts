@@ -1,0 +1,455 @@
+/**
+ * Action executors for client-side functionality
+ * Handles flashlight, vibration, screen effects, sound playback
+ */
+
+import type {
+    FlashlightPayload,
+    ScreenColorPayload,
+    VibratePayload,
+    PlaySoundPayload,
+} from '@shugu/protocol';
+
+/**
+ * Flashlight controller using MediaStream torch capability
+ */
+export class FlashlightController {
+    private stream: MediaStream | null = null;
+    private track: MediaStreamTrack | null = null;
+    private blinkIntervalId: ReturnType<typeof setInterval> | null = null;
+    private isOn = false;
+    private fallbackElement: HTMLElement | null = null;
+
+    /**
+     * Check if torch is supported
+     */
+    async isSupported(): Promise<boolean> {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' },
+            });
+            const track = stream.getVideoTracks()[0];
+            const capabilities = track.getCapabilities() as any;
+            stream.getTracks().forEach(t => t.stop());
+            return 'torch' in capabilities;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Initialize the flashlight (request camera access)
+     */
+    async init(): Promise<boolean> {
+        try {
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' },
+            });
+            this.track = this.stream.getVideoTracks()[0];
+            return true;
+        } catch (error) {
+            console.warn('[Flashlight] Failed to initialize:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Set flashlight mode
+     */
+    async setMode(payload: FlashlightPayload): Promise<void> {
+        this.stopBlink();
+
+        switch (payload.mode) {
+            case 'off':
+                await this.setTorch(false);
+                this.hideFallback();
+                break;
+            case 'on':
+                const success = await this.setTorch(true);
+                if (!success) this.showFallback();
+                break;
+            case 'blink':
+                this.startBlink(payload.frequency ?? 2, payload.dutyCycle ?? 0.5);
+                break;
+        }
+    }
+
+    /**
+     * Clean up resources
+     */
+    destroy(): void {
+        this.stopBlink();
+        this.hideFallback();
+        if (this.stream) {
+            this.stream.getTracks().forEach(t => t.stop());
+            this.stream = null;
+            this.track = null;
+        }
+    }
+
+    private async setTorch(on: boolean): Promise<boolean> {
+        if (!this.track) {
+            // Try to initialize
+            const success = await this.init();
+            if (!success) return false;
+        }
+
+        try {
+            await this.track!.applyConstraints({
+                advanced: [{ torch: on } as any],
+            });
+            this.isOn = on;
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private startBlink(frequency: number, dutyCycle: number): void {
+        const period = 1000 / frequency;
+        const onTime = period * dutyCycle;
+
+        const doBlink = async () => {
+            const success = await this.setTorch(true);
+            if (!success) this.showFallback();
+
+            setTimeout(async () => {
+                await this.setTorch(false);
+                this.hideFallback();
+            }, onTime);
+        };
+
+        doBlink();
+        this.blinkIntervalId = setInterval(doBlink, period);
+    }
+
+    private stopBlink(): void {
+        if (this.blinkIntervalId) {
+            clearInterval(this.blinkIntervalId);
+            this.blinkIntervalId = null;
+        }
+    }
+
+    private showFallback(): void {
+        if (!this.fallbackElement) {
+            this.fallbackElement = document.createElement('div');
+            this.fallbackElement.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: white;
+        z-index: 99999;
+        pointer-events: none;
+      `;
+            document.body.appendChild(this.fallbackElement);
+        }
+        this.fallbackElement.style.display = 'block';
+    }
+
+    private hideFallback(): void {
+        if (this.fallbackElement) {
+            this.fallbackElement.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Screen color and brightness control
+ */
+export class ScreenController {
+    private overlayElement: HTMLElement | null = null;
+
+    /**
+     * Set screen color overlay
+     */
+    setColor(payload: ScreenColorPayload): void {
+        this.ensureOverlay();
+        this.overlayElement!.style.backgroundColor = payload.color;
+        this.overlayElement!.style.opacity = String(payload.opacity ?? 1);
+        this.overlayElement!.style.display = 'block';
+    }
+
+    /**
+     * Set screen brightness (via overlay)
+     */
+    setBrightness(brightness: number): void {
+        // brightness 0-1, where 0 is darkest (black overlay), 1 is normal
+        this.ensureOverlay();
+        const darkness = 1 - Math.max(0, Math.min(1, brightness));
+        this.overlayElement!.style.backgroundColor = 'black';
+        this.overlayElement!.style.opacity = String(darkness);
+        this.overlayElement!.style.display = darkness > 0 ? 'block' : 'none';
+    }
+
+    /**
+     * Clear screen effects
+     */
+    clear(): void {
+        if (this.overlayElement) {
+            this.overlayElement.style.display = 'none';
+        }
+    }
+
+    /**
+     * Clean up
+     */
+    destroy(): void {
+        if (this.overlayElement) {
+            this.overlayElement.remove();
+            this.overlayElement = null;
+        }
+    }
+
+    private ensureOverlay(): void {
+        if (!this.overlayElement) {
+            this.overlayElement = document.createElement('div');
+            this.overlayElement.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 99998;
+        pointer-events: none;
+        transition: background-color 0.1s, opacity 0.1s;
+      `;
+            document.body.appendChild(this.overlayElement);
+        }
+    }
+}
+
+/**
+ * Vibration controller
+ */
+export class VibrationController {
+    private isSupported: boolean;
+
+    constructor() {
+        this.isSupported = 'vibrate' in navigator;
+    }
+
+    /**
+     * Check if vibration is supported
+     */
+    checkSupport(): boolean {
+        return this.isSupported;
+    }
+
+    /**
+     * Trigger vibration pattern
+     */
+    vibrate(payload: VibratePayload): void {
+        if (!this.isSupported) {
+            console.log('[Vibration] Not supported on this device');
+            return;
+        }
+
+        let pattern = payload.pattern;
+
+        // Handle repeat
+        if (payload.repeat && payload.repeat > 1) {
+            const originalPattern = [...pattern];
+            for (let i = 1; i < payload.repeat; i++) {
+                pattern = [...pattern, ...originalPattern];
+            }
+        }
+
+        navigator.vibrate(pattern);
+    }
+
+    /**
+     * Stop vibration
+     */
+    stop(): void {
+        if (this.isSupported) {
+            navigator.vibrate(0);
+        }
+    }
+}
+
+/**
+ * Sound player using Web Audio API
+ */
+export class SoundPlayer {
+    private audioContext: AudioContext | null = null;
+    private currentSource: AudioBufferSourceNode | null = null;
+    private gainNode: GainNode | null = null;
+    private audioCache: Map<string, AudioBuffer> = new Map();
+    private currentUrl: string | null = null;
+
+    /**
+     * Initialize audio context (must be called from user gesture)
+     */
+    async init(): Promise<void> {
+        if (this.audioContext) return;
+
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.connect(this.audioContext.destination);
+    }
+
+    /**
+     * Resume audio context if suspended
+     */
+    async resume(): Promise<void> {
+        if (this.audioContext?.state === 'suspended') {
+            await this.audioContext.resume();
+        }
+    }
+
+    /**
+     * Play sound from URL
+     */
+    async play(payload: PlaySoundPayload): Promise<void> {
+        if (!this.audioContext) {
+            await this.init();
+        }
+
+        await this.resume();
+        this.stop();
+
+        try {
+            // Check cache or load
+            let buffer = this.audioCache.get(payload.url);
+            if (!buffer) {
+                const response = await fetch(payload.url);
+                const arrayBuffer = await response.arrayBuffer();
+                buffer = await this.audioContext!.decodeAudioData(arrayBuffer);
+                this.audioCache.set(payload.url, buffer);
+            }
+
+            // Create source and play
+            this.currentSource = this.audioContext!.createBufferSource();
+            this.currentSource.buffer = buffer;
+            this.currentSource.loop = payload.loop ?? false;
+            this.currentSource.connect(this.gainNode!);
+
+            // Set volume
+            this.gainNode!.gain.value = payload.volume ?? 1;
+
+            // Handle fade in
+            if (payload.fadeIn) {
+                this.gainNode!.gain.setValueAtTime(0, this.audioContext!.currentTime);
+                this.gainNode!.gain.linearRampToValueAtTime(
+                    payload.volume ?? 1,
+                    this.audioContext!.currentTime + payload.fadeIn / 1000
+                );
+            }
+
+            this.currentSource.start(0);
+            this.currentUrl = payload.url;
+
+        } catch (error) {
+            console.error('[SoundPlayer] Failed to play:', error);
+        }
+    }
+
+    /**
+     * Stop current playback
+     */
+    stop(): void {
+        if (this.currentSource) {
+            try {
+                this.currentSource.stop();
+            } catch {
+                // Already stopped
+            }
+            this.currentSource.disconnect();
+            this.currentSource = null;
+            this.currentUrl = null;
+        }
+    }
+
+    /**
+     * Set volume
+     */
+    setVolume(volume: number): void {
+        if (this.gainNode) {
+            this.gainNode.gain.value = Math.max(0, Math.min(1, volume));
+        }
+    }
+
+    /**
+     * Get audio context for plugins
+     */
+    getAudioContext(): AudioContext | null {
+        return this.audioContext;
+    }
+
+    /**
+     * Destroy and clean up
+     */
+    async destroy(): Promise<void> {
+        this.stop();
+        this.audioCache.clear();
+        if (this.audioContext) {
+            await this.audioContext.close();
+            this.audioContext = null;
+        }
+    }
+}
+
+/**
+ * Wake lock to prevent screen from sleeping
+ */
+export class WakeLockController {
+    private wakeLock: WakeLockSentinel | null = null;
+    private isSupported: boolean;
+
+    constructor() {
+        this.isSupported = 'wakeLock' in navigator;
+    }
+
+    /**
+     * Check if wake lock is supported
+     */
+    checkSupport(): boolean {
+        return this.isSupported;
+    }
+
+    /**
+     * Request wake lock
+     */
+    async request(): Promise<boolean> {
+        if (!this.isSupported) {
+            console.log('[WakeLock] Not supported on this device');
+            return false;
+        }
+
+        try {
+            this.wakeLock = await navigator.wakeLock.request('screen');
+            console.log('[WakeLock] Acquired');
+
+            // Re-acquire on visibility change
+            document.addEventListener('visibilitychange', this.handleVisibilityChange);
+            return true;
+        } catch (error) {
+            console.warn('[WakeLock] Failed to acquire:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Release wake lock
+     */
+    async release(): Promise<void> {
+        document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+        if (this.wakeLock) {
+            await this.wakeLock.release();
+            this.wakeLock = null;
+            console.log('[WakeLock] Released');
+        }
+    }
+
+    private handleVisibilityChange = async (): Promise<void> => {
+        if (document.visibilityState === 'visible' && this.isSupported) {
+            try {
+                this.wakeLock = await navigator.wakeLock.request('screen');
+            } catch {
+                // Ignore errors on re-acquire
+            }
+        }
+    };
+}

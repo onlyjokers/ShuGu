@@ -1,0 +1,32 @@
+{
+    "name": "@shugu/visual-plugins",
+    "version": "1.0.0",
+    "description": "Three.js visual scene plugins",
+    "main": "./dist/index.js",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "clean": "rm -rf dist",
+        "lint": "eslint src --ext .ts"
+    },
+    "files": [
+        "dist"
+    ],
+    "dependencies": {
+        "@shugu/protocol": "workspace:*",
+        "three": "^0.160.0"
+    },
+    "devDependencies": {
+        "@types/three": "^0.160.0",
+        "typescript": "^5.3.0"
+    }
+}

@@ -1,0 +1,35 @@
+{
+    "name": "@shugu/ui-kit",
+    "version": "1.0.0",
+    "description": "Shared UI components and styles",
+    "main": "./dist/index.js",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "type": "module",
+    "svelte": "./src/index.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "svelte": "./src/index.ts",
+            "import": "./dist/index.js"
+        },
+        "./styles": "./src/styles/index.css"
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "clean": "rm -rf dist",
+        "lint": "eslint src --ext .ts,.svelte"
+    },
+    "files": [
+        "dist",
+        "src"
+    ],
+    "peerDependencies": {
+        "svelte": "^4.0.0"
+    },
+    "devDependencies": {
+        "svelte": "^4.2.0",
+        "typescript": "^5.3.0"
+    }
+}

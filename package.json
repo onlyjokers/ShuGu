@@ -1,0 +1,27 @@
+{
+  "name": "shugu3",
+  "version": "1.0.0",
+  "description": "Interactive art performance system with manager, client and server",
+  "private": true,
+  "scripts": {
+    "dev:all": "pnpm -r --parallel run dev",
+    "dev:server": "pnpm --filter @shugu/server run dev",
+    "dev:manager": "pnpm --filter @shugu/manager run dev",
+    "dev:client": "pnpm --filter @shugu/client run dev",
+    "build:all": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "format": "prettier --write \"**/*.{ts,svelte,js,json,css,md}\"",
+    "clean": "pnpm -r run clean && rm -rf node_modules"
+  },
+  "keywords": [
+    "interactive-art",
+    "websocket",
+    "svelte",
+    "threejs"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,324 @@
+import { io, Socket } from 'socket.io-client';
+import {
+    Message,
+    ControlMessage,
+    PluginControlMessage,
+    SystemMessage,
+    SensorDataMessage,
+    MediaMetaMessage,
+    SOCKET_EVENTS,
+    isControlMessage,
+    isPluginControlMessage,
+    isSystemMessage,
+    isMediaMetaMessage,
+    createSensorDataMessage,
+    createTimePing,
+    processTimePong,
+    createTimeSyncState,
+    updateTimeSyncState,
+    getServerTime,
+    calculateExecutionDelay,
+    scheduleAtServerTime,
+    TimeSyncState,
+    TimePongData,
+    SensorType,
+    SensorPayload,
+} from '@shugu/protocol';
+
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+
+export interface ClientState {
+    status: ConnectionStatus;
+    clientId: string | null;
+    timeSync: TimeSyncState;
+    error: string | null;
+}
+
+export type MessageHandler<T = Message> = (message: T) => void;
+
+/**
+ * Configuration for ClientSDK
+ */
+export interface ClientSDKConfig {
+    serverUrl: string;
+    autoReconnect?: boolean;
+    reconnectionAttempts?: number;
+    reconnectionDelay?: number;
+    timeSyncInterval?: number;
+}
+
+/**
+ * Client SDK for managing Socket.io connection and real-time communication
+ */
+export class ClientSDK {
+    private socket: Socket | null = null;
+    private config: Required<ClientSDKConfig>;
+    private state: ClientState;
+    private stateListeners: Set<(state: ClientState) => void> = new Set();
+    private messageHandlers: Map<string, Set<MessageHandler>> = new Map();
+    private timeSyncIntervalId: ReturnType<typeof setInterval> | null = null;
+
+    constructor(config: ClientSDKConfig) {
+        this.config = {
+            serverUrl: config.serverUrl,
+            autoReconnect: config.autoReconnect ?? true,
+            reconnectionAttempts: config.reconnectionAttempts ?? 10,
+            reconnectionDelay: config.reconnectionDelay ?? 1000,
+            timeSyncInterval: config.timeSyncInterval ?? 5000,
+        };
+
+        this.state = {
+            status: 'disconnected',
+            clientId: null,
+            timeSync: createTimeSyncState(),
+            error: null,
+        };
+    }
+
+    /**
+     * Connect to the server
+     */
+    connect(): void {
+        if (this.socket?.connected) return;
+
+        this.updateState({ status: 'connecting', error: null });
+
+        this.socket = io(this.config.serverUrl, {
+            query: { role: 'client' },
+            transports: ['websocket', 'polling'],
+            reconnection: this.config.autoReconnect,
+            reconnectionAttempts: this.config.reconnectionAttempts,
+            reconnectionDelay: this.config.reconnectionDelay,
+        });
+
+        this.setupSocketListeners();
+    }
+
+    /**
+     * Disconnect from server
+     */
+    disconnect(): void {
+        this.stopTimeSync();
+        this.socket?.disconnect();
+        this.socket = null;
+        this.updateState({
+            status: 'disconnected',
+            clientId: null,
+        });
+    }
+
+    /**
+     * Get current state
+     */
+    getState(): ClientState {
+        return { ...this.state };
+    }
+
+    /**
+     * Subscribe to state changes
+     */
+    onStateChange(listener: (state: ClientState) => void): () => void {
+        this.stateListeners.add(listener);
+        // Immediately call with current state
+        listener(this.getState());
+        return () => this.stateListeners.delete(listener);
+    }
+
+    /**
+     * Subscribe to specific message types
+     */
+    onMessage<T extends Message = Message>(
+        type: 'control' | 'plugin' | 'system' | 'media' | 'all',
+        handler: MessageHandler<T>
+    ): () => void {
+        if (!this.messageHandlers.has(type)) {
+            this.messageHandlers.set(type, new Set());
+        }
+        this.messageHandlers.get(type)!.add(handler as MessageHandler);
+        return () => this.messageHandlers.get(type)?.delete(handler as MessageHandler);
+    }
+
+    /**
+     * Subscribe to control messages
+     */
+    onControl(handler: MessageHandler<ControlMessage>): () => void {
+        return this.onMessage('control', handler);
+    }
+
+    /**
+     * Subscribe to plugin control messages
+     */
+    onPluginControl(handler: MessageHandler<PluginControlMessage>): () => void {
+        return this.onMessage('plugin', handler);
+    }
+
+    /**
+     * Subscribe to media messages
+     */
+    onMedia(handler: MessageHandler<MediaMetaMessage>): () => void {
+        return this.onMessage('media', handler);
+    }
+
+    /**
+     * Send sensor data to server
+     */
+    sendSensorData(sensorType: SensorType, payload: SensorPayload): void {
+        if (!this.socket?.connected || !this.state.clientId) return;
+
+        const message = createSensorDataMessage(
+            this.state.clientId,
+            sensorType,
+            payload
+        );
+        this.socket.emit(SOCKET_EVENTS.MSG, message);
+    }
+
+    /**
+     * Get current server time
+     */
+    getServerTime(): number {
+        return getServerTime(this.state.timeSync);
+    }
+
+    /**
+     * Get time offset
+     */
+    getOffset(): number {
+        return this.state.timeSync.offset;
+    }
+
+    /**
+     * Schedule action at server time
+     */
+    scheduleAt(executeAt: number, callback: () => void): { cancel: () => void; delay: number } {
+        return scheduleAtServerTime(executeAt, this.state.timeSync, callback);
+    }
+
+    /**
+     * Calculate delay until server time
+     */
+    getDelayUntil(serverTime: number): number {
+        return calculateExecutionDelay(serverTime, this.state.timeSync);
+    }
+
+    private setupSocketListeners(): void {
+        if (!this.socket) return;
+
+        this.socket.on('connect', () => {
+            console.log('[SDK Client] Connected');
+            this.updateState({ status: 'connected', error: null });
+            this.startTimeSync();
+        });
+
+        this.socket.on('disconnect', (reason) => {
+            console.log('[SDK Client] Disconnected:', reason);
+            this.stopTimeSync();
+            this.updateState({ status: 'disconnected' });
+        });
+
+        this.socket.on('connect_error', (error) => {
+            console.error('[SDK Client] Connection error:', error.message);
+            this.updateState({ status: 'error', error: error.message });
+        });
+
+        this.socket.io.on('reconnect_attempt', () => {
+            this.updateState({ status: 'reconnecting' });
+        });
+
+        this.socket.io.on('reconnect', () => {
+            console.log('[SDK Client] Reconnected');
+            this.updateState({ status: 'connected', error: null });
+        });
+
+        // Handle messages
+        this.socket.on(SOCKET_EVENTS.MSG, (message: Message) => {
+            this.handleMessage(message);
+        });
+
+        // Handle time sync pong
+        this.socket.on(SOCKET_EVENTS.TIME_PONG, (data: TimePongData) => {
+            const result = processTimePong(data);
+            const newTimeSync = updateTimeSyncState(this.state.timeSync, result);
+            this.updateState({ timeSync: newTimeSync });
+        });
+    }
+
+    private handleMessage(message: Message): void {
+        // Handle system messages internally
+        if (isSystemMessage(message)) {
+            this.handleSystemMessage(message as SystemMessage);
+        }
+
+        // Dispatch to type-specific handlers
+        if (isControlMessage(message)) {
+            this.dispatchMessage('control', message);
+        } else if (isPluginControlMessage(message)) {
+            this.dispatchMessage('plugin', message);
+        } else if (isMediaMetaMessage(message)) {
+            this.dispatchMessage('media', message);
+        } else if (isSystemMessage(message)) {
+            this.dispatchMessage('system', message);
+        }
+
+        // Also dispatch to 'all' handlers
+        this.dispatchMessage('all', message);
+    }
+
+    private handleSystemMessage(message: SystemMessage): void {
+        switch (message.action) {
+            case 'clientRegistered':
+                if (message.payload.clientId) {
+                    this.updateState({ clientId: message.payload.clientId });
+                    console.log('[SDK Client] Registered as:', message.payload.clientId);
+                }
+                break;
+        }
+    }
+
+    private dispatchMessage(type: string, message: Message): void {
+        const handlers = this.messageHandlers.get(type);
+        if (handlers) {
+            handlers.forEach(handler => {
+                try {
+                    handler(message);
+                } catch (error) {
+                    console.error('[SDK Client] Message handler error:', error);
+                }
+            });
+        }
+    }
+
+    private updateState(partial: Partial<ClientState>): void {
+        this.state = { ...this.state, ...partial };
+        this.stateListeners.forEach(listener => {
+            try {
+                listener(this.getState());
+            } catch (error) {
+                console.error('[SDK Client] State listener error:', error);
+            }
+        });
+    }
+
+    private startTimeSync(): void {
+        // Do immediate sync
+        this.doTimeSync();
+
+        // Set up interval
+        this.timeSyncIntervalId = setInterval(() => {
+            this.doTimeSync();
+        }, this.config.timeSyncInterval);
+    }
+
+    private stopTimeSync(): void {
+        if (this.timeSyncIntervalId) {
+            clearInterval(this.timeSyncIntervalId);
+            this.timeSyncIntervalId = null;
+        }
+    }
+
+    private doTimeSync(): void {
+        if (!this.socket?.connected) return;
+        const pingData = createTimePing();
+        this.socket.emit(SOCKET_EVENTS.TIME_PING, pingData);
+    }
+}
