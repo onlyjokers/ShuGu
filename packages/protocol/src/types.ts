@@ -40,8 +40,10 @@ export type ControlAction =
     | 'vibrate'
     | 'playSound'
     | 'stopSound'
+    | 'shutdown'
     | 'visualSceneSwitch'
     | 'setDataReportingRate'
+    | 'setSensorState'
     | 'custom';
 
 /**

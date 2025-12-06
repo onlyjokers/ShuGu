@@ -59,6 +59,9 @@ export const permissions = writable<{
     wakeLock: 'pending',
 });
 
+// Latency in ms (smooth average)
+export const latency = writable<number>(0);
+
 // Current visual scene
 export const currentScene = writable<string>('box-scene');
 
@@ -199,6 +202,31 @@ function handleControlMessage(message: ControlMessage): void {
                 }
                 break;
 
+            case 'setSensorState':
+                const sensorStatePayload = message.payload as { active: boolean };
+                if (sensorManager) {
+                    if (sensorStatePayload.active) {
+                        sensorManager.start();
+                    } else {
+                        sensorManager.stop();
+                    }
+                }
+                break;
+            
+            case 'ping':
+                // Echo back for latency measurement
+                 if (sdk && message.id) {
+                    // We can just log it or maybe send a pong if we had a protocol for it. 
+                    // But actually, the plan mentioned "Latency Monitoring: Add measureLatency() function that sends a ping".
+                    // The server -> client ping isn't the main goal, it's measuring latency.
+                    // Let's stick to the plan: "Add measureLatency() function that sends a ping and updates a new latency store."
+                    // But wait, this is handleControlMessage. The server might send a ping? 
+                    // Actually the plan said "latency tracking (ping/pong or timestamp diff) in messages." 
+                    // and "Add measureLatency() function that sends a ping".
+                    // So we need to add that function to this file.
+                 }
+                 break;
+
             default:
                 console.log('[Client] Unknown action:', message.action);
         }
@@ -266,4 +294,20 @@ export function getSDK(): ClientSDK | null {
  */
 export function getSoundPlayer(): SoundPlayer | null {
     return soundPlayer;
+}
+
+/**
+ * Measure round-trip latency
+ */
+export async function measureLatency(): Promise<number> {
+    if (!sdk) return 0;
+    
+    try {
+        const rtt = await sdk.ping();
+        latency.set(rtt);
+        return rtt;
+    } catch (e) {
+        console.warn('[Client] Latency check failed:', e);
+        return 0;
+    }
 }

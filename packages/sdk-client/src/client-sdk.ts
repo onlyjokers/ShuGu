@@ -328,4 +328,39 @@ export class ClientSDK {
         const pingData = createTimePing();
         this.socket.emit(SOCKET_EVENTS.TIME_PING, pingData);
     }
+
+    /**
+     * Send a ping to measure latency
+     * Returns RTT in ms
+     */
+    async ping(): Promise<number> {
+        if (!this.socket?.connected) throw new Error('Not connected');
+        
+        const start = performance.now();
+        return new Promise<number>((resolve, reject) => {
+            if (!this.socket) return reject(new Error('Socket closed'));
+            
+            // We'll use a one-off event listener for the pong
+            // Note: server needs to support generic ping/pong or we reuse time:ping
+            // We simply reuse time:ping for now as it's already there
+            const pingData = createTimePing();
+            
+            const handlePong = (data: TimePongData) => {
+                if (data.clientTimestamp === pingData.clientTimestamp) {
+                    const rtt = performance.now() - start;
+                    this.socket?.off(SOCKET_EVENTS.TIME_PONG, handlePong);
+                    resolve(rtt);
+                }
+            };
+
+            this.socket.on(SOCKET_EVENTS.TIME_PONG, handlePong);
+            this.socket.emit(SOCKET_EVENTS.TIME_PING, pingData);
+            
+            // Timeout
+            setTimeout(() => {
+                this.socket?.off(SOCKET_EVENTS.TIME_PONG, handlePong);
+                reject(new Error('Ping timeout'));
+            }, 5000);
+        });
+    }
 }

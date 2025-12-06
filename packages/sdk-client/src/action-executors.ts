@@ -488,10 +488,13 @@ export class WakeLockController {
         }
 
         try {
+            if (this.wakeLock) return true; // Already active
+
             this.wakeLock = await navigator.wakeLock.request('screen');
             console.log('[WakeLock] Acquired');
 
             // Re-acquire on visibility change
+            document.removeEventListener('visibilitychange', this.handleVisibilityChange);
             document.addEventListener('visibilitychange', this.handleVisibilityChange);
             return true;
         } catch (error) {

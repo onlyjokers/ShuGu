@@ -56,6 +56,17 @@ export class EventsGateway
         // Notify managers if a client joined
         if (role === 'client') {
             this.messageRouter.notifyClientJoined(clientId);
+            
+            // Default to inactive sensors
+            client.emit('msg', {
+                type: 'control',
+                id: `ctrl_${Date.now()}`,
+                timestamp: Date.now(),
+                source: 'server',
+                target: { mode: 'clientIds', ids: [clientId] },
+                action: 'setSensorState',
+                payload: { active: false }
+            });
         } else if (role === 'manager') {
             // Send current client list to new manager
             this.messageRouter.broadcastClientListUpdate();
@@ -123,13 +134,55 @@ export class EventsGateway
         }
 
         // Update selection state
+        // Calculate changes
         const allClients = this.clientRegistry.getAllClients();
+        const previousSelection = new Set(
+            allClients.filter(c => c.selected).map(c => c.clientId)
+        );
+        const newSelection = new Set(data.clientIds);
+
+        const newlySelected = data.clientIds.filter(id => !previousSelection.has(id));
+        const newlyDeselected = Array.from(previousSelection).filter(id => !newSelection.has(id));
+
+        // Update registry state
         allClients.forEach(c => {
             this.clientRegistry.setClientSelected(
                 c.clientId,
                 data.clientIds.includes(c.clientId)
             );
         });
+
+        // Notify newly selected clients to START streaming
+        if (newlySelected.length > 0) {
+            const socketIds = this.clientRegistry.getSocketIds(newlySelected);
+            socketIds.forEach(socketId => {
+                this.server.to(socketId).emit('msg', {
+                    type: 'control',
+                    id: `ctrl_${Date.now()}`,
+                    timestamp: Date.now(),
+                    source: 'server',
+                    target: { mode: 'clientIds', ids: [this.clientRegistry.getClientIdBySocketId(socketId)!] },
+                    action: 'setSensorState',
+                    payload: { active: true }
+                });
+            });
+        }
+
+        // Notify newly deselected clients to STOP streaming
+        if (newlyDeselected.length > 0) {
+            const socketIds = this.clientRegistry.getSocketIds(newlyDeselected);
+            socketIds.forEach(socketId => {
+                this.server.to(socketId).emit('msg', {
+                    type: 'control',
+                    id: `ctrl_${Date.now()}`,
+                    timestamp: Date.now(),
+                    source: 'server',
+                    target: { mode: 'clientIds', ids: [this.clientRegistry.getClientIdBySocketId(socketId)!] },
+                    action: 'setSensorState',
+                    payload: { active: false }
+                });
+            });
+        }
 
         // Broadcast updated client list
         this.messageRouter.broadcastClientListUpdate();
