@@ -225,27 +225,24 @@ export class ScreenController {
  */
 export class VibrationController {
     private isSupported: boolean;
+    private visualShakeInterval: ReturnType<typeof setInterval> | null = null;
 
     constructor() {
-        this.isSupported = 'vibrate' in navigator;
+        this.isSupported = typeof navigator !== 'undefined' && 'vibrate' in navigator;
     }
 
     /**
      * Check if vibration is supported
      */
     checkSupport(): boolean {
-        return this.isSupported;
+        // Evaluate support based on native API, but we'll fallback to visual
+        return true; 
     }
 
     /**
      * Trigger vibration pattern
      */
     vibrate(payload: VibratePayload): void {
-        if (!this.isSupported) {
-            console.log('[Vibration] Not supported on this device');
-            return;
-        }
-
         let pattern = payload.pattern;
 
         // Handle repeat
@@ -256,7 +253,17 @@ export class VibrationController {
             }
         }
 
-        navigator.vibrate(pattern);
+        if (this.isSupported) {
+            try {
+                navigator.vibrate(pattern);
+            } catch (e) {
+                // Some browsers might throw even if 'vibrate' is in navigator
+                this.performVisualVibration(pattern);
+            }
+        } else {
+            console.log('[Vibration] Native vibration not supported, using visual fallback');
+            this.performVisualVibration(pattern);
+        }
     }
 
     /**
@@ -264,7 +271,69 @@ export class VibrationController {
      */
     stop(): void {
         if (this.isSupported) {
-            navigator.vibrate(0);
+            try {
+                navigator.vibrate(0);
+            } catch (e) {}
+        }
+        this.stopVisualVibration();
+    }
+
+    /**
+     * Fallback visual vibration (shakes the screen)
+     */
+    private performVisualVibration(pattern: number[]): void {
+        this.stopVisualVibration();
+        
+        const body = document.body;
+        const initialTransform = body.style.transform;
+        const startTime = Date.now();
+        
+        // Calculate total duration
+        const totalDuration = pattern.reduce((a, b) => a + b, 0);
+        
+        let patternIndex = 0;
+        let lastToggleTime = 0;
+        let isVibrating = true; // First element is vibration duration
+
+        const shake = () => {
+            const elapsed = Date.now() - startTime;
+            if (elapsed >= totalDuration) {
+                this.stopVisualVibration();
+                return;
+            }
+
+            // Find current phase based on elapsed time
+            let timeSum = 0;
+            let currentPhaseIndex = 0;
+            for (let i = 0; i < pattern.length; i++) {
+                if (elapsed < timeSum + pattern[i]) {
+                    currentPhaseIndex = i;
+                    break;
+                }
+                timeSum += pattern[i];
+            }
+
+            // Even index = vibrate, Odd index = pause
+            const shouldShake = currentPhaseIndex % 2 === 0;
+
+            if (shouldShake) {
+                const intensity = 5; // pixels
+                const x = (Math.random() - 0.5) * intensity;
+                const y = (Math.random() - 0.5) * intensity;
+                body.style.transform = `translate(${x}px, ${y}px)`;
+            } else {
+                body.style.transform = initialTransform;
+            }
+        };
+
+        this.visualShakeInterval = setInterval(shake, 16); // ~60fps
+    }
+
+    private stopVisualVibration(): void {
+        if (this.visualShakeInterval) {
+            clearInterval(this.visualShakeInterval);
+            this.visualShakeInterval = null;
+            document.body.style.transform = '';
         }
     }
 }

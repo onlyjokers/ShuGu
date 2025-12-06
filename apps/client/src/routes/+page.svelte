@@ -41,7 +41,12 @@
         serverUrl = savedUrl;
       } else {
         // Default to current hostname (localhost or IP) with HTTPS
-        serverUrl = `https://${window.location.hostname}:3001`;
+        // If running on standard HTTPS port (443), assume we are proxied and use the origin
+        if (window.location.protocol === 'https:' && window.location.port === '') {
+            serverUrl = window.location.origin;
+        } else {
+            serverUrl = `https://${window.location.hostname}:3001`;
+        }
       }
     }
   });
