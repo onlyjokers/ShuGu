@@ -37,6 +37,8 @@ export interface VisualContext {
         alpha: number | null;
         beta: number | null;
         gamma: number | null;
+        /** Screen orientation angle in degrees (0/90/180/270), if available */
+        screen?: number | null;
     };
 
     /** Audio features from plugins */

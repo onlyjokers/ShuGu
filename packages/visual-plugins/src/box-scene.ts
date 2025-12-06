@@ -28,9 +28,15 @@ export class BoxScene implements VisualScene {
     private box: THREE.Mesh | null = null;
     private options: Required<BoxSceneOptions>;
 
-    private targetRotation = { x: 0, y: 0, z: 0 };
     private targetScale = 1;
+    private targetQuat = new THREE.Quaternion();
     private animationId: number | null = null;
+
+    // Reused math objects to avoid allocations
+    private readonly _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    private readonly _q0 = new THREE.Quaternion();
+    private readonly _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
+    private readonly _zee = new THREE.Vector3(0, 0, 1);
 
     constructor(options: BoxSceneOptions = {}) {
         this.options = {
@@ -124,11 +130,14 @@ export class BoxScene implements VisualScene {
     update(dt: number, context: VisualContext): void {
         if (!this.box || !this.scene || !this.camera || !this.renderer) return;
 
-        // Update target rotation from orientation
+        // Update target rotation from orientation (using quaternions for stable mapping)
         if (context.orientation) {
-            this.targetRotation.x = ((context.orientation.beta ?? 0) * Math.PI) / 180;
-            this.targetRotation.y = ((context.orientation.gamma ?? 0) * Math.PI) / 180;
-            this.targetRotation.z = ((context.orientation.alpha ?? 0) * Math.PI) / 180;
+            const alpha = (context.orientation.alpha ?? 0) * Math.PI / 180;
+            const beta = (context.orientation.beta ?? 0) * Math.PI / 180;
+            const gamma = (context.orientation.gamma ?? 0) * Math.PI / 180;
+            const screen = (context.orientation.screen ?? 0) * Math.PI / 180;
+
+            this.setObjectQuaternion(this.targetQuat, alpha, beta, gamma, screen);
         }
 
         // Update target scale from audio
@@ -157,9 +166,8 @@ export class BoxScene implements VisualScene {
         // Smooth interpolation
         const lerpFactor = 1 - Math.pow(0.1, dt);
 
-        this.box.rotation.x += (this.targetRotation.x - this.box.rotation.x) * lerpFactor;
-        this.box.rotation.y += (this.targetRotation.y - this.box.rotation.y) * lerpFactor;
-        this.box.rotation.z += (this.targetRotation.z - this.box.rotation.z) * lerpFactor;
+        // Smooth orientation using quaternion slerp to avoid gimbal issues
+        this.box.quaternion.slerp(this.targetQuat, lerpFactor);
 
         const currentScale = this.box.scale.x;
         const newScale = currentScale + (this.targetScale - currentScale) * lerpFactor * 2;
@@ -181,4 +189,21 @@ export class BoxScene implements VisualScene {
         if (!this.container) return;
         this.resize(this.container.clientWidth, this.container.clientHeight);
     };
+
+    /**
+     * Convert DeviceOrientation alpha/beta/gamma + screen orientation into world quaternion
+     * (adapted from three.js DeviceOrientationControls)
+     */
+    private setObjectQuaternion(
+        target: THREE.Quaternion,
+        alpha: number,
+        beta: number,
+        gamma: number,
+        orient: number
+    ): void {
+        this._euler.set(beta, alpha, -gamma, 'YXZ');
+        target.setFromEuler(this._euler);              // device -> world
+        target.multiply(this._q1);                     // adjust frame
+        target.multiply(this._q0.setFromAxisAngle(this._zee, -orient)); // screen orientation
+    }
 }

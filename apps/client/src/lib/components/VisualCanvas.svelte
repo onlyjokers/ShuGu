@@ -26,7 +26,7 @@
   let context: VisualContext = {};
 
   // Device orientation data
-  let orientationData = { alpha: 0, beta: 0, gamma: 0 };
+  let orientationData = { alpha: 0, beta: 0, gamma: 0, screen: 0 };
 
   onMount(() => {
     // Create scene manager
@@ -130,10 +130,15 @@
   }
 
   function handleOrientation(event: DeviceOrientationEvent) {
+    const screen = typeof window.orientation === 'number'
+      ? (window.orientation as number)
+      : (window.screen.orientation?.angle ?? 0);
+
     orientationData = {
       alpha: event.alpha ?? 0,
       beta: event.beta ?? 0,
       gamma: event.gamma ?? 0,
+      screen,
     };
     context.orientation = orientationData;
   }
