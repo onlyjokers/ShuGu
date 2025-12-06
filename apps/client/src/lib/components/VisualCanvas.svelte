@@ -7,11 +7,17 @@
     DefaultSceneManager,
     type VisualContext,
   } from '@shugu/visual-plugins';
-  import { AudioSplitPlugin, type AudioSplitFeature } from '@shugu/audio-plugins';
+  import {
+    AudioSplitPlugin,
+    MelSpectrogramPlugin,
+    type AudioSplitFeature,
+    type MelSpectrogramFeature,
+  } from '@shugu/audio-plugins';
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
-  let audioPlugin: AudioSplitPlugin | null = null;
+  let splitPlugin: AudioSplitPlugin | null = null;
+  let melPlugin: MelSpectrogramPlugin | null = null;
   let audioContext: AudioContext | null = null;
   let animationId: number;
   let lastTime = 0;
@@ -45,8 +51,12 @@
     cancelAnimationFrame(animationId);
     window.removeEventListener('deviceorientation', handleOrientation);
     sceneManager?.destroy();
-    audioPlugin?.destroy();
+    splitPlugin?.destroy();
+    melPlugin?.destroy();
+    splitPlugin = null;
+    melPlugin = null;
     audioContext?.close();
+    audioContext = null;
   });
 
   // React to scene changes
@@ -55,7 +65,7 @@
   }
 
   // React to audio stream changes
-  $: if ($audioStream && !audioPlugin) {
+  $: if ($audioStream && !audioContext) {
     setupAudioPipeline($audioStream);
   }
 
@@ -64,18 +74,27 @@
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const source = audioContext.createMediaStreamSource(stream);
 
-      audioPlugin = new AudioSplitPlugin();
-      await audioPlugin.init(audioContext, source);
+      splitPlugin = new AudioSplitPlugin();
+      melPlugin = new MelSpectrogramPlugin({ melBands: 64, frameRate: 30 });
 
-      audioPlugin.onFeature((feature: AudioSplitFeature) => {
-        context.audioFeatures = {
+      await Promise.all([
+        splitPlugin.init(audioContext, source),
+        melPlugin.init(audioContext, source, { melBands: 64, frameRate: 30 }),
+      ]);
+
+      const updateAudioFeatures = (partial: Partial<VisualContext['audioFeatures']>) => {
+        context.audioFeatures = { ...(context.audioFeatures ?? {}), ...partial };
+      };
+
+      splitPlugin.onFeature((feature: AudioSplitFeature) => {
+        updateAudioFeatures({
           rms: feature.rms,
           lowEnergy: feature.lowEnergy,
           midEnergy: feature.midEnergy,
           highEnergy: feature.highEnergy,
           bpm: feature.bpm,
           beatDetected: feature.beatDetected,
-        };
+        });
 
         // Send audio features to server
         const sdk = getSDK();
@@ -89,9 +108,24 @@
         }
       });
 
-      audioPlugin.start();
+      melPlugin.onFeature((feature: MelSpectrogramFeature) => {
+        updateAudioFeatures({
+          melBands: feature.melBands,
+          rms: feature.rms,
+          spectralCentroid: feature.spectralCentroid,
+        });
+      });
+
+      splitPlugin.start();
+      melPlugin.start();
     } catch (error) {
       console.error('[VisualCanvas] Failed to setup audio pipeline:', error);
+      splitPlugin?.destroy();
+      melPlugin?.destroy();
+      splitPlugin = null;
+      melPlugin = null;
+      audioContext?.close();
+      audioContext = null;
     }
   }
 

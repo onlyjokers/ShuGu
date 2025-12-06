@@ -1,201 +1,231 @@
 /**
- * Mel Spectrogram Scene - Visualizes mel frequency bands as bars
+ * Mel Spectrogram Scene
+ * Renders a continuously scrolling mel spectrogram (heatmap) from live audio.
  */
 
-import * as THREE from 'three';
 import type { VisualScene, VisualContext } from './types.js';
 
 export interface MelSceneOptions {
-    /** Number of bars to display */
-    barCount?: number;
-    /** Bar color gradient start */
-    colorStart?: number;
-    /** Bar color gradient end */
-    colorEnd?: number;
-    /** Background color */
-    backgroundColor?: number;
-    /** Bar spacing */
-    barSpacing?: number;
-    /** Max bar height */
-    maxHeight?: number;
+    /** Pixels shifted to the left each frame */
+    scrollPixels?: number;
+    /** Target render frame rate (Hz) */
+    frameRate?: number;
+    /** Log-power floor for normalization */
+    minDb?: number;
+    /** Log-power ceiling for normalization */
+    maxDb?: number;
+    /** Background fill color */
+    backgroundColor?: string;
+    /** Exponential smoothing factor for mel bands (0-1, higher = smoother) */
+    smoothing?: number;
 }
 
 export class MelSpectrogramScene implements VisualScene {
     readonly id = 'mel-scene';
 
     private container: HTMLElement | null = null;
-    private scene: THREE.Scene | null = null;
-    private camera: THREE.OrthographicCamera | null = null;
-    private renderer: THREE.WebGLRenderer | null = null;
-    private bars: THREE.Mesh[] = [];
+    private canvas: HTMLCanvasElement | null = null;
+    private ctx: CanvasRenderingContext2D | null = null;
+    private width = 0;
+    private height = 0;
     private options: Required<MelSceneOptions>;
-    private targetHeights: number[] = [];
+    private smoothedBands: number[] = [];
+    private accumulator = 0;
+    private palette: [number, number, number][];
+    private resizeObserver: ResizeObserver | null = null;
 
     constructor(options: MelSceneOptions = {}) {
         this.options = {
-            barCount: options.barCount ?? 26,
-            colorStart: options.colorStart ?? 0x00ff88,
-            colorEnd: options.colorEnd ?? 0xff0088,
-            backgroundColor: options.backgroundColor ?? 0x0a0a0f,
-            barSpacing: options.barSpacing ?? 0.1,
-            maxHeight: options.maxHeight ?? 3,
+            scrollPixels: options.scrollPixels ?? 2,
+            frameRate: options.frameRate ?? 30,
+            minDb: options.minDb ?? -8,
+            maxDb: options.maxDb ?? 0,
+            backgroundColor: options.backgroundColor ?? '#05060b',
+            smoothing: options.smoothing ?? 0.65,
         };
 
-        this.targetHeights = new Array(this.options.barCount).fill(0.1);
+        this.palette = this.buildPalette();
     }
 
     mount(container: HTMLElement): void {
         this.container = container;
 
-        // Create scene
-        this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(this.options.backgroundColor);
+        this.canvas = document.createElement('canvas');
+        this.canvas.style.width = '100%';
+        this.canvas.style.height = '100%';
+        this.canvas.style.display = 'block';
 
-        // Create orthographic camera for 2D look
-        const aspect = container.clientWidth / container.clientHeight;
-        const frustumSize = 5;
-        this.camera = new THREE.OrthographicCamera(
-            -frustumSize * aspect / 2,
-            frustumSize * aspect / 2,
-            frustumSize / 2,
-            -frustumSize / 2,
-            -10,
-            10
-        );
-        this.camera.position.z = 5;
+        const ctx = this.canvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
+        this.ctx = ctx;
 
-        // Create renderer
-        this.renderer = new THREE.WebGLRenderer({
-            antialias: true,
-            powerPreference: 'high-performance',
+        this.setSize(container.clientWidth, container.clientHeight);
+        this.fillBackground();
+
+        container.appendChild(this.canvas);
+
+        // Keep canvas in sync with container size
+        this.resizeObserver = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                const { width, height } = entry.contentRect;
+                this.setSize(Math.floor(width), Math.floor(height));
+                this.fillBackground();
+            }
         });
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        container.appendChild(this.renderer.domElement);
-
-        // Create bars
-        this.createBars();
-
-        // Handle resize
-        window.addEventListener('resize', this.handleResize);
+        this.resizeObserver.observe(container);
     }
 
     unmount(): void {
-        window.removeEventListener('resize', this.handleResize);
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
 
-        // Clean up bars
-        this.bars.forEach(bar => {
-            bar.geometry.dispose();
-            (bar.material as THREE.MeshBasicMaterial).dispose();
-        });
-        this.bars = [];
-
-        if (this.renderer && this.container) {
-            this.container.removeChild(this.renderer.domElement);
-            this.renderer.dispose();
+        if (this.container && this.canvas) {
+            this.container.removeChild(this.canvas);
         }
 
-        this.scene = null;
-        this.camera = null;
-        this.renderer = null;
+        this.canvas = null;
+        this.ctx = null;
         this.container = null;
+        this.smoothedBands = [];
+        this.accumulator = 0;
     }
 
     update(dt: number, context: VisualContext): void {
-        if (!this.scene || !this.camera || !this.renderer) return;
+        if (!this.ctx || !this.canvas) return;
 
-        // Update bar heights from mel bands
-        if (context.audioFeatures?.melBands) {
-            const melBands = context.audioFeatures.melBands;
-            const bandCount = Math.min(melBands.length, this.bars.length);
+        this.accumulator += dt;
+        const minInterval = 1 / this.options.frameRate;
+        if (this.accumulator < minInterval) return;
+        this.accumulator = 0;
 
-            for (let i = 0; i < bandCount; i++) {
-                // Normalize mel band value (log scale, typically -10 to 0)
-                const normalized = Math.max(0, (melBands[i] + 10) / 10);
-                this.targetHeights[i] = 0.1 + normalized * this.options.maxHeight;
-            }
-        } else if (context.audioFeatures?.rms !== undefined) {
-            // Fallback: use RMS to animate all bars
-            const rms = context.audioFeatures.rms;
-            for (let i = 0; i < this.bars.length; i++) {
-                const phase = (i / this.bars.length + performance.now() / 2000) * Math.PI * 2;
-                this.targetHeights[i] = 0.1 + (Math.sin(phase) * 0.5 + 0.5) * rms * this.options.maxHeight;
-            }
+        const melBands = context.audioFeatures?.melBands;
+        if (!melBands || melBands.length === 0) {
+            this.fadeCanvas();
+            return;
         }
 
-        // Smooth interpolation
-        const lerpFactor = 1 - Math.pow(0.05, dt);
-
-        for (let i = 0; i < this.bars.length; i++) {
-            const bar = this.bars[i];
-            const currentHeight = bar.scale.y;
-            const targetHeight = this.targetHeights[i];
-            const newHeight = currentHeight + (targetHeight - currentHeight) * lerpFactor;
-
-            bar.scale.y = newHeight;
-            bar.position.y = -this.options.maxHeight / 2 + newHeight / 2;
+        if (this.smoothedBands.length !== melBands.length) {
+            this.smoothedBands = new Array(melBands.length).fill(melBands[0]);
         }
 
-        // Render
-        this.renderer.render(this.scene, this.camera);
+        // Smooth mel bands to reduce flicker
+        const s = this.options.smoothing;
+        for (let i = 0; i < melBands.length; i++) {
+            this.smoothedBands[i] = this.smoothedBands[i] * s + melBands[i] * (1 - s);
+        }
+
+        // Scroll existing image to the right (so new data paints on the left, flowing left → right)
+        const scroll = Math.min(this.width, Math.max(1, Math.floor(this.options.scrollPixels)));
+        if (scroll < this.width) {
+            this.ctx.drawImage(
+                this.canvas,
+                0,
+                0,
+                this.width - scroll,
+                this.height,
+                scroll,
+                0,
+                this.width - scroll,
+                this.height
+            );
+        }
+
+        // Clear the new strip on the left
+        this.ctx.fillStyle = this.options.backgroundColor;
+        this.ctx.fillRect(0, 0, scroll, this.height);
+
+        // Draw new column(s)
+        for (let px = 0; px < scroll; px++) {
+            const x = px;
+            this.drawColumn(x, this.smoothedBands);
+        }
     }
 
     resize(width: number, height: number): void {
-        if (!this.camera || !this.renderer) return;
-
-        const aspect = width / height;
-        const frustumSize = 5;
-
-        this.camera.left = -frustumSize * aspect / 2;
-        this.camera.right = frustumSize * aspect / 2;
-        this.camera.top = frustumSize / 2;
-        this.camera.bottom = -frustumSize / 2;
-        this.camera.updateProjectionMatrix();
-
-        this.renderer.setSize(width, height);
-
-        // Recreate bars for new aspect ratio
-        this.bars.forEach(bar => {
-            if (this.scene) this.scene.remove(bar);
-            bar.geometry.dispose();
-            (bar.material as THREE.MeshBasicMaterial).dispose();
-        });
-        this.bars = [];
-        this.createBars();
+        this.setSize(width, height);
+        this.fillBackground();
     }
 
-    private createBars(): void {
-        if (!this.scene || !this.camera) return;
+    private setSize(width: number, height: number): void {
+        if (!this.canvas) return;
+        this.width = Math.max(1, Math.floor(width));
+        this.height = Math.max(1, Math.floor(height));
+        this.canvas.width = this.width;
+        this.canvas.height = this.height;
+    }
 
-        const count = this.options.barCount;
-        const totalWidth = (this.camera.right - this.camera.left) * 0.9;
-        const barWidth = (totalWidth - (count - 1) * this.options.barSpacing) / count;
-        const startX = this.camera.left + totalWidth * 0.05 + barWidth / 2;
+    private fillBackground(): void {
+        if (!this.ctx) return;
+        this.ctx.fillStyle = this.options.backgroundColor;
+        this.ctx.fillRect(0, 0, this.width, this.height);
+    }
 
-        const colorStart = new THREE.Color(this.options.colorStart);
-        const colorEnd = new THREE.Color(this.options.colorEnd);
+    private fadeCanvas(): void {
+        if (!this.ctx) return;
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.02)';
+        this.ctx.fillRect(0, 0, this.width, this.height);
+    }
 
-        for (let i = 0; i < count; i++) {
-            const geometry = new THREE.BoxGeometry(barWidth, 1, 0.1);
+    private drawColumn(x: number, melBands: number[]): void {
+        if (!this.ctx) return;
 
-            // Gradient color
-            const t = i / (count - 1);
-            const color = new THREE.Color().lerpColors(colorStart, colorEnd, t);
+        const h = this.height;
+        const bandCount = melBands.length;
+        const column = this.ctx.createImageData(1, h);
+        const data = column.data;
 
-            const material = new THREE.MeshBasicMaterial({ color });
-            const bar = new THREE.Mesh(geometry, material);
+        for (let y = 0; y < h; y++) {
+            // Map pixel to mel band (low freq at bottom)
+            const t = 1 - y / h;
+            const bandIndex = Math.min(bandCount - 1, Math.max(0, Math.floor(t * bandCount)));
+            const value = melBands[bandIndex];
 
-            bar.position.x = startX + i * (barWidth + this.options.barSpacing);
-            bar.position.y = -this.options.maxHeight / 2 + 0.1 / 2;
-            bar.scale.y = 0.1;
+            const normalized = this.normalize(value);
+            const [r, g, b] = this.sampleColor(normalized);
 
-            this.scene.add(bar);
-            this.bars.push(bar);
+            const offset = y * 4;
+            data[offset] = r;
+            data[offset + 1] = g;
+            data[offset + 2] = b;
+            data[offset + 3] = 255;
         }
+
+        this.ctx.putImageData(column, x, 0);
     }
 
-    private handleResize = (): void => {
-        if (!this.container) return;
-        this.resize(this.container.clientWidth, this.container.clientHeight);
-    };
+    private normalize(value: number): number {
+        const { minDb, maxDb } = this.options;
+        const clamped = Math.min(maxDb, Math.max(minDb, value));
+        return (clamped - minDb) / (maxDb - minDb);
+    }
+
+    private sampleColor(t: number): [number, number, number] {
+        // t is [0,1]
+        const scaled = t * (this.palette.length - 1);
+        const idx = Math.floor(scaled);
+        const frac = scaled - idx;
+        const c0 = this.palette[idx];
+        const c1 = this.palette[Math.min(idx + 1, this.palette.length - 1)];
+
+        return [
+            Math.round(c0[0] + (c1[0] - c0[0]) * frac),
+            Math.round(c0[1] + (c1[1] - c0[1]) * frac),
+            Math.round(c0[2] + (c1[2] - c0[2]) * frac),
+        ];
+    }
+
+    private buildPalette(): [number, number, number][] {
+        // Simple magma-like gradient (dark purple -> orange -> yellow)
+        return [
+            [8, 5, 30],
+            [36, 9, 66],
+            [84, 4, 125],
+            [129, 39, 128],
+            [175, 80, 105],
+            [214, 120, 66],
+            [245, 171, 39],
+            [252, 213, 75],
+            [252, 235, 140],
+        ];
+    }
 }
