@@ -13,8 +13,7 @@ module.exports = {
       script: './apps/client/build/index.js',
       env: {
         NODE_ENV: 'production',
-        PORT: 3000,
-        ORIGIN: 'https://zi7.space'
+        PORT: 3000
       }
     },
     {
@@ -22,8 +21,7 @@ module.exports = {
       script: './apps/manager/build/index.js',
       env: {
         NODE_ENV: 'production',
-        PORT: 3002,
-        ORIGIN: 'https://zi7.space'
+        PORT: 3002
       }
     }
   ]

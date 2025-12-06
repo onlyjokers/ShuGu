@@ -15,7 +15,48 @@
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
 
+  /**
+   * Best-effort fullscreen entry. iOS Safari only recently supports the API; we probe multiple
+   * element targets and vendor-prefixed methods. Tries on load and again on the Enter click.
+   */
+  function tryFullscreen(context: 'auto' | 'click'): void {
+    // If already standalone (PWA), nothing to do
+    if (typeof navigator !== 'undefined' && (navigator as any).standalone) return;
+
+    const candidates = [document.documentElement, document.body].filter(Boolean);
+
+    let request: (() => Promise<void> | void) | null = null;
+
+    for (const el of candidates) {
+      const anyEl = el as any;
+      const fn =
+        anyEl.requestFullscreen?.bind(el) ??
+        anyEl.webkitRequestFullscreen?.bind(el) ??
+        anyEl.webkitRequestFullScreen?.bind(el) ??
+        anyEl.webkitEnterFullscreen?.bind(el);
+
+      if (typeof fn === 'function') {
+        request = fn;
+        break;
+      }
+    }
+
+    if (!request) {
+      console.warn(`[Fullscreen] API unavailable (${context})`);
+      return;
+    }
+
+    if (document.fullscreenElement) return;
+
+    Promise.resolve(request()).catch((error) => {
+      console.warn(`[Fullscreen] ${context} request failed`, error);
+    });
+  }
+
   onMount(() => {
+    // Try immediately (may be ignored without gesture but cheap to attempt)
+    tryFullscreen('auto');
+
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get('server');
@@ -61,11 +102,18 @@
     // Save server URL
     localStorage.setItem('shugu-server-url', serverUrl);
 
-    // Initialize connection
-    await initialize({ serverUrl });
+    // Request fullscreen while the click gesture is still active to maximize success.
+    tryFullscreen('click');
 
-    // Request permissions (must be triggered by user action)
-    await requestPermissions();
+    // Initialize synchronously, then request permissions immediately while the user gesture is still active
+    // (iOS motion/mic permissions require being in the same click stack).
+    initialize({ serverUrl });
+
+    try {
+      await requestPermissions();
+    } catch (error) {
+      console.error('[Client] Permission request failed', error);
+    }
   }
 </script>
 

@@ -41,16 +41,23 @@ export class SensorManager {
      * Request motion sensor permissions (required on iOS 13+)
      */
     async requestPermissions(): Promise<SensorPermissionResult> {
-        // iOS 13+ requires user gesture and explicit permission request
-        if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-            try {
-                const motionPermission = await (DeviceMotionEvent as any).requestPermission();
-                const orientationPermission = await (DeviceOrientationEvent as any).requestPermission();
+        const requestMotionPermission = (DeviceMotionEvent as any).requestPermission;
 
-                if (motionPermission === 'granted' && orientationPermission === 'granted') {
+        // iOS 13+ requires user gesture and explicit permission request.
+        // Request motion once; it unlocks orientation too on Safari, so treat orientation as best-effort.
+        if (typeof requestMotionPermission === 'function') {
+            try {
+                const motionPermission = await requestMotionPermission.call(DeviceMotionEvent);
+
+                if (motionPermission === 'granted') {
                     return { granted: true };
                 }
-                return { granted: false, error: 'Permission denied by user' };
+                return {
+                    granted: false,
+                    error: typeof motionPermission === 'string'
+                        ? motionPermission
+                        : 'Permission denied by user'
+                };
             } catch (error) {
                 return {
                     granted: false,
@@ -59,7 +66,12 @@ export class SensorManager {
             }
         }
 
-        // No permission needed on other browsers
+        // No permission API exposed. Only report granted when the APIs actually exist to avoid
+        // showing success on devices that lack sensors altogether.
+        if (!this.isMotionAvailable() && !this.isOrientationAvailable()) {
+            return { granted: false, error: 'Motion/orientation sensors unavailable' };
+        }
+
         return { granted: true };
     }
 

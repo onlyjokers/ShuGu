@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name zi7.space; # Your domain
+    server_name zi7.space fluffycore.xyz; # Your domains
 
     # Cloudflare / Proxy Fix
     # If the request comes from a proxy and it is already HTTPS, we should not redirect.
@@ -32,7 +32,7 @@ server {
 
 server {
     listen 443 ssl;
-    server_name zi7.space; # Your domain
+    server_name zi7.space fluffycore.xyz; # Your domains
 
     # SSL Certificates (managed by Certbot)
     # ssl_certificate ...
