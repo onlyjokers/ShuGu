@@ -14,7 +14,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        ORIGIN: 'http://localhost:3000'
+        ORIGIN: 'https://zi7.space'
       }
     },
     {
@@ -23,7 +23,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3002,
-        ORIGIN: 'http://localhost:3002'
+        ORIGIN: 'https://zi7.space'
       }
     }
   ]
