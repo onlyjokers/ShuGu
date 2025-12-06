@@ -10,12 +10,12 @@
 
 <div class="start-screen">
   <div class="content">
-    <h1 class="title">ShuGu</h1>
-    <p class="subtitle">Interactive Art Experience</p>
+    <h1 class="title">Fluffy Foundation</h1>
+    <p class="subtitle">Made by Fluffy Core Team</p>
 
     <button class="start-button" on:click={handleStart}>
-      <span class="button-text">进入体验</span>
-      <span class="button-subtext">Start Experience</span>
+      <span class="button-text">Enter</span>
+      <!-- <span class="button-subtext">Start Experience</span> -->
     </button>
 
     <p class="hint">Please allow microphone and motion sensor access</p>

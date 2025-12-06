@@ -108,6 +108,28 @@ If you see "Redirected you too many times" error:
     -   Edit `/etc/nginx/sites-available/shugu`.
     -   If Cloudflare is already redirecting HTTP to HTTPS, you might need to comment out the `return 301 ...` line in the server block listening on port 80.
 
+### 🔴 Problem: Seeing Old Project / Default Nginx Page?
+
+If you see an old project or the "Welcome to nginx" page instead of ShuGu:
+
+1.  **Disable the Default Config**:
+    The default config usually has `default_server` priority, overriding your new config if not matched perfectly.
+    ```bash
+    sudo rm /etc/nginx/sites-enabled/default
+    ```
+
+2.  **Enable ShuGu Config**:
+    Ensure your config is actually linked.
+    ```bash
+    sudo ln -s /etc/nginx/sites-available/shugu /etc/nginx/sites-enabled/
+    ```
+
+3.  **Restart Nginx**:
+    ```bash
+    sudo nginx -t
+    sudo systemctl restart nginx
+    ```
+
 ## 7. Troubleshooting
 
 -   **Check Logs:**

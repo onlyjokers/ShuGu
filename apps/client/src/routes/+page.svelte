@@ -43,9 +43,9 @@
         // Default to current hostname (localhost or IP) with HTTPS
         // If running on standard HTTPS port (443), assume we are proxied and use the origin
         if (window.location.protocol === 'https:' && window.location.port === '') {
-            serverUrl = window.location.origin;
+          serverUrl = window.location.origin;
         } else {
-            serverUrl = `https://${window.location.hostname}:3001`;
+          serverUrl = `https://${window.location.hostname}:3001`;
         }
       }
     }
@@ -70,7 +70,7 @@
 </script>
 
 <svelte:head>
-  <title>ShuGu Experience</title>
+  <title>Fluffy Foundation</title>
   <meta name="theme-color" content="#0a0a0f" />
 </svelte:head>
 
