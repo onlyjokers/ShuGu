@@ -3,6 +3,7 @@
     state,
     flashlight,
     vibrate,
+    modulateSound,
     screenColor,
     playSound,
     switchScene,
@@ -13,6 +14,13 @@
   let blinkDutyCycle = 0.5;
 
   let vibratePattern = '200,100,200';
+
+  let modFrequency = 180;
+  let modDuration = 200;
+  let modVolume = 0.7;
+  let modWaveform: 'sine' | 'square' | 'sawtooth' | 'triangle' = 'square';
+  let modDepth = 0;
+  let modLfo = 12;
 
   let selectedColor = '#6366f1';
   let colorOpacity = 1;
@@ -39,6 +47,20 @@
       .map((s) => parseInt(s.trim()))
       .filter((n) => !isNaN(n));
     vibrate(pattern, undefined, toAll);
+  }
+
+  function handleModulateSound(toAll = false) {
+    modulateSound(
+      {
+        frequency: Number(modFrequency) || 180,
+        duration: Number(modDuration) || 200,
+        volume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
+        waveform: modWaveform,
+        modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
+        modDepth: modDepth > 0 ? Math.max(0, Math.min(1, modDepth)) : undefined,
+      },
+      toAll
+    );
   }
 
   function handleScreenColor(toAll = false) {
@@ -138,6 +160,77 @@
           </button>
           <button class="btn btn-secondary" on:click={() => handleVibrate(true)}>
             Vibrate All
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modulated Sound -->
+    <section class="control-section">
+      <h4 class="section-title">🎛️ Modulate Sound</h4>
+      <div class="control-group">
+        <div class="control-row">
+          <label class="control-label">Frequency (Hz)</label>
+          <input type="number" class="input input-small" bind:value={modFrequency} min="20" max="2000" step="10" />
+        </div>
+        <div class="control-row">
+          <label class="control-label">Duration (ms)</label>
+          <input type="number" class="input input-small" bind:value={modDuration} min="20" max="2000" step="10" />
+        </div>
+        <div class="control-row">
+          <label class="control-label">Volume</label>
+          <input
+            type="range"
+            class="range-slider"
+            bind:value={modVolume}
+            min="0"
+            max="1"
+            step="0.05"
+          />
+          <span class="value-display">{Math.round((Number(modVolume) || 0) * 100)}%</span>
+        </div>
+        <div class="control-row">
+          <label class="control-label">Waveform</label>
+          <select class="select" bind:value={modWaveform}>
+            <option value="square">Square (buzzy)</option>
+            <option value="sine">Sine</option>
+            <option value="triangle">Triangle</option>
+            <option value="sawtooth">Sawtooth</option>
+          </select>
+        </div>
+        <div class="control-row">
+          <label class="control-label">Wobble Depth</label>
+          <input
+            type="range"
+            class="range-slider"
+            bind:value={modDepth}
+            min="0"
+            max="1"
+            step="0.05"
+          />
+          <span class="value-display">{Math.round((Number(modDepth) || 0) * 100)}%</span>
+        </div>
+        {#if modDepth > 0}
+          <div class="control-row">
+            <label class="control-label">Wobble Rate (Hz)</label>
+            <input type="number" class="input input-small" bind:value={modLfo} min="1" max="40" step="1" />
+          </div>
+        {/if}
+
+        <p class="hint">
+          Sends a short synthesized tone (defaults to a buzz-like square wave) to clients; depth/rate adds a light wobble.
+        </p>
+
+        <div class="button-group">
+          <button
+            class="btn btn-primary"
+            on:click={() => handleModulateSound(false)}
+            disabled={!hasSelection}
+          >
+            Play on Selected
+          </button>
+          <button class="btn btn-secondary" on:click={() => handleModulateSound(true)}>
+            Play on All
           </button>
         </div>
       </div>

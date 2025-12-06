@@ -9,6 +9,7 @@ import {
     ScreenController,
     VibrationController,
     SoundPlayer,
+    ModulatedSoundPlayer,
     WakeLockController,
     type ClientState,
     type ClientSDKConfig
@@ -20,6 +21,7 @@ import type {
     ScreenColorPayload,
     VibratePayload,
     PlaySoundPayload,
+    ModulateSoundPayload,
     VisualSceneSwitchPayload
 } from '@shugu/protocol';
 
@@ -30,6 +32,7 @@ let flashlightController: FlashlightController | null = null;
 let screenController: ScreenController | null = null;
 let vibrationController: VibrationController | null = null;
 let soundPlayer: SoundPlayer | null = null;
+let modulatedSoundPlayer: ModulatedSoundPlayer | null = null;
 let wakeLockController: WakeLockController | null = null;
 
 // Core state store
@@ -93,6 +96,7 @@ export async function initialize(config: ClientSDKConfig): Promise<void> {
     screenController = new ScreenController();
     vibrationController = new VibrationController();
     soundPlayer = new SoundPlayer();
+    modulatedSoundPlayer = new ModulatedSoundPlayer();
     wakeLockController = new WakeLockController();
     sensorManager = new SensorManager({ throttleMs: 100 });
 
@@ -182,12 +186,20 @@ function handleControlMessage(message: ControlMessage): void {
                 vibrationController?.vibrate(message.payload as VibratePayload);
                 break;
 
+            case 'modulateSound':
+                modulatedSoundPlayer?.play(
+                    message.payload as ModulateSoundPayload,
+                    soundPlayer?.getAudioContext()
+                );
+                break;
+
             case 'playSound':
                 soundPlayer?.play(message.payload as PlaySoundPayload);
                 break;
 
             case 'stopSound':
                 soundPlayer?.stop();
+                modulatedSoundPlayer?.stop();
                 break;
 
             case 'visualSceneSwitch':

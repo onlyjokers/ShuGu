@@ -38,6 +38,7 @@ export type ControlAction =
     | 'screenColor'
     | 'screenBrightness'
     | 'vibrate'
+    | 'modulateSound'
     | 'playSound'
     | 'stopSound'
     | 'shutdown'
@@ -76,6 +77,28 @@ export interface VibratePayload {
 }
 
 /**
+ * Simple synthesized tone / modulation payload
+ */
+export interface ModulateSoundPayload {
+    /** Fundamental frequency in Hz (default: 180) */
+    frequency?: number;
+    /** Duration in milliseconds (default: 200) */
+    duration?: number;
+    /** Output gain 0-1 (default: 0.7) */
+    volume?: number;
+    /** Oscillator waveform (default: 'square') */
+    waveform?: 'sine' | 'square' | 'sawtooth' | 'triangle';
+    /** Optional low-frequency oscillator for wobble/vibe */
+    modFrequency?: number;
+    /** Modulation depth 0-1 (scaled to carrier frequency) */
+    modDepth?: number;
+    /** Attack time in ms (default: 10) */
+    attack?: number;
+    /** Release time in ms (default: 40) */
+    release?: number;
+}
+
+/**
  * Sound playback payload
  */
 export interface PlaySoundPayload {
@@ -110,6 +133,7 @@ export type ControlPayload =
     | FlashlightPayload
     | ScreenColorPayload
     | VibratePayload
+    | ModulateSoundPayload
     | PlaySoundPayload
     | VisualSceneSwitchPayload
     | DataReportingRatePayload

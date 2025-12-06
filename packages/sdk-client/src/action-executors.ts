@@ -8,6 +8,7 @@ import type {
     ScreenColorPayload,
     VibratePayload,
     PlaySoundPayload,
+    ModulateSoundPayload,
 } from '@shugu/protocol';
 
 /**
@@ -457,6 +458,115 @@ export class SoundPlayer {
             await this.audioContext.close();
             this.audioContext = null;
         }
+    }
+}
+
+/**
+ * Synthesized modulation tone player (short beeps/buzz)
+ */
+export class ModulatedSoundPlayer {
+    private audioContext: AudioContext | null = null;
+    private gainNode: GainNode | null = null;
+    private carrier: OscillatorNode | null = null;
+    private lfo: OscillatorNode | null = null;
+    private lfoGain: GainNode | null = null;
+
+    async play(payload: ModulateSoundPayload, sharedContext?: AudioContext | null): Promise<void> {
+        await this.ensureContext(sharedContext);
+        if (!this.audioContext || !this.gainNode) return;
+
+        if (this.audioContext.state === 'suspended') {
+            await this.audioContext.resume();
+        }
+
+        this.stop();
+
+        const ctx = this.audioContext;
+        const now = ctx.currentTime;
+        const durationMs = payload.duration ?? 200;
+        const duration = Math.max(0.02, durationMs / 1000);
+        const attack = Math.max(0, (payload.attack ?? 10) / 1000);
+        const release = Math.max(0, (payload.release ?? 40) / 1000);
+        const volume = this.clamp(payload.volume ?? 0.7, 0, 1);
+        const freq = payload.frequency ?? 180;
+        const waveform = payload.waveform ?? 'square';
+        const modDepth = this.clamp(payload.modDepth ?? 0, 0, 1);
+        const modFreq = payload.modFrequency ?? 12;
+
+        this.carrier = ctx.createOscillator();
+        this.carrier.type = waveform;
+        this.carrier.frequency.value = freq;
+
+        this.gainNode.gain.cancelScheduledValues(now);
+        this.gainNode.gain.setValueAtTime(0, now);
+        this.gainNode.gain.linearRampToValueAtTime(volume, now + attack);
+        this.gainNode.gain.setValueAtTime(volume, now + Math.max(attack, duration - release));
+        this.gainNode.gain.linearRampToValueAtTime(0.0001, now + duration); // tiny residual to avoid pops
+
+        if (modDepth > 0) {
+            this.lfo = ctx.createOscillator();
+            this.lfo.frequency.value = modFreq;
+            this.lfoGain = ctx.createGain();
+            this.lfoGain.gain.value = modDepth * freq;
+            this.lfo.connect(this.lfoGain);
+            this.lfoGain.connect(this.carrier.frequency);
+        }
+
+        this.carrier.connect(this.gainNode);
+
+        this.carrier.start(now);
+        this.lfo?.start(now);
+
+        this.carrier.stop(now + duration + release * 2);
+        if (this.lfo) {
+            this.lfo.stop(now + duration + release * 2);
+        }
+
+        // Cleanup when finished
+        const cleanup = () => this.stop();
+        this.carrier.onended = cleanup;
+    }
+
+    stop(): void {
+        this.carrier?.disconnect();
+        this.carrier?.stop();
+        this.carrier = null;
+
+        this.lfoGain?.disconnect();
+        this.lfoGain = null;
+        this.lfo?.disconnect();
+        try {
+            this.lfo?.stop();
+        } catch {}
+        this.lfo = null;
+
+        if (this.gainNode) {
+            const now = this.audioContext?.currentTime ?? 0;
+            this.gainNode.gain.cancelScheduledValues(now);
+            this.gainNode.gain.setValueAtTime(0, now);
+        }
+    }
+
+    getAudioContext(): AudioContext | null {
+        return this.audioContext;
+    }
+
+    private async ensureContext(shared?: AudioContext | null): Promise<void> {
+        if (this.audioContext && this.gainNode) return;
+
+        if (shared) {
+            this.audioContext = shared;
+        } else {
+            this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.gain.value = 0;
+        this.gainNode.connect(this.audioContext.destination);
+    }
+
+    private clamp(value: number, min: number, max: number): number {
+        return Math.min(max, Math.max(min, value));
     }
 }
 

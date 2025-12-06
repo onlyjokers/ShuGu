@@ -117,6 +117,22 @@ export function vibrate(pattern: number[], repeat?: number, toAll = false): void
     sdk?.vibrate(pattern, repeat, toAll);
 }
 
+export function modulateSound(
+    options: {
+        frequency?: number;
+        duration?: number;
+        volume?: number;
+        waveform?: 'sine' | 'square' | 'sawtooth' | 'triangle';
+        modFrequency?: number;
+        modDepth?: number;
+        attack?: number;
+        release?: number;
+    },
+    toAll = false
+): void {
+    sdk?.modulateSound(options, toAll);
+}
+
 export function screenColor(color: string, opacity?: number, toAll = false): void {
     sdk?.screenColor(color, opacity, toAll);
 }

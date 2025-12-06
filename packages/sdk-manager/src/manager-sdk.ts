@@ -292,6 +292,30 @@ export class ManagerSDK {
     }
 
     /**
+     * Play synthesized modulation tone on clients
+     */
+    modulateSound(
+        options: {
+            frequency?: number;
+            duration?: number;
+            volume?: number;
+            waveform?: 'sine' | 'square' | 'sawtooth' | 'triangle';
+            modFrequency?: number;
+            modDepth?: number;
+            attack?: number;
+            release?: number;
+        },
+        toAll = false
+    ): void {
+        const payload = { ...options };
+        if (toAll) {
+            this.sendControlToAll('modulateSound', payload);
+        } else {
+            this.sendControlToSelected('modulateSound', payload);
+        }
+    }
+
+    /**
      * Control screen color
      */
     screenColor(color: string, opacity = 1, toAll = false): void {
