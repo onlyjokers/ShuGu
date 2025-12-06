@@ -8,7 +8,7 @@
   import SensorDisplay from '$lib/components/SensorDisplay.svelte';
   import PluginControl from '$lib/components/PluginControl.svelte';
 
-  let serverUrl = 'http://localhost:3001';
+  let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
 
   onMount(() => {
@@ -22,12 +22,13 @@
     // If accessing via IP but saved URL is localhost, ignore the saved URL
     const savedIsLocalhost =
       savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1'));
+    const savedIsHttp = savedUrl && savedUrl.startsWith('http:');
 
-    if (savedUrl && !(isAccessingViaIP && savedIsLocalhost)) {
+    if (savedUrl && !savedIsHttp && !(isAccessingViaIP && savedIsLocalhost)) {
       serverUrl = savedUrl;
-    } else if (isAccessingViaIP) {
-      // Assume server is on the same host if we are accessing via IP
-      serverUrl = `http://${window.location.hostname}:3001`;
+    } else {
+      // Default to HTTPS on current host
+      serverUrl = `https://${window.location.hostname}:3001`;
     }
 
     return () => {

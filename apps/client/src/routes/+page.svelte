@@ -13,7 +13,7 @@
   import PermissionWarning from '$lib/components/PermissionWarning.svelte';
 
   let hasStarted = false;
-  let serverUrl = 'http://localhost:3001';
+  let serverUrl = 'https://localhost:3001';
 
   onMount(() => {
     // Get server URL from query params or localStorage
@@ -28,14 +28,20 @@
       const savedUrl = localStorage.getItem('shugu-server-url');
 
       // If accessing via IP but saved URL is localhost, ignore the saved URL
+      // Also ignore if saved URL is http but we want https
       const savedIsLocalhost =
         savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1'));
+      const savedIsHttp = savedUrl && savedUrl.startsWith('http:');
 
-      if (savedUrl && !(isAccessingViaIP && savedIsLocalhost)) {
+      // If we are on IP, we definitely want HTTPS IP
+      // If we are on localhost, we definitely want HTTPS localhost
+      // Basically always prefer auto-detected HTTPS unless user manually set a complex URL
+
+      if (savedUrl && !savedIsHttp && !(isAccessingViaIP && savedIsLocalhost)) {
         serverUrl = savedUrl;
-      } else if (isAccessingViaIP) {
-        // Assume server is on the same host if we are accessing via IP
-        serverUrl = `http://${window.location.hostname}:3001`;
+      } else {
+        // Default to current hostname (localhost or IP) with HTTPS
+        serverUrl = `https://${window.location.hostname}:3001`;
       }
     }
   });
