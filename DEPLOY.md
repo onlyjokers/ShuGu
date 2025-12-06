@@ -60,9 +60,13 @@ pm2 save
 pm2 startup
 ```
 
+
 ## 5. Configure Nginx
 
-Nginx will serve as the reverse proxy, handling HTTPS and routing traffic to the Client and Server.
+Nginx will serve as the reverse proxy, handling HTTPS and routing traffic.
+- Root `/`: Client App
+- `/manager`: Manager App
+- `/socket.io`: Server
 
 1.  Copy the example config or create a new one:
     ```bash
@@ -82,7 +86,7 @@ Nginx will serve as the reverse proxy, handling HTTPS and routing traffic to the
     sudo systemctl restart nginx
     ```
 
-## 6. Setup SSL (HTTPS)
+## 6. Setup SSL (HTTPS) & Fix Redirect Loops
 
 Security is required for accessing mobile sensors (gyroscope, camera, etc.).
 
@@ -90,7 +94,19 @@ Security is required for accessing mobile sensors (gyroscope, camera, etc.).
 sudo certbot --nginx -d yourdomain.com
 ```
 
-Follow the prompts. Certbot will automatically update your Nginx configuration to enable HTTPS.
+### 🔴 Important: Fixing "Too Many Redirects"
+
+If you see "Redirected you too many times" error:
+
+1.  **Check Cloudflare (if using):**
+    -   Log in to Cloudflare Dashboard.
+    -   Go to **SSL/TLS**.
+    -   Change the encryption mode to **Full** or **Full (Strict)**.
+    -   *Do NOT use "Flexible"*, as it causes infinite redirect loops with Nginx HTTPS redirects.
+
+2.  **Check Nginx Config manually:**
+    -   Edit `/etc/nginx/sites-available/shugu`.
+    -   If Cloudflare is already redirecting HTTP to HTTPS, you might need to comment out the `return 301 ...` line in the server block listening on port 80.
 
 ## 7. Troubleshooting
 

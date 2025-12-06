@@ -2,21 +2,43 @@ server {
     listen 80;
     server_name example.com; # Replace with your domain
 
-    # Redirect HTTP to HTTPS
-    location / {
-        return 301 https://$host$request_uri;
+    # Cloudflare / Proxy Fix
+    # If the request comes from a proxy and it is already HTTPS, we should not redirect.
+    # Cloudflare sends X-Forwarded-Proto header.
+    
+    set $do_redirect 0;
+    if ($http_x_forwarded_proto = "http") {
+       set $do_redirect 1;
     }
+    # If standard non-proxied HTTP, also redirect
+    if ($scheme = "http") {
+       set $do_redirect 1;
+    }
+    # But if we are clearly behind Cloudflare Flexible SSL, we might be seeing HTTP but user sees HTTPS.
+    # IMPORTANT: If you use Cloudflare Flexible SSL, specific configuration is needed to avoid loops.
+    # Best practice: Use "Full (Strict)" SSL in Cloudflare.
+
+    # Redirect to HTTPS if needed
+    # location / {
+    #    if ($do_redirect = 1) {
+    #        return 301 https://$host$request_uri;
+    #    }
+    # }
+    
+    # SIMPLIFIED: Just redirect everything to HTTPS.
+    # IF you get "Too many redirects", comment out the line below.
+    return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
     server_name example.com; # Replace with your domain
 
-    # SSL Certificates (will be managed by Certbot)
-    # ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    # SSL Certificates (managed by Certbot)
+    # ssl_certificate ...
+    # ssl_certificate_key ...
 
-    # Client Application
+    # Client Application (Root)
     location / {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
@@ -24,10 +46,29 @@ server {
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
+        
+        # Forward minimal headers
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Manager Application (Subpath)
+    location /manager {
+        # Note: Manager must be built with base path /manager
+        proxy_pass http://localhost:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # API / Socket.io
-    # Proxies requests to /socket.io to the backend server
     location /socket.io/ {
         proxy_pass http://localhost:3001;
         proxy_http_version 1.1;

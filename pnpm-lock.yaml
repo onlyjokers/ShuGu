@@ -78,6 +78,9 @@ importers:
       '@sveltejs/adapter-auto':
         specifier: ^3.0.0
         version: 3.3.1(@sveltejs/kit@2.49.1)
+      '@sveltejs/adapter-node':
+        specifier: ^5.4.0
+        version: 5.4.0(@sveltejs/kit@2.49.1)
       '@sveltejs/kit':
         specifier: ^2.0.0
         version: 2.49.1(@sveltejs/vite-plugin-svelte@3.1.2)(svelte@4.2.20)(vite@5.4.21)
