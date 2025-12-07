@@ -149,6 +149,10 @@ export function asciiMode(enabled: boolean, toAll = false): void {
     sdk?.asciiMode(enabled, toAll);
 }
 
+export function asciiResolution(cellSize: number, toAll = false): void {
+    sdk?.asciiResolution(cellSize, toAll);
+}
+
 export function sendPluginControl(
     pluginId: string,
     command: 'init' | 'start' | 'stop' | 'configure',

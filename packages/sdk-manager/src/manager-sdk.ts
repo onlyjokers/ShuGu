@@ -363,6 +363,18 @@ export class ManagerSDK {
         }
     }
 
+    /**
+     * Adjust ASCII resolution on clients (cell size in px)
+     */
+    asciiResolution(cellSize: number, toAll = false): void {
+        const payload = { cellSize };
+        if (toAll) {
+            this.sendControlToAll('asciiResolution', payload);
+        } else {
+            this.sendControlToSelected('asciiResolution', payload);
+        }
+    }
+
     private setupSocketListeners(): void {
         if (!this.socket) return;
 

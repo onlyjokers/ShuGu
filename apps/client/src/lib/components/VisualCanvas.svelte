@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { currentScene, audioStream, asciiEnabled, getSDK } from '$lib/stores/client';
+  import {
+    currentScene,
+    audioStream,
+    asciiEnabled,
+    asciiResolution,
+    getSDK,
+    connectionStatus,
+  } from '$lib/stores/client';
   import {
     BoxScene,
     MelSpectrogramScene,
@@ -200,7 +207,7 @@
     asciiCanvas.style.width = `${width}px`;
     asciiCanvas.style.height = `${height}px`;
 
-    const cellSize = 11;
+    const cellSize = Math.max(6, Math.min(24, $asciiResolution));
     const cols = Math.max(24, Math.floor(width / cellSize));
     const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
 
@@ -248,9 +255,10 @@
           continue;
         }
 
-        const glyphIndex = brightness > 0.62
-          ? Math.floor(((x + y) % strokes.length))
-          : Math.min(ramp.length - 1, Math.floor(brightness * ramp.length));
+        const glyphIndex =
+          brightness > 0.62
+            ? Math.floor((x + y) % strokes.length)
+            : Math.min(ramp.length - 1, Math.floor(brightness * ramp.length));
         const glyph = brightness > 0.62 ? strokes[glyphIndex] : ramp[glyphIndex];
 
         const alpha = 0.35 + brightness * 0.55;
@@ -272,8 +280,22 @@
       });
   }
 
-  function drawBorder(ctx: CanvasRenderingContext2D, width: number, height: number, cols: number, rows: number) {
-    const edgeColor = 'rgba(255, 228, 210, 0.55)';
+  function drawBorder(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    cols: number,
+    rows: number
+  ) {
+    let edgeColor = 'rgba(255, 228, 210, 0.55)';
+
+    if ($connectionStatus !== 'connected') {
+      const t = performance.now() / 1000;
+      // Pulsing red effect: alpha oscillates between 0.3 and 1.0
+      const alpha = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * 3));
+      edgeColor = `rgba(239, 68, 68, ${alpha})`;
+    }
+
     ctx.fillStyle = edgeColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

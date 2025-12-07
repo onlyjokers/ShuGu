@@ -46,6 +46,7 @@ export type ControlAction =
     | 'setDataReportingRate'
     | 'setSensorState'
     | 'asciiMode'
+    | 'asciiResolution'
     | 'custom';
 
 /**
@@ -117,6 +118,14 @@ export interface AsciiModePayload {
 }
 
 /**
+ * ASCII resolution payload
+ */
+export interface AsciiResolutionPayload {
+    /** Cell size in pixels (lower = finer) */
+    cellSize: number;
+}
+
+/**
  * Visual scene switch payload
  */
 export interface VisualSceneSwitchPayload {
@@ -144,6 +153,7 @@ export type ControlPayload =
     | ModulateSoundPayload
     | PlaySoundPayload
     | AsciiModePayload
+    | AsciiResolutionPayload
     | VisualSceneSwitchPayload
     | DataReportingRatePayload
     | Record<string, unknown>;

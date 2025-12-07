@@ -8,6 +8,7 @@
     playSound,
     switchScene,
     asciiMode,
+    asciiResolution,
   } from '$lib/stores/manager';
 
   let flashlightMode: 'off' | 'on' | 'blink' = 'off';
@@ -32,6 +33,7 @@
 
   let selectedScene = 'box-scene';
   let asciiOn = true;
+  let asciiRes = 11;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
 
@@ -80,6 +82,10 @@
 
   function handleAsciiToggle(toAll = false) {
     asciiMode(asciiOn, toAll);
+  }
+
+  function handleAsciiResolution(toAll = false) {
+    asciiResolution(Number(asciiRes), toAll);
   }
 </script>
 
@@ -387,6 +393,19 @@
           </label>
         </div>
 
+        <div class="control-row">
+          <label class="control-label">ASCII Resolution</label>
+          <input
+            type="range"
+            class="range-slider"
+            min="6"
+            max="24"
+            step="1"
+            bind:value={asciiRes}
+          />
+          <span class="value-display">{Math.round(Number(asciiRes))} px</span>
+        </div>
+
         <div class="button-group">
           <button
             class="btn btn-primary"
@@ -397,6 +416,16 @@
           </button>
           <button class="btn btn-secondary" on:click={() => handleAsciiToggle(true)}>
             Apply to All
+          </button>
+          <button
+            class="btn btn-secondary"
+            on:click={() => handleAsciiResolution(false)}
+            disabled={!hasSelection}
+          >
+            Apply Resolution (Selected)
+          </button>
+          <button class="btn btn-secondary" on:click={() => handleAsciiResolution(true)}>
+            Apply Resolution (All)
           </button>
         </div>
       </div>

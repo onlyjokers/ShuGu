@@ -71,6 +71,9 @@ export const currentScene = writable<string>('box-scene');
 // ASCII post-processing toggle (default on)
 export const asciiEnabled = writable<boolean>(true);
 
+// ASCII resolution (cell size in pixels)
+export const asciiResolution = writable<number>(11);
+
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
 
@@ -230,6 +233,10 @@ function handleControlMessage(message: ControlMessage): void {
 
             case 'asciiMode':
                 asciiEnabled.set((message.payload as { enabled: boolean }).enabled);
+                break;
+
+            case 'asciiResolution':
+                asciiResolution.set((message.payload as { cellSize: number }).cellSize);
                 break;
             
             case 'ping':
