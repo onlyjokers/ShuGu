@@ -68,6 +68,9 @@ export const latency = writable<number>(0);
 // Current visual scene
 export const currentScene = writable<string>('box-scene');
 
+// ASCII post-processing toggle (default on)
+export const asciiEnabled = writable<boolean>(true);
+
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
 
@@ -223,6 +226,10 @@ function handleControlMessage(message: ControlMessage): void {
                         sensorManager.stop();
                     }
                 }
+                break;
+
+            case 'asciiMode':
+                asciiEnabled.set((message.payload as { enabled: boolean }).enabled);
                 break;
             
             case 'ping':

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { currentScene, audioStream, getSDK } from '$lib/stores/client';
+  import { currentScene, audioStream, asciiEnabled, getSDK } from '$lib/stores/client';
   import {
     BoxScene,
     MelSpectrogramScene,
@@ -16,10 +16,15 @@
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
+  let asciiCanvas: HTMLCanvasElement;
   let splitPlugin: AudioSplitPlugin | null = null;
   let melPlugin: MelSpectrogramPlugin | null = null;
   let audioContext: AudioContext | null = null;
   let animationId: number;
+  let tinyCanvas: HTMLCanvasElement | null = null;
+  let tinyCtx: CanvasRenderingContext2D | null = null;
+  let asciiCtx: CanvasRenderingContext2D | null = null;
+  let sourceCanvas: HTMLCanvasElement | null = null;
   let lastTime = 0;
 
   // Current context data for scene updates
@@ -32,15 +37,22 @@
     // Create scene manager
     sceneManager = new DefaultSceneManager(container);
 
-    // Register scenes
+    // Register scenes (base visuals)
     sceneManager.register(new BoxScene());
     sceneManager.register(new MelSpectrogramScene());
 
     // Switch to initial scene
     sceneManager.switchTo($currentScene);
 
+    // ASCII overlay setup
+    asciiCtx = asciiCanvas.getContext('2d');
+    tinyCanvas = document.createElement('canvas');
+    tinyCtx = tinyCanvas.getContext('2d');
+    handleResize();
+
     // Set up device orientation listener
     window.addEventListener('deviceorientation', handleOrientation);
+    window.addEventListener('resize', handleResize);
 
     // Start animation loop
     lastTime = performance.now();
@@ -50,6 +62,7 @@
   onDestroy(() => {
     cancelAnimationFrame(animationId);
     window.removeEventListener('deviceorientation', handleOrientation);
+    window.removeEventListener('resize', handleResize);
     sceneManager?.destroy();
     splitPlugin?.destroy();
     melPlugin?.destroy();
@@ -130,9 +143,10 @@
   }
 
   function handleOrientation(event: DeviceOrientationEvent) {
-    const screen = typeof window.orientation === 'number'
-      ? (window.orientation as number)
-      : (window.screen.orientation?.angle ?? 0);
+    const screen =
+      typeof window.orientation === 'number'
+        ? (window.orientation as number)
+        : (window.screen.orientation?.angle ?? 0);
 
     orientationData = {
       alpha: event.alpha ?? 0,
@@ -152,11 +166,154 @@
       sceneManager.update(dt, context);
     }
 
+    if ($asciiEnabled) {
+      drawAsciiOverlay();
+    } else if (asciiCtx) {
+      asciiCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
+      setBaseCanvasVisibility(true);
+    }
+
     animationId = requestAnimationFrame(animate);
+  }
+
+  function ensureSourceCanvas(): HTMLCanvasElement | null {
+    if (sourceCanvas && sourceCanvas.isConnected) return sourceCanvas;
+    const canvases = Array.from(container.querySelectorAll('canvas')) as HTMLCanvasElement[];
+    sourceCanvas = canvases.find((c) => c !== asciiCanvas) ?? null;
+    return sourceCanvas;
+  }
+
+  function drawAsciiOverlay() {
+    if (!asciiCtx || !tinyCtx || !tinyCanvas) return;
+
+    const src = ensureSourceCanvas();
+    const width = container?.clientWidth ?? 0;
+    const height = container?.clientHeight ?? 0;
+    if (!src || width === 0 || height === 0) {
+      asciiCtx.clearRect(0, 0, width, height);
+      return;
+    }
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    asciiCanvas.width = Math.floor(width * dpr);
+    asciiCanvas.height = Math.floor(height * dpr);
+    asciiCanvas.style.width = `${width}px`;
+    asciiCanvas.style.height = `${height}px`;
+
+    const cellSize = 11;
+    const cols = Math.max(24, Math.floor(width / cellSize));
+    const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
+
+    tinyCanvas.width = cols;
+    tinyCanvas.height = rows;
+    tinyCtx.drawImage(src, 0, 0, cols, rows);
+    const { data } = tinyCtx.getImageData(0, 0, cols, rows);
+
+    asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    asciiCtx.fillStyle = '#0a0a0f';
+    asciiCtx.fillRect(0, 0, width, height);
+    asciiCtx.textAlign = 'center';
+    asciiCtx.textBaseline = 'middle';
+    const fontSize = Math.max(9, Math.round(height / rows));
+    asciiCtx.font = `${fontSize}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
+
+    const ramp = ['.', '`', ',', ':', ';', '-', '~', '+', '*', 'x', 'o', 'O', '%', '#', '@'];
+    const strokes = ['/', '\\', '|', '-', '='];
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const idx = (y * cols + x) * 4;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const a = data[idx + 3] / 255;
+        if (a === 0) continue;
+
+        const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        if (brightness < 0.08) continue; // deep black stays empty
+
+        const posX = (x + 0.5) * (width / cols);
+        const posY = (y + 0.5) * (height / rows);
+
+        // bright -> solid block
+        if (brightness >= 0.82) {
+          asciiCtx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.94)`;
+          asciiCtx.fillRect(
+            posX - width / cols / 2,
+            posY - height / rows / 2,
+            width / cols + 0.75,
+            height / rows + 0.75
+          );
+          continue;
+        }
+
+        const glyphIndex = brightness > 0.62
+          ? Math.floor(((x + y) % strokes.length))
+          : Math.min(ramp.length - 1, Math.floor(brightness * ramp.length));
+        const glyph = brightness > 0.62 ? strokes[glyphIndex] : ramp[glyphIndex];
+
+        const alpha = 0.35 + brightness * 0.55;
+        asciiCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, alpha)})`;
+        asciiCtx.fillText(glyph, posX, posY);
+      }
+    }
+
+    drawBorder(asciiCtx, width, height, cols, rows);
+    setBaseCanvasVisibility(false);
+  }
+
+  function setBaseCanvasVisibility(show: boolean) {
+    const canvases = Array.from(container?.querySelectorAll('canvas') ?? []) as HTMLCanvasElement[];
+    canvases
+      .filter((c) => c !== asciiCanvas)
+      .forEach((c) => {
+        c.style.visibility = show ? 'visible' : 'hidden';
+      });
+  }
+
+  function drawBorder(ctx: CanvasRenderingContext2D, width: number, height: number, cols: number, rows: number) {
+    const edgeColor = 'rgba(255, 228, 210, 0.55)';
+    ctx.fillStyle = edgeColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const charW = width / cols;
+    const charH = height / rows;
+    ctx.font = `${Math.max(10, Math.round(charH * 0.95))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
+
+    const topChars = ['=', '-', '='];
+    const sideChars = ['|', '!', '|'];
+
+    for (let c = 0; c < cols; c++) {
+      const ch = topChars[c % topChars.length];
+      const x = c * charW + charW / 2;
+      ctx.fillText(ch, x, charH * 0.55);
+      ctx.fillText(ch, x, height - charH * 0.45);
+    }
+
+    for (let r = 0; r < rows; r++) {
+      const ch = sideChars[r % sideChars.length];
+      const y = r * charH + charH / 2;
+      ctx.fillText(ch, charW * 0.45, y);
+      ctx.fillText(ch, width - charW * 0.45, y);
+    }
+
+    ctx.fillText('+', charW * 0.45, charH * 0.55);
+    ctx.fillText('+', width - charW * 0.45, charH * 0.55);
+    ctx.fillText('+', charW * 0.45, height - charH * 0.45);
+    ctx.fillText('+', width - charW * 0.45, height - charH * 0.45);
+  }
+
+  function handleResize() {
+    if (asciiCtx && container) {
+      asciiCtx.clearRect(0, 0, container.clientWidth, container.clientHeight);
+    }
   }
 </script>
 
-<div class="visual-container" bind:this={container}></div>
+<div class="visual-container" bind:this={container}>
+  <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>
+</div>
 
 <style>
   .visual-container {
@@ -171,5 +328,15 @@
 
   .visual-container :global(canvas) {
     display: block;
+  }
+
+  .ascii-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+    pointer-events: none;
+    mix-blend-mode: normal;
   }
 </style>

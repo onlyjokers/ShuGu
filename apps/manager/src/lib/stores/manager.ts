@@ -145,6 +145,10 @@ export function switchScene(sceneId: string, toAll = false): void {
     sdk?.switchScene(sceneId, toAll);
 }
 
+export function asciiMode(enabled: boolean, toAll = false): void {
+    sdk?.asciiMode(enabled, toAll);
+}
+
 export function sendPluginControl(
     pluginId: string,
     command: 'init' | 'start' | 'stop' | 'configure',

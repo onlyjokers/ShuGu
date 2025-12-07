@@ -351,6 +351,18 @@ export class ManagerSDK {
         }
     }
 
+    /**
+     * Toggle ASCII post effect on clients
+     */
+    asciiMode(enabled: boolean, toAll = false): void {
+        const payload = { enabled };
+        if (toAll) {
+            this.sendControlToAll('asciiMode', payload);
+        } else {
+            this.sendControlToSelected('asciiMode', payload);
+        }
+    }
+
     private setupSocketListeners(): void {
         if (!this.socket) return;
 

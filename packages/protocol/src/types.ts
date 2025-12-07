@@ -45,6 +45,7 @@ export type ControlAction =
     | 'visualSceneSwitch'
     | 'setDataReportingRate'
     | 'setSensorState'
+    | 'asciiMode'
     | 'custom';
 
 /**
@@ -109,6 +110,13 @@ export interface PlaySoundPayload {
 }
 
 /**
+ * ASCII post-processing toggle payload
+ */
+export interface AsciiModePayload {
+    enabled: boolean;
+}
+
+/**
  * Visual scene switch payload
  */
 export interface VisualSceneSwitchPayload {
@@ -135,6 +143,7 @@ export type ControlPayload =
     | VibratePayload
     | ModulateSoundPayload
     | PlaySoundPayload
+    | AsciiModePayload
     | VisualSceneSwitchPayload
     | DataReportingRatePayload
     | Record<string, unknown>;
@@ -250,7 +259,7 @@ export interface MediaMetaMessage extends BaseMessage {
  * Plugin IDs
  */
 export type AudioPluginId = 'mel-spectrogram' | 'audio-splitter' | string;
-export type VisualPluginId = 'box-scene' | 'mel-scene' | string;
+export type VisualPluginId = 'box-scene' | 'mel-scene' | 'ascii-scene' | string;
 export type PluginId = AudioPluginId | VisualPluginId;
 
 /**

@@ -7,6 +7,7 @@
     screenColor,
     playSound,
     switchScene,
+    asciiMode,
   } from '$lib/stores/manager';
 
   let flashlightMode: 'off' | 'on' | 'blink' = 'off';
@@ -30,6 +31,7 @@
   let soundLoop = false;
 
   let selectedScene = 'box-scene';
+  let asciiOn = true;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
 
@@ -74,6 +76,10 @@
 
   function handleSwitchScene(toAll = false) {
     switchScene(selectedScene, toAll);
+  }
+
+  function handleAsciiToggle(toAll = false) {
+    asciiMode(asciiOn, toAll);
   }
 </script>
 
@@ -171,11 +177,25 @@
       <div class="control-group">
         <div class="control-row">
           <label class="control-label">Frequency (Hz)</label>
-          <input type="number" class="input input-small" bind:value={modFrequency} min="20" max="2000" step="10" />
+          <input
+            type="number"
+            class="input input-small"
+            bind:value={modFrequency}
+            min="20"
+            max="2000"
+            step="10"
+          />
         </div>
         <div class="control-row">
           <label class="control-label">Duration (ms)</label>
-          <input type="number" class="input input-small" bind:value={modDuration} min="20" max="2000" step="10" />
+          <input
+            type="number"
+            class="input input-small"
+            bind:value={modDuration}
+            min="20"
+            max="2000"
+            step="10"
+          />
         </div>
         <div class="control-row">
           <label class="control-label">Volume</label>
@@ -213,12 +233,20 @@
         {#if modDepth > 0}
           <div class="control-row">
             <label class="control-label">Wobble Rate (Hz)</label>
-            <input type="number" class="input input-small" bind:value={modLfo} min="1" max="40" step="1" />
+            <input
+              type="number"
+              class="input input-small"
+              bind:value={modLfo}
+              min="1"
+              max="40"
+              step="1"
+            />
           </div>
         {/if}
 
         <p class="hint">
-          Sends a short synthesized tone (defaults to a buzz-like square wave) to clients; depth/rate adds a light wobble.
+          Sends a short synthesized tone (defaults to a buzz-like square wave) to clients;
+          depth/rate adds a light wobble.
         </p>
 
         <div class="button-group">
@@ -343,6 +371,32 @@
           </button>
           <button class="btn btn-secondary" on:click={() => handleSwitchScene(true)}>
             Switch All
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ASCII Post FX -->
+    <section class="control-section">
+      <h4 class="section-title">🅰️ ASCII Post FX</h4>
+      <div class="control-group">
+        <div class="control-row">
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={asciiOn} />
+            Enable ASCII overlay (default on)
+          </label>
+        </div>
+
+        <div class="button-group">
+          <button
+            class="btn btn-primary"
+            on:click={() => handleAsciiToggle(false)}
+            disabled={!hasSelection}
+          >
+            Apply to Selected
+          </button>
+          <button class="btn btn-secondary" on:click={() => handleAsciiToggle(true)}>
+            Apply to All
           </button>
         </div>
       </div>
