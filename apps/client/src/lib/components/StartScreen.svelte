@@ -154,7 +154,7 @@
     const charH = height / rows;
     const title = 'FLUFFY FOUNDATION';
     const subtitle = 'Made by Fluffy Core Team';
-    const hint = 'Eureka, Starno, YiMing';
+    const hint = 'Eureka, Starno, VKong';
     const buttonLabel = '[ ENTER ]';
 
     ctx.fillStyle = 'rgba(255, 228, 210, 0.8)';
