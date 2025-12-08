@@ -18,12 +18,15 @@
   import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
+  import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
   let username: AuthUser | '' = '';
   let password = '';
   let rememberLogin = false;
+
+  let activePage: 'dashboard' | 'midi' = 'dashboard';
 
   // Global Sync State
   let useSync = true;
@@ -190,24 +193,44 @@
         <SensorDisplay />
       </div>
 
-      <div class="dashboard-grid">
-        <div class="grid-item">
-          <FlashlightControl {useSync} />
+      <div class="page-tabs">
+        <button
+          class:active={activePage === 'dashboard'}
+          on:click={() => (activePage = 'dashboard')}
+        >
+          控制台
+        </button>
+        <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
+          MIDI Mapper
+        </button>
+      </div>
+
+      <div class:hide={activePage !== 'dashboard'}>
+        <div class="dashboard-grid">
+          <div class="grid-item">
+            <FlashlightControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <ScreenColorControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <SynthControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <MediaControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <VibrationControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <SceneControl {useSync} />
+          </div>
         </div>
-        <div class="grid-item">
-          <ScreenColorControl {useSync} />
-        </div>
-        <div class="grid-item">
-          <SynthControl {useSync} />
-        </div>
-        <div class="grid-item">
-          <MediaControl {useSync} />
-        </div>
-        <div class="grid-item">
-          <VibrationControl {useSync} />
-        </div>
-        <div class="grid-item">
-          <SceneControl {useSync} />
+      </div>
+
+      <div class:hide={activePage !== 'midi'}>
+        <div class="midi-pane">
+          <MidiMapper />
         </div>
       </div>
 
@@ -319,6 +342,39 @@
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: var(--space-lg);
     padding-bottom: var(--space-xl);
+  }
+
+  .page-tabs {
+    display: inline-flex;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+    background: var(--bg-secondary);
+    padding: 6px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+  }
+
+  .page-tabs button {
+    border: none;
+    padding: 8px 14px;
+    border-radius: var(--radius-lg);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  .page-tabs button.active {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+    color: white;
+  }
+
+  .midi-pane {
+    margin-top: var(--space-sm);
+  }
+
+  .hide {
+    display: none;
   }
 
   .sidebar-content {

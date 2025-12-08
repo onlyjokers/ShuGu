@@ -1,5 +1,6 @@
 <script lang="ts">
   import { state, flashlight } from '$lib/stores/manager';
+  import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Select from '$lib/components/ui/Select.svelte';
@@ -13,6 +14,9 @@
   let blinkDutyCycle = 0.5;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: flashlightMode = $controlState.flashlightOn
+    ? (flashlightMode === 'blink' ? 'blink' : 'on')
+    : 'off';
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -25,6 +29,7 @@
         ? { frequency: blinkFrequency, dutyCycle: blinkDutyCycle }
         : undefined;
     flashlight(flashlightMode, options, toAll, getExecuteAt());
+    updateControlState({ flashlightOn: flashlightMode !== 'off' });
   }
 
   const modeOptions = [

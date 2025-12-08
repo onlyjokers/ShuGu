@@ -1,5 +1,6 @@
 <script lang="ts">
   import { state, modulateSound } from '$lib/stores/manager';
+  import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Input from '$lib/components/ui/Input.svelte';
@@ -17,6 +18,7 @@
   let modLfo = 12;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: modFrequency = $controlState.modFrequency;
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -36,6 +38,7 @@
       toAll,
       getExecuteAt()
     );
+    updateControlState({ modFrequency: Number(modFrequency) || 180 });
   }
 
   const waveforms = [

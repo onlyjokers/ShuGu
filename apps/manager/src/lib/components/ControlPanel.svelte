@@ -10,6 +10,7 @@
     asciiMode,
     asciiResolution,
   } from '$lib/stores/manager';
+  import { controlState, updateControlState } from '$lib/stores/controlState';
   import type { ScreenColorPayload } from '@shugu/protocol';
 
   let flashlightMode: 'off' | 'on' | 'blink' = 'off';
@@ -48,6 +49,13 @@
   let asciiRes = 11;
   let useSync = true; // Default to true for better experience
 
+  $: synced = $controlState;
+  $: asciiOn = synced.asciiOn;
+  $: asciiRes = synced.asciiResolution;
+  $: modFrequency = synced.modFrequency;
+  $: selectedScene = synced.selectedScene;
+  $: flashlightMode = synced.flashlightOn ? (flashlightMode === 'blink' ? 'blink' : 'on') : 'off';
+
   $: hasSelection = $state.selectedClientIds.length > 0;
   $: serverTime = Date.now() + $state.timeSync.offset;
   $: syncDelay = 500; // ms
@@ -65,6 +73,7 @@
         ? { frequency: blinkFrequency, dutyCycle: blinkDutyCycle }
         : undefined;
     flashlight(flashlightMode, options, toAll, getExecuteAt());
+    updateControlState({ flashlightOn: flashlightMode !== 'off' });
   }
 
   function handleVibrate(toAll = false) {
@@ -88,6 +97,7 @@
       toAll,
       getExecuteAt()
     );
+    updateControlState({ modFrequency: Number(modFrequency) || 180 });
   }
 
   function handleScreenColor(toAll = false) {
@@ -136,10 +146,12 @@
 
   function handleAsciiToggle(toAll = false) {
     asciiMode(asciiOn, toAll, getExecuteAt());
+    updateControlState({ asciiOn });
   }
 
   function handleAsciiResolution(toAll = false) {
     asciiResolution(Number(asciiRes), toAll, getExecuteAt());
+    updateControlState({ asciiResolution: Number(asciiRes) });
   }
 </script>
 
@@ -561,7 +573,11 @@
       <h4 class="section-title">🎬 Visual Scene</h4>
       <div class="control-group">
         <div class="control-row">
-          <select class="select" bind:value={selectedScene}>
+          <select
+            class="select"
+            bind:value={selectedScene}
+            on:change={() => updateControlState({ selectedScene })}
+          >
             <option value="box-scene">3D Box</option>
             <option value="mel-scene">Mel Spectrogram</option>
           </select>

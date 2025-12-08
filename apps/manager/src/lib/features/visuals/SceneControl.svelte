@@ -1,5 +1,6 @@
 <script lang="ts">
   import { state, switchScene, asciiMode, asciiResolution } from '$lib/stores/manager';
+  import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Select from '$lib/components/ui/Select.svelte';
@@ -19,6 +20,9 @@
   ];
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: selectedScene = $controlState.selectedScene;
+  $: asciiOn = $controlState.asciiOn;
+  $: asciiRes = $controlState.asciiResolution;
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -27,14 +31,17 @@
 
   function handleSwitchScene(toAll = false) {
     switchScene(selectedScene, toAll, getExecuteAt());
+    updateControlState({ selectedScene });
   }
 
   function handleAsciiToggle(toAll = false) {
     asciiMode(asciiOn, toAll, getExecuteAt());
+    updateControlState({ asciiOn });
   }
 
   function handleAsciiResolution(toAll = false) {
     asciiResolution(Number(asciiRes), toAll, getExecuteAt());
+    updateControlState({ asciiResolution: Number(asciiRes) });
   }
 </script>
 
