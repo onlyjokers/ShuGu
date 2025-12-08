@@ -5,9 +5,13 @@
     audioStream,
     asciiEnabled,
     asciiResolution,
+    videoState,
+    imageState,
     getSDK,
     connectionStatus,
   } from '$lib/stores/client';
+  import VideoPlayer from '$lib/components/VideoPlayer.svelte';
+  import ImageDisplay from '$lib/components/ImageDisplay.svelte';
   import {
     BoxScene,
     MelSpectrogramScene,
@@ -32,6 +36,8 @@
   let tinyCtx: CanvasRenderingContext2D | null = null;
   let asciiCtx: CanvasRenderingContext2D | null = null;
   let sourceCanvas: HTMLCanvasElement | null = null;
+  let mediaCanvas: HTMLCanvasElement | null = null;
+  let mediaCtx: CanvasRenderingContext2D | null = null;
   let lastTime = 0;
 
   // Current context data for scene updates
@@ -184,10 +190,59 @@
   }
 
   function ensureSourceCanvas(): HTMLCanvasElement | null {
+    const media = updateMediaCanvas();
+    if (media) {
+      sourceCanvas = media;
+      return sourceCanvas;
+    }
+
     if (sourceCanvas && sourceCanvas.isConnected) return sourceCanvas;
     const canvases = Array.from(container.querySelectorAll('canvas')) as HTMLCanvasElement[];
     sourceCanvas = canvases.find((c) => c !== asciiCanvas) ?? null;
     return sourceCanvas;
+  }
+
+  function updateMediaCanvas(): HTMLCanvasElement | null {
+    const video = container?.querySelector('video');
+    const img = container?.querySelector('img');
+
+    if (video && $videoState.playing && (video as HTMLVideoElement).readyState >= 2) {
+        const width = (video as HTMLVideoElement).videoWidth || container?.clientWidth || 0;
+        const height = (video as HTMLVideoElement).videoHeight || container?.clientHeight || 0;
+        if (!mediaCanvas) {
+            mediaCanvas = document.createElement('canvas');
+            mediaCtx = mediaCanvas.getContext('2d');
+        }
+        if (!mediaCtx || width === 0 || height === 0) return null;
+        mediaCanvas.width = width;
+        mediaCanvas.height = height;
+        try {
+            mediaCtx.drawImage(video as HTMLVideoElement, 0, 0, width, height);
+        } catch {
+            return null; // cross-origin without CORS
+        }
+        return mediaCanvas;
+    }
+
+    if (img && $imageState.visible) {
+        const width = (img as HTMLImageElement).naturalWidth || img.clientWidth;
+        const height = (img as HTMLImageElement).naturalHeight || img.clientHeight;
+        if (!mediaCanvas) {
+            mediaCanvas = document.createElement('canvas');
+            mediaCtx = mediaCanvas.getContext('2d');
+        }
+        if (!mediaCtx || width === 0 || height === 0) return null;
+        mediaCanvas.width = width;
+        mediaCanvas.height = height;
+        try {
+            mediaCtx.drawImage(img as HTMLImageElement, 0, 0, width, height);
+        } catch {
+            return null; // cross-origin without CORS
+        }
+        return mediaCanvas;
+    }
+
+    return null;
   }
 
   function drawAsciiOverlay() {
@@ -213,8 +268,20 @@
 
     tinyCanvas.width = cols;
     tinyCanvas.height = rows;
-    tinyCtx.drawImage(src, 0, 0, cols, rows);
-    const { data } = tinyCtx.getImageData(0, 0, cols, rows);
+    try {
+      tinyCtx.drawImage(src, 0, 0, cols, rows);
+    } catch (e) {
+      // Cross-origin or invalid source; skip drawing this frame
+      return;
+    }
+
+    let data: Uint8ClampedArray;
+    try {
+      data = tinyCtx.getImageData(0, 0, cols, rows).data;
+    } catch (e) {
+      // Canvas tainted (likely cross-origin media without CORS)
+      return;
+    }
 
     asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -334,6 +401,21 @@
 </script>
 
 <div class="visual-container" bind:this={container}>
+  <!-- Video Player (z-index: 1, below ASCII) -->
+  {#if $videoState.url && $videoState.playing}
+    <VideoPlayer
+      url={$videoState.url}
+      muted={$videoState.muted}
+      loop={$videoState.loop}
+      volume={$videoState.volume}
+    />
+  {/if}
+
+  <!-- Image Display (z-index: 1, below ASCII) -->
+  {#if $imageState.url && $imageState.visible}
+    <ImageDisplay url={$imageState.url} duration={$imageState.duration} />
+  {/if}
+
   <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>
 </div>
 

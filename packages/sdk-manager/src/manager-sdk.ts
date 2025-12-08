@@ -349,6 +349,71 @@ export class ManagerSDK {
     }
 
     /**
+     * Play media (audio or video) on clients
+     */
+    playMedia(
+        url: string,
+        options?: {
+            mediaType?: 'audio' | 'video';
+            volume?: number;
+            loop?: boolean;
+            muted?: boolean;
+            fadeIn?: number;
+        },
+        toAll = false,
+        executeAt?: number
+    ): void {
+        const payload = { url, ...options };
+        if (toAll) {
+            this.sendControlToAll('playMedia', payload, executeAt);
+        } else {
+            this.sendControlToSelected('playMedia', payload, executeAt);
+        }
+    }
+
+    /**
+     * Stop all media on clients
+     */
+    stopMedia(toAll = false): void {
+        if (toAll) {
+            this.sendControlToAll('stopMedia', {});
+        } else {
+            this.sendControlToSelected('stopMedia', {});
+        }
+    }
+
+    stopSound(toAll = false): void {
+        if (toAll) {
+            this.sendControlToAll('stopSound', {});
+        } else {
+            this.sendControlToSelected('stopSound', {});
+        }
+    }
+
+    /**
+     * Show image on clients
+     */
+    showImage(url: string, options?: { duration?: number }, toAll = false, executeAt?: number): void {
+        const payload = { url, ...options };
+        if (toAll) {
+            this.sendControlToAll('showImage', payload, executeAt);
+        } else {
+            this.sendControlToSelected('showImage', payload, executeAt);
+        }
+    }
+
+    /**
+     * Hide image on clients
+     */
+    hideImage(toAll = false): void {
+        if (toAll) {
+            this.sendControlToAll('hideImage', {});
+        } else {
+            this.sendControlToSelected('hideImage', {});
+        }
+    }
+
+    /**
      * Switch visual scene
      */
     switchScene(sceneId: string, toAll = false, executeAt?: number): void {

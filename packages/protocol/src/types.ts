@@ -40,7 +40,11 @@ export type ControlAction =
     | 'vibrate'
     | 'modulateSound'
     | 'playSound'
+    | 'playMedia'
     | 'stopSound'
+    | 'stopMedia'
+    | 'showImage'
+    | 'hideImage'
     | 'shutdown'
     | 'visualSceneSwitch'
     | 'setDataReportingRate'
@@ -135,6 +139,29 @@ export interface PlaySoundPayload {
 }
 
 /**
+ * Media (audio/video) playback payload
+ */
+export interface PlayMediaPayload {
+    url: string;
+    /** 'audio' or 'video', auto-detected if not specified */
+    mediaType?: 'audio' | 'video';
+    volume?: number;
+    loop?: boolean;
+    fadeIn?: number;
+    /** For video: muted by default (true) to avoid audio conflicts */
+    muted?: boolean;
+}
+
+/**
+ * Image display payload
+ */
+export interface ShowImagePayload {
+    url: string;
+    /** Duration in milliseconds to show the image. If not set, shows indefinitely until hideImage is called */
+    duration?: number;
+}
+
+/**
  * ASCII post-processing toggle payload
  */
 export interface AsciiModePayload {
@@ -176,6 +203,8 @@ export type ControlPayload =
     | VibratePayload
     | ModulateSoundPayload
     | PlaySoundPayload
+    | PlayMediaPayload
+    | ShowImagePayload
     | AsciiModePayload
     | AsciiResolutionPayload
     | VisualSceneSwitchPayload

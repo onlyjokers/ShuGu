@@ -531,6 +531,7 @@ export class SoundPlayer {
     private gainNode: GainNode | null = null;
     private audioCache: Map<string, AudioBuffer> = new Map();
     private currentUrl: string | null = null;
+    private htmlAudio: HTMLAudioElement | null = null;
 
     /**
      * Initialize audio context (must be called from user gesture)
@@ -567,7 +568,8 @@ export class SoundPlayer {
             // Check cache or load
             let buffer = this.audioCache.get(payload.url);
             if (!buffer) {
-                const response = await fetch(payload.url);
+                const response = await fetch(payload.url, { mode: 'cors' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const arrayBuffer = await response.arrayBuffer();
                 buffer = await this.audioContext!.decodeAudioData(arrayBuffer);
                 this.audioCache.set(payload.url, buffer);
@@ -596,9 +598,24 @@ export class SoundPlayer {
 
             this.currentSource.start(startTime);
             this.currentUrl = payload.url;
-
         } catch (error) {
             console.error('[SoundPlayer] Failed to play:', error);
+
+            // Fallback to HTMLAudioElement for CORS-restricted URLs or decode failures
+            try {
+                this.htmlAudio = new Audio(payload.url);
+                this.htmlAudio.loop = payload.loop ?? false;
+                this.htmlAudio.volume = payload.volume ?? 1;
+
+                const start = () => this.htmlAudio?.play().catch(console.warn);
+                if (delaySeconds > 0) {
+                    setTimeout(start, delaySeconds * 1000);
+                } else {
+                    start();
+                }
+            } catch (fallbackError) {
+                console.error('[SoundPlayer] HTMLAudio fallback failed:', fallbackError);
+            }
         }
     }
 
@@ -615,6 +632,16 @@ export class SoundPlayer {
             this.currentSource.disconnect();
             this.currentSource = null;
             this.currentUrl = null;
+        }
+
+        if (this.htmlAudio) {
+            try {
+                this.htmlAudio.pause();
+                this.htmlAudio.currentTime = 0;
+            } catch {
+                // ignore
+            }
+            this.htmlAudio = null;
         }
     }
 

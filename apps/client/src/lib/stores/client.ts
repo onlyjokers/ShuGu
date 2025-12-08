@@ -21,6 +21,8 @@ import type {
     ScreenColorPayload,
     VibratePayload,
     PlaySoundPayload,
+    PlayMediaPayload,
+    ShowImagePayload,
     ModulateSoundPayload,
     VisualSceneSwitchPayload
 } from '@shugu/protocol';
@@ -76,6 +78,32 @@ export const asciiResolution = writable<number>(11);
 
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
+
+// Video playback state
+export const videoState = writable<{
+  url: string | null;
+  playing: boolean;
+  muted: boolean;
+  loop: boolean;
+  volume: number;
+}>({
+  url: null,
+  playing: false,
+  muted: true,
+  loop: false,
+  volume: 1,
+});
+
+// Image display state
+export const imageState = writable<{
+  url: string | null;
+  visible: boolean;
+  duration: number | undefined;
+}>({
+  url: null,
+  visible: false,
+  duration: undefined,
+});
 
 // Derived stores
 export const connectionStatus = derived(state, ($state) => $state.status);
@@ -204,12 +232,66 @@ function handleControlMessage(message: ControlMessage): void {
                 soundPlayer?.play(message.payload as PlaySoundPayload, delaySeconds);
                 break;
 
+            case 'playMedia': {
+                const mediaPayload = message.payload as PlayMediaPayload;
+                // Check if it's a video by extension or explicit type
+                const isVideo = mediaPayload.mediaType === 'video' || 
+                    /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(mediaPayload.url);
+                
+                if (isVideo) {
+                    videoState.set({
+                        url: mediaPayload.url,
+                        playing: true,
+                        muted: mediaPayload.muted ?? true,
+                        loop: mediaPayload.loop ?? false,
+                        volume: mediaPayload.volume ?? 1,
+                    });
+                } else {
+                    // Fallback to audio
+                    soundPlayer?.play({
+                        url: mediaPayload.url,
+                        volume: mediaPayload.volume,
+                        loop: mediaPayload.loop,
+                        fadeIn: mediaPayload.fadeIn,
+                    }, delaySeconds);
+                }
+                break;
+            }
+
+            case 'stopMedia':
+                videoState.set({
+                    url: null,
+                    playing: false,
+                    muted: true,
+                    loop: false,
+                    volume: 1,
+                });
+                soundPlayer?.stop();
+                break;
+
             case 'stopSound':
                 soundPlayer?.stop();
                 modulatedSoundPlayer?.stop();
                 break;
 
-            // ... rest of cases same
+            case 'showImage': {
+                const imagePayload = message.payload as ShowImagePayload;
+                imageState.set({
+                    url: imagePayload.url,
+                    visible: true,
+                    duration: imagePayload.duration,
+                });
+                break;
+            }
+
+            case 'hideImage':
+                imageState.set({
+                    url: null,
+                    visible: false,
+                    duration: undefined,
+                });
+                break;
+
             case 'visualSceneSwitch':
                 const scenePayload = message.payload as VisualSceneSwitchPayload;
                 currentScene.set(scenePayload.sceneId);

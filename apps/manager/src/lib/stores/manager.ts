@@ -151,6 +151,45 @@ export function playSound(url: string, options?: { volume?: number; loop?: boole
     sdk?.playSound(url, options, toAll, executeAt);
 }
 
+export function playMedia(
+    url: string,
+    options?: {
+        mediaType?: 'audio' | 'video';
+        volume?: number;
+        loop?: boolean;
+        muted?: boolean;
+        fadeIn?: number;
+    },
+    toAll = false,
+    executeAt?: number
+): void {
+    sdk?.playMedia(url, options, toAll, executeAt);
+}
+
+export function stopMedia(toAll = false): void {
+    sdk?.stopMedia(toAll);
+}
+
+export function interruptMedia(toAll = false): void {
+    // Stop video/audio/media streams and hide images
+    sdk?.stopMedia(toAll);
+    sdk?.stopSound(toAll);
+    sdk?.hideImage(toAll);
+}
+
+export function showImage(
+    url: string,
+    options?: { duration?: number },
+    toAll = false,
+    executeAt?: number
+): void {
+    sdk?.showImage(url, options, toAll, executeAt);
+}
+
+export function hideImage(toAll = false): void {
+    sdk?.hideImage(toAll);
+}
+
 export function switchScene(sceneId: string, toAll = false, executeAt?: number): void {
     sdk?.switchScene(sceneId, toAll, executeAt);
 }
