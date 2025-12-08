@@ -34,3 +34,5 @@ coverage
 .temp
 *.tmp
 *.temp
+.tmp.driveupload
+.driveupload

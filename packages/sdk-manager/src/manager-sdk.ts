@@ -23,6 +23,7 @@ import {
     TargetSelector,
     ControlAction,
     ControlPayload,
+    ScreenColorPayload,
     PluginId,
     PluginCommand,
     MediaType,
@@ -270,24 +271,24 @@ export class ManagerSDK {
     /**
      * Control flashlight on all or selected clients
      */
-    flashlight(mode: 'off' | 'on' | 'blink', options?: { frequency?: number; dutyCycle?: number }, toAll = false): void {
+    flashlight(mode: 'off' | 'on' | 'blink', options?: { frequency?: number; dutyCycle?: number }, toAll = false, executeAt?: number): void {
         const payload = { mode, ...options };
         if (toAll) {
-            this.sendControlToAll('flashlight', payload);
+            this.sendControlToAll('flashlight', payload, executeAt);
         } else {
-            this.sendControlToSelected('flashlight', payload);
+            this.sendControlToSelected('flashlight', payload, executeAt);
         }
     }
 
     /**
      * Control vibration
      */
-    vibrate(pattern: number[], repeat?: number, toAll = false): void {
+    vibrate(pattern: number[], repeat?: number, toAll = false, executeAt?: number): void {
         const payload = { pattern, repeat };
         if (toAll) {
-            this.sendControlToAll('vibrate', payload);
+            this.sendControlToAll('vibrate', payload, executeAt);
         } else {
-            this.sendControlToSelected('vibrate', payload);
+            this.sendControlToSelected('vibrate', payload, executeAt);
         }
     }
 
@@ -305,73 +306,81 @@ export class ManagerSDK {
             attack?: number;
             release?: number;
         },
-        toAll = false
+        toAll = false,
+        executeAt?: number
     ): void {
         const payload = { ...options };
         if (toAll) {
-            this.sendControlToAll('modulateSound', payload);
+            this.sendControlToAll('modulateSound', payload, executeAt);
         } else {
-            this.sendControlToSelected('modulateSound', payload);
+            this.sendControlToSelected('modulateSound', payload, executeAt);
         }
     }
 
     /**
      * Control screen color
      */
-    screenColor(color: string, opacity = 1, toAll = false): void {
-        const payload = { color, opacity };
+    screenColor(payload: { color: string; opacity?: number } | ScreenColorPayload, toAll = false, executeAt?: number): void {
+        const normalized: ScreenColorPayload = 'mode' in payload || Array.isArray((payload as ScreenColorPayload).cycleColors)
+            ? { mode: 'solid', opacity: 1, ...(payload as ScreenColorPayload) }
+            : { color: (payload as { color: string }).color, opacity: (payload as { opacity?: number }).opacity, mode: 'solid' };
+
+        normalized.color = normalized.color ?? '#ffffff';
+        normalized.mode = normalized.mode ?? 'solid';
+        normalized.opacity = normalized.opacity ?? 1;
+
         if (toAll) {
-            this.sendControlToAll('screenColor', payload);
+            this.sendControlToAll('screenColor', normalized, executeAt);
         } else {
-            this.sendControlToSelected('screenColor', payload);
+            this.sendControlToSelected('screenColor', normalized, executeAt);
         }
     }
 
     /**
      * Play sound on clients
      */
-    playSound(url: string, options?: { volume?: number; loop?: boolean }, toAll = false): void {
+    playSound(url: string, options?: { volume?: number; loop?: boolean }, toAll = false, executeAt?: number): void {
         const payload = { url, ...options };
         if (toAll) {
-            this.sendControlToAll('playSound', payload);
+            this.sendControlToAll('playSound', payload, executeAt);
         } else {
-            this.sendControlToSelected('playSound', payload);
+            this.sendControlToSelected('playSound', payload, executeAt);
         }
     }
 
     /**
      * Switch visual scene
      */
-    switchScene(sceneId: string, toAll = false): void {
+    switchScene(sceneId: string, toAll = false, executeAt?: number): void {
         const payload = { sceneId };
         if (toAll) {
-            this.sendControlToAll('visualSceneSwitch', payload);
+            this.sendControlToAll('visualSceneSwitch', payload, executeAt);
         } else {
-            this.sendControlToSelected('visualSceneSwitch', payload);
+            this.sendControlToSelected('visualSceneSwitch', payload, executeAt);
         }
     }
 
     /**
      * Toggle ASCII post effect on clients
      */
-    asciiMode(enabled: boolean, toAll = false): void {
+    asciiMode(enabled: boolean, toAll = false, executeAt?: number): void {
         const payload = { enabled };
         if (toAll) {
-            this.sendControlToAll('asciiMode', payload);
+            this.sendControlToAll('asciiMode', payload, executeAt);
         } else {
-            this.sendControlToSelected('asciiMode', payload);
+            this.sendControlToSelected('asciiMode', payload, executeAt);
         }
     }
 
     /**
      * Adjust ASCII resolution on clients (cell size in px)
      */
-    asciiResolution(cellSize: number, toAll = false): void {
+    asciiResolution(cellSize: number, toAll = false, executeAt?: number): void {
         const payload = { cellSize };
         if (toAll) {
-            this.sendControlToAll('asciiResolution', payload);
+            this.sendControlToAll('asciiResolution', payload, executeAt);
         } else {
-            this.sendControlToSelected('asciiResolution', payload);
+            this.sendControlToSelected('asciiResolution', payload, executeAt);
         }
     }
 

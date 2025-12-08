@@ -64,8 +64,32 @@ export interface FlashlightPayload {
  * Screen color payload
  */
 export interface ScreenColorPayload {
-    color: string; // CSS color string
+    /** CSS color string for the primary color */
+    color: string;
+    /** Optional opacity for solid/pulse modes (0-1) */
     opacity?: number;
+    /** Display mode for the screen effect */
+    mode?: 'solid' | 'blink' | 'pulse' | 'cycle' | 'modulate';
+    /** Blink frequency in Hz (for blink mode) */
+    blinkFrequency?: number;
+    /** Pulse cycle duration in ms (for pulse mode) */
+    pulseDuration?: number;
+    /** Minimum opacity in pulse mode (0-1) */
+    pulseMin?: number;
+    /** Modulation waveform (for modulate/pulse modes) */
+    waveform?: 'sine' | 'square' | 'triangle' | 'sawtooth';
+    /** Modulation frequency in Hz (for modulate mode) */
+    frequencyHz?: number;
+    /** Minimum opacity for modulation (0-1) */
+    minOpacity?: number;
+    /** Maximum opacity for modulation (0-1) */
+    maxOpacity?: number;
+    /** Optional secondary color to morph toward during modulation/cycle */
+    secondaryColor?: string;
+    /** Color list to cycle through (for cycle mode) */
+    cycleColors?: string[];
+    /** Duration in ms for a full color cycle */
+    cycleDuration?: number;
 }
 
 /**

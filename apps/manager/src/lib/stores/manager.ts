@@ -3,7 +3,7 @@
  */
 import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
-import type { SensorDataMessage, ClientInfo } from '@shugu/protocol';
+import type { SensorDataMessage, ClientInfo, ScreenColorPayload } from '@shugu/protocol';
 
 // SDK instance
 let sdk: ManagerSDK | null = null;
@@ -109,12 +109,12 @@ export function clearSelection(): void {
 }
 
 // Control actions
-export function flashlight(mode: 'off' | 'on' | 'blink', options?: { frequency?: number; dutyCycle?: number }, toAll = false): void {
-    sdk?.flashlight(mode, options, toAll);
+export function flashlight(mode: 'off' | 'on' | 'blink', options?: { frequency?: number; dutyCycle?: number }, toAll = false, executeAt?: number): void {
+    sdk?.flashlight(mode, options, toAll, executeAt);
 }
 
-export function vibrate(pattern: number[], repeat?: number, toAll = false): void {
-    sdk?.vibrate(pattern, repeat, toAll);
+export function vibrate(pattern: number[], repeat?: number, toAll = false, executeAt?: number): void {
+    sdk?.vibrate(pattern, repeat, toAll, executeAt);
 }
 
 export function modulateSound(
@@ -128,29 +128,39 @@ export function modulateSound(
         attack?: number;
         release?: number;
     },
-    toAll = false
+    toAll = false,
+    executeAt?: number
 ): void {
-    sdk?.modulateSound(options, toAll);
+    sdk?.modulateSound(options, toAll, executeAt);
 }
 
-export function screenColor(color: string, opacity?: number, toAll = false): void {
-    sdk?.screenColor(color, opacity, toAll);
+export function screenColor(
+    colorOrPayload: string | ScreenColorPayload,
+    opacity?: number,
+    toAll = false,
+    executeAt?: number
+): void {
+    const payload: ScreenColorPayload = typeof colorOrPayload === 'string'
+        ? { color: colorOrPayload, opacity, mode: 'solid' }
+        : colorOrPayload;
+
+    sdk?.screenColor(payload, toAll, executeAt);
 }
 
-export function playSound(url: string, options?: { volume?: number; loop?: boolean }, toAll = false): void {
-    sdk?.playSound(url, options, toAll);
+export function playSound(url: string, options?: { volume?: number; loop?: boolean }, toAll = false, executeAt?: number): void {
+    sdk?.playSound(url, options, toAll, executeAt);
 }
 
-export function switchScene(sceneId: string, toAll = false): void {
-    sdk?.switchScene(sceneId, toAll);
+export function switchScene(sceneId: string, toAll = false, executeAt?: number): void {
+    sdk?.switchScene(sceneId, toAll, executeAt);
 }
 
-export function asciiMode(enabled: boolean, toAll = false): void {
-    sdk?.asciiMode(enabled, toAll);
+export function asciiMode(enabled: boolean, toAll = false, executeAt?: number): void {
+    sdk?.asciiMode(enabled, toAll, executeAt);
 }
 
-export function asciiResolution(cellSize: number, toAll = false): void {
-    sdk?.asciiResolution(cellSize, toAll);
+export function asciiResolution(cellSize: number, toAll = false, executeAt?: number): void {
+    sdk?.asciiResolution(cellSize, toAll, executeAt);
 }
 
 export function sendPluginControl(

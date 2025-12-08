@@ -173,7 +173,7 @@ function setupSensorReporting(): void {
  * Handle control messages from manager
  */
 function handleControlMessage(message: ControlMessage): void {
-    const executeAction = () => {
+    const executeAction = (delaySeconds = 0) => {
         switch (message.action) {
             case 'flashlight':
                 flashlightController?.setMode(message.payload as FlashlightPayload);
@@ -195,12 +195,13 @@ function handleControlMessage(message: ControlMessage): void {
             case 'modulateSound':
                 modulatedSoundPlayer?.play(
                     message.payload as ModulateSoundPayload,
-                    soundPlayer?.getAudioContext()
+                    soundPlayer?.getAudioContext(),
+                    delaySeconds // Use precise audio scheduling
                 );
                 break;
 
             case 'playSound':
-                soundPlayer?.play(message.payload as PlaySoundPayload);
+                soundPlayer?.play(message.payload as PlaySoundPayload, delaySeconds);
                 break;
 
             case 'stopSound':
@@ -208,6 +209,7 @@ function handleControlMessage(message: ControlMessage): void {
                 modulatedSoundPlayer?.stop();
                 break;
 
+            // ... rest of cases same
             case 'visualSceneSwitch':
                 const scenePayload = message.payload as VisualSceneSwitchPayload;
                 currentScene.set(scenePayload.sceneId);
@@ -240,16 +242,8 @@ function handleControlMessage(message: ControlMessage): void {
                 break;
             
             case 'ping':
-                // Echo back for latency measurement
                  if (sdk && message.id) {
-                    // We can just log it or maybe send a pong if we had a protocol for it. 
-                    // But actually, the plan mentioned "Latency Monitoring: Add measureLatency() function that sends a ping".
-                    // The server -> client ping isn't the main goal, it's measuring latency.
-                    // Let's stick to the plan: "Add measureLatency() function that sends a ping and updates a new latency store."
-                    // But wait, this is handleControlMessage. The server might send a ping? 
-                    // Actually the plan said "latency tracking (ping/pong or timestamp diff) in messages." 
-                    // and "Add measureLatency() function that sends a ping".
-                    // So we need to add that function to this file.
+                    // Logic handled in ping() method usually 
                  }
                  break;
 
@@ -258,15 +252,25 @@ function handleControlMessage(message: ControlMessage): void {
         }
     };
 
-    // Schedule if executeAt is specified
     if (message.executeAt && sdk) {
-        const { cancel, delay } = sdk.scheduleAt(message.executeAt, executeAction);
-        if (delay < 0) {
-            // Already past, execute immediately
-            executeAction();
+        // Special efficient path for audio: use Web Audio scheduling
+        if (message.action === 'modulateSound' || message.action === 'playSound') {
+            const delayMs = sdk.getDelayUntil(message.executeAt);
+            const delaySeconds = Math.max(0, delayMs / 1000);
+            
+            // Execute immediately but pass the Future Delay to the audio engine
+            // This bypasses setTimeout jitter
+            executeAction(delaySeconds);
+        } else {
+            // Standard scheduling for visual effects (setTimeout is fine)
+            const { cancel, delay } = sdk.scheduleAt(message.executeAt, () => executeAction(0));
+            if (delay < 0) {
+                // Already past
+                executeAction(0);
+            }
         }
     } else {
-        executeAction();
+        executeAction(0);
     }
 }
 

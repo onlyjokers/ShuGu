@@ -161,15 +161,35 @@ export class FlashlightController {
  */
 export class ScreenController {
     private overlayElement: HTMLElement | null = null;
+    private animationFrame: number | null = null;
+    private animationInterval: ReturnType<typeof setInterval> | null = null;
+    private animationStart = 0;
 
     /**
      * Set screen color overlay
      */
     setColor(payload: ScreenColorPayload): void {
         this.ensureOverlay();
-        this.overlayElement!.style.backgroundColor = payload.color;
-        this.overlayElement!.style.opacity = String(payload.opacity ?? 1);
-        this.overlayElement!.style.display = 'block';
+        this.stopAnimation();
+
+        const mode = payload.mode ?? 'solid';
+
+        switch (mode) {
+            case 'blink':
+                this.startBlink(payload);
+                break;
+            case 'pulse':
+                this.startPulse(payload);
+                break;
+            case 'modulate':
+                this.startModulate(payload);
+                break;
+            case 'cycle':
+                this.startCycle(payload);
+                break;
+            default:
+                this.applySolid(payload.color, payload.opacity ?? 1);
+        }
     }
 
     /**
@@ -201,6 +221,7 @@ export class ScreenController {
             this.overlayElement.remove();
             this.overlayElement = null;
         }
+        this.stopAnimation();
     }
 
     private ensureOverlay(): void {
@@ -218,6 +239,168 @@ export class ScreenController {
       `;
             document.body.appendChild(this.overlayElement);
         }
+    }
+
+    private applySolid(color: string, opacity: number): void {
+        this.overlayElement!.style.backgroundImage = '';
+        this.overlayElement!.style.backgroundColor = color;
+        this.overlayElement!.style.opacity = String(opacity);
+        this.overlayElement!.style.display = 'block';
+    }
+
+    private stopAnimation(): void {
+        if (this.animationFrame) {
+            cancelAnimationFrame(this.animationFrame);
+            this.animationFrame = null;
+        }
+        if (this.animationInterval) {
+            clearInterval(this.animationInterval);
+            this.animationInterval = null;
+        }
+        this.animationStart = 0;
+    }
+
+    private startBlink(payload: ScreenColorPayload): void {
+        this.animationStart = 0;
+        const frequency = Math.max(0.2, payload.blinkFrequency ?? 2); // Hz
+        const period = 1000 / frequency;
+        const onTime = period * 0.5;
+
+        const tick = () => {
+            this.applySolid(payload.color, payload.opacity ?? 1);
+            setTimeout(() => {
+                this.overlayElement!.style.display = 'none';
+            }, onTime);
+        };
+
+        tick();
+        this.animationInterval = setInterval(tick, period);
+    }
+
+    private startPulse(payload: ScreenColorPayload): void {
+        this.animationStart = 0;
+        const duration = Math.max(300, payload.pulseDuration ?? 1200);
+        const frequencyHz = 1000 / duration;
+        this.startModulate({
+            ...payload,
+            mode: 'modulate',
+            frequencyHz,
+            waveform: payload.waveform ?? 'sine',
+            minOpacity: payload.pulseMin ?? payload.minOpacity ?? 0.25,
+            maxOpacity: payload.opacity ?? payload.maxOpacity ?? 1,
+        });
+    }
+
+    private startCycle(payload: ScreenColorPayload): void {
+        this.animationStart = 0;
+        const colors = payload.cycleColors && payload.cycleColors.length >= 2
+            ? payload.cycleColors
+            : [payload.color, payload.color];
+        const duration = Math.max(600, payload.cycleDuration ?? 4000);
+        const maxOpacity = Math.min(1, payload.opacity ?? 1);
+
+        const loop = (timestamp: number) => {
+            if (!this.animationStart) this.animationStart = timestamp;
+            const elapsed = (timestamp - this.animationStart) % duration;
+            const segment = duration / colors.length;
+            const index = Math.floor(elapsed / segment);
+            const nextIndex = (index + 1) % colors.length;
+            const localT = (elapsed % segment) / segment;
+
+            const mixed = this.mixColors(colors[index], colors[nextIndex], localT);
+            this.applySolid(mixed, maxOpacity);
+
+            this.animationFrame = requestAnimationFrame(loop);
+        };
+
+        this.animationFrame = requestAnimationFrame(loop);
+    }
+
+    private mixColors(a: string, b: string, t: number): string {
+        const ca = this.parseColor(a);
+        const cb = this.parseColor(b);
+        if (!ca || !cb) return t < 0.5 ? a : b;
+
+        const r = Math.round(ca.r + (cb.r - ca.r) * t);
+        const g = Math.round(ca.g + (cb.g - ca.g) * t);
+        const bl = Math.round(ca.b + (cb.b - ca.b) * t);
+        return `rgb(${r}, ${g}, ${bl})`;
+    }
+
+    private parseColor(color: string): { r: number; g: number; b: number } | null {
+        // Supports #rgb, #rrggbb, rgb()
+        if (color.startsWith('#')) {
+            const hex = color.slice(1);
+            if (hex.length === 3) {
+                const r = parseInt(hex[0] + hex[0], 16);
+                const g = parseInt(hex[1] + hex[1], 16);
+                const b = parseInt(hex[2] + hex[2], 16);
+                return { r, g, b };
+            }
+            if (hex.length === 6) {
+                const r = parseInt(hex.slice(0, 2), 16);
+                const g = parseInt(hex.slice(2, 4), 16);
+                const b = parseInt(hex.slice(4, 6), 16);
+                return { r, g, b };
+            }
+        }
+
+        const match = color.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+        if (match) {
+            return {
+                r: parseInt(match[1], 10),
+                g: parseInt(match[2], 10),
+                b: parseInt(match[3], 10),
+            };
+        }
+
+        return null;
+    }
+
+    private startModulate(payload: ScreenColorPayload): void {
+        this.animationStart = 0;
+        const freq = Math.max(0.1, payload.frequencyHz ?? 1);
+        const minOpacity = this.clamp(payload.minOpacity ?? payload.pulseMin ?? 0, 0, 1);
+        const maxOpacity = this.clamp(payload.maxOpacity ?? payload.opacity ?? 1, minOpacity, 1);
+        const primaryColor = payload.color;
+        const secondaryColor = payload.secondaryColor ?? payload.color;
+        const waveform = payload.waveform ?? 'sine';
+
+        const loop = (timestamp: number) => {
+            if (!this.animationStart) this.animationStart = timestamp;
+            const elapsedMs = timestamp - this.animationStart;
+            const phase = (elapsedMs / 1000) * freq * Math.PI * 2;
+            const factor = this.waveformValue(waveform, phase); // 0..1
+            const opacity = minOpacity + (maxOpacity - minOpacity) * factor;
+            const mixed = this.mixColors(primaryColor, secondaryColor, factor);
+            this.applySolid(mixed, opacity);
+            this.animationFrame = requestAnimationFrame(loop);
+        };
+
+        this.animationFrame = requestAnimationFrame(loop);
+    }
+
+    private waveformValue(type: NonNullable<ScreenColorPayload['waveform']>, phase: number): number {
+        const norm = (v: number) => (v + 1) / 2; // map -1..1 to 0..1
+        switch (type) {
+            case 'square':
+                return phase % (2 * Math.PI) < Math.PI ? 1 : 0;
+            case 'triangle': {
+                const t = phase % (2 * Math.PI);
+                return t < Math.PI
+                    ? t / Math.PI
+                    : 1 - (t - Math.PI) / Math.PI;
+            }
+            case 'sawtooth':
+                return (phase % (2 * Math.PI)) / (2 * Math.PI);
+            case 'sine':
+            default:
+                return norm(Math.sin(phase));
+        }
+    }
+
+    private clamp(v: number, min: number, max: number): number {
+        return Math.min(max, Math.max(min, v));
     }
 }
 
@@ -372,7 +555,7 @@ export class SoundPlayer {
     /**
      * Play sound from URL
      */
-    async play(payload: PlaySoundPayload): Promise<void> {
+    async play(payload: PlaySoundPayload, delaySeconds = 0): Promise<void> {
         if (!this.audioContext) {
             await this.init();
         }
@@ -399,16 +582,19 @@ export class SoundPlayer {
             // Set volume
             this.gainNode!.gain.value = payload.volume ?? 1;
 
+            const now = this.audioContext!.currentTime;
+            const startTime = now + delaySeconds;
+
             // Handle fade in
             if (payload.fadeIn) {
-                this.gainNode!.gain.setValueAtTime(0, this.audioContext!.currentTime);
+                this.gainNode!.gain.setValueAtTime(0, startTime);
                 this.gainNode!.gain.linearRampToValueAtTime(
                     payload.volume ?? 1,
-                    this.audioContext!.currentTime + payload.fadeIn / 1000
+                    startTime + payload.fadeIn / 1000
                 );
             }
 
-            this.currentSource.start(0);
+            this.currentSource.start(startTime);
             this.currentUrl = payload.url;
 
         } catch (error) {
@@ -471,7 +657,7 @@ export class ModulatedSoundPlayer {
     private lfo: OscillatorNode | null = null;
     private lfoGain: GainNode | null = null;
 
-    async play(payload: ModulateSoundPayload, sharedContext?: AudioContext | null): Promise<void> {
+    async play(payload: ModulateSoundPayload, sharedContext?: AudioContext | null, delaySeconds = 0): Promise<void> {
         await this.ensureContext(sharedContext);
         if (!this.audioContext || !this.gainNode) return;
 
@@ -482,9 +668,13 @@ export class ModulatedSoundPlayer {
         this.stop();
 
         const ctx = this.audioContext;
-        const now = ctx.currentTime;
+        // Use scheduled time instead of strictly 'now'
+        const now = ctx.currentTime + delaySeconds;
+        
         const durationMs = payload.duration ?? 200;
         const duration = Math.max(0.02, durationMs / 1000);
+        
+        // ... rest of logic
         const attack = Math.max(0, (payload.attack ?? 10) / 1000);
         const release = Math.max(0, (payload.release ?? 40) / 1000);
         const volume = this.clamp(payload.volume ?? 0.7, 0, 1);
@@ -497,11 +687,12 @@ export class ModulatedSoundPlayer {
         this.carrier.type = waveform;
         this.carrier.frequency.value = freq;
 
+        // Schedule volume envelope
         this.gainNode.gain.cancelScheduledValues(now);
         this.gainNode.gain.setValueAtTime(0, now);
         this.gainNode.gain.linearRampToValueAtTime(volume, now + attack);
         this.gainNode.gain.setValueAtTime(volume, now + Math.max(attack, duration - release));
-        this.gainNode.gain.linearRampToValueAtTime(0.0001, now + duration); // tiny residual to avoid pops
+        this.gainNode.gain.linearRampToValueAtTime(0.0001, now + duration); 
 
         if (modDepth > 0) {
             this.lfo = ctx.createOscillator();
@@ -514,16 +705,19 @@ export class ModulatedSoundPlayer {
 
         this.carrier.connect(this.gainNode);
 
+        // Schedule start
         this.carrier.start(now);
         this.lfo?.start(now);
 
+        // Schedule stop
         this.carrier.stop(now + duration + release * 2);
         if (this.lfo) {
             this.lfo.stop(now + duration + release * 2);
         }
 
-        // Cleanup when finished
+        // Cleanup when finished (approximately)
         const cleanup = () => this.stop();
+        // onended fires when the sound normally stops, which is good
         this.carrier.onended = cleanup;
     }
 

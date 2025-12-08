@@ -10,6 +10,7 @@
     asciiMode,
     asciiResolution,
   } from '$lib/stores/manager';
+  import type { ScreenColorPayload } from '@shugu/protocol';
 
   let flashlightMode: 'off' | 'on' | 'blink' = 'off';
   let blinkFrequency = 2;
@@ -26,6 +27,17 @@
 
   let selectedColor = '#6366f1';
   let colorOpacity = 1;
+  let screenMode: 'solid' | 'blink' | 'pulse' | 'cycle' = 'solid';
+  let screenBlinkFrequency = 2;
+  let screenPulseDuration = 1200;
+  let screenPulseMin = 0.2;
+  let screenCycleColors = '#6366f1,#22d3ee,#a855f7';
+  let screenCycleDuration = 4000;
+  let screenWaveform: 'sine' | 'square' | 'triangle' | 'sawtooth' = 'sine';
+  let screenFrequency = 1.5;
+  let screenMinOpacity = 0;
+  let screenMaxOpacity = 1;
+  let screenSecondaryColor = '#ffffff';
 
   let soundUrl = '';
   let soundVolume = 1;
@@ -34,15 +46,25 @@
   let selectedScene = 'box-scene';
   let asciiOn = true;
   let asciiRes = 11;
+  let useSync = true; // Default to true for better experience
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: serverTime = Date.now() + $state.timeSync.offset;
+  $: syncDelay = 500; // ms
+
+  function getExecuteAt() {
+    if (!useSync) return undefined;
+    // Recalculate server time to be fresh
+    const currentServerTime = Date.now() + $state.timeSync.offset;
+    return currentServerTime + syncDelay;
+  }
 
   function handleFlashlight(toAll = false) {
     const options =
       flashlightMode === 'blink'
         ? { frequency: blinkFrequency, dutyCycle: blinkDutyCycle }
         : undefined;
-    flashlight(flashlightMode, options, toAll);
+    flashlight(flashlightMode, options, toAll, getExecuteAt());
   }
 
   function handleVibrate(toAll = false) {
@@ -50,7 +72,7 @@
       .split(',')
       .map((s) => parseInt(s.trim()))
       .filter((n) => !isNaN(n));
-    vibrate(pattern, undefined, toAll);
+    vibrate(pattern, undefined, toAll, getExecuteAt());
   }
 
   function handleModulateSound(toAll = false) {
@@ -63,35 +85,76 @@
         modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
         modDepth: modDepth > 0 ? Math.max(0, Math.min(1, modDepth)) : undefined,
       },
-      toAll
+      toAll,
+      getExecuteAt()
     );
   }
 
   function handleScreenColor(toAll = false) {
-    screenColor(selectedColor, colorOpacity, toAll);
+    const payload: ScreenColorPayload = {
+      mode: screenMode,
+      color: selectedColor,
+      opacity: colorOpacity,
+    };
+
+    if (screenMode === 'blink') {
+      payload.blinkFrequency = screenBlinkFrequency;
+    } else if (screenMode === 'pulse') {
+      payload.pulseDuration = screenPulseDuration;
+      payload.pulseMin = screenPulseMin;
+      payload.waveform = screenWaveform;
+    } else if (screenMode === 'cycle') {
+      const colors = screenCycleColors
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (colors.length >= 2) {
+        payload.cycleColors = colors;
+      }
+      payload.cycleDuration = screenCycleDuration;
+    } else if (screenMode === 'modulate') {
+      payload.waveform = screenWaveform;
+      payload.frequencyHz = screenFrequency;
+      payload.minOpacity = screenMinOpacity;
+      payload.maxOpacity = screenMaxOpacity;
+      if (screenSecondaryColor) {
+        payload.secondaryColor = screenSecondaryColor;
+      }
+    }
+
+    screenColor(payload, undefined, toAll, getExecuteAt());
   }
 
   function handlePlaySound(toAll = false) {
     if (!soundUrl) return;
-    playSound(soundUrl, { volume: soundVolume, loop: soundLoop }, toAll);
+    playSound(soundUrl, { volume: soundVolume, loop: soundLoop }, toAll, getExecuteAt());
   }
 
   function handleSwitchScene(toAll = false) {
-    switchScene(selectedScene, toAll);
+    switchScene(selectedScene, toAll, getExecuteAt());
   }
 
   function handleAsciiToggle(toAll = false) {
-    asciiMode(asciiOn, toAll);
+    asciiMode(asciiOn, toAll, getExecuteAt());
   }
 
   function handleAsciiResolution(toAll = false) {
-    asciiResolution(Number(asciiRes), toAll);
+    asciiResolution(Number(asciiRes), toAll, getExecuteAt());
   }
 </script>
 
 <div class="card">
   <div class="card-header">
-    <h3 class="card-title">Control Panel</h3>
+    <div class="header-row">
+      <h3 class="card-title">Control Panel</h3>
+      <label
+        class="sync-toggle"
+        title="Add 500ms delay to ensure all clients trigger simultaneously"
+      >
+        <input type="checkbox" bind:checked={useSync} />
+        <span class="sync-label">⚡ Sync (500ms)</span>
+      </label>
+    </div>
     {#if hasSelection}
       <span class="selection-count">{$state.selectedClientIds.length} selected</span>
     {/if}
@@ -275,6 +338,16 @@
       <h4 class="section-title">🎨 Screen Color</h4>
       <div class="control-group">
         <div class="control-row">
+          <label class="control-label">Mode</label>
+          <select class="select" bind:value={screenMode}>
+            <option value="solid">Solid</option>
+            <option value="blink">Blink</option>
+            <option value="pulse">Pulse</option>
+            <option value="cycle">Cycle</option>
+            <option value="modulate">Modulate (Waveform)</option>
+          </select>
+        </div>
+        <div class="control-row">
           <label class="control-label">Color</label>
           <input type="color" class="color-picker" bind:value={selectedColor} />
           <input type="text" class="input input-small" bind:value={selectedColor} />
@@ -287,10 +360,134 @@
             bind:value={colorOpacity}
             min="0"
             max="1"
-            step="0.1"
+            step="0.05"
           />
           <span class="value-display">{Math.round(colorOpacity * 100)}%</span>
         </div>
+
+        {#if screenMode === 'blink'}
+          <div class="control-row">
+            <label class="control-label">Blink Frequency</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenBlinkFrequency}
+              min="0.5"
+              max="10"
+              step="0.5"
+            />
+            <span class="value-display">{screenBlinkFrequency} Hz</span>
+          </div>
+        {/if}
+
+        {#if screenMode === 'pulse'}
+          <div class="control-row">
+            <label class="control-label">Pulse Duration</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenPulseDuration}
+              min="300"
+              max="4000"
+              step="100"
+            />
+            <span class="value-display">{screenPulseDuration} ms</span>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Min Opacity</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenPulseMin}
+              min="0"
+              max="1"
+              step="0.05"
+            />
+            <span class="value-display">{Math.round(screenPulseMin * 100)}%</span>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Waveform</label>
+            <select class="select" bind:value={screenWaveform}>
+              <option value="sine">Sine</option>
+              <option value="square">Square</option>
+              <option value="triangle">Triangle</option>
+              <option value="sawtooth">Sawtooth</option>
+            </select>
+          </div>
+        {/if}
+
+        {#if screenMode === 'modulate'}
+          <div class="control-row">
+            <label class="control-label">Waveform</label>
+            <select class="select" bind:value={screenWaveform}>
+              <option value="sine">Sine</option>
+              <option value="square">Square</option>
+              <option value="triangle">Triangle</option>
+              <option value="sawtooth">Sawtooth</option>
+            </select>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Frequency</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenFrequency}
+              min="0.2"
+              max="20"
+              step="0.2"
+            />
+            <span class="value-display">{screenFrequency.toFixed(1)} Hz</span>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Min Opacity</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenMinOpacity}
+              min="0"
+              max="1"
+              step="0.05"
+            />
+            <span class="value-display">{Math.round(screenMinOpacity * 100)}%</span>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Max Opacity</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenMaxOpacity}
+              min="0"
+              max="1"
+              step="0.05"
+            />
+            <span class="value-display">{Math.round(screenMaxOpacity * 100)}%</span>
+          </div>
+          <div class="control-row">
+            <label class="control-label">Secondary Color</label>
+            <input type="color" class="color-picker" bind:value={screenSecondaryColor} />
+            <input type="text" class="input input-small" bind:value={screenSecondaryColor} />
+            <p class="hint">Used when crossfading with waveform; set same as primary to only change brightness.</p>
+          </div>
+        {/if}
+
+        {#if screenMode === 'cycle'}
+          <div class="control-row">
+            <label class="control-label">Colors (comma separated)</label>
+            <input type="text" class="input" bind:value={screenCycleColors} />
+          </div>
+          <div class="control-row">
+            <label class="control-label">Cycle Duration</label>
+            <input
+              type="range"
+              class="range-slider"
+              bind:value={screenCycleDuration}
+              min="600"
+              max="8000"
+              step="200"
+            />
+            <span class="value-display">{screenCycleDuration} ms</span>
+          </div>
+        {/if}
 
         <div class="button-group">
           <button
@@ -303,7 +500,10 @@
           <button class="btn btn-secondary" on:click={() => handleScreenColor(true)}>
             Apply to All
           </button>
-          <button class="btn btn-secondary" on:click={() => screenColor('transparent', 0, true)}>
+          <button
+            class="btn btn-secondary"
+            on:click={() => screenColor({ color: 'transparent', opacity: 0, mode: 'solid' }, undefined, true, getExecuteAt())}
+          >
             Clear All
           </button>
         </div>
@@ -434,6 +634,30 @@
 </div>
 
 <style>
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  .sync-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+  }
+
+  .sync-label {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--color-warning);
+  }
+
   .control-sections {
     display: flex;
     flex-direction: column;
