@@ -2,6 +2,7 @@
   import '@shugu/ui-kit/styles';
   import { onMount } from 'svelte';
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
+  import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import ConnectionBar from '$lib/components/ConnectionBar.svelte';
   import ClientList from '$lib/components/ClientList.svelte';
   import ControlPanel from '$lib/components/ControlPanel.svelte';
@@ -10,6 +11,9 @@
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
+  let username: AuthUser | '' = '';
+  let password = '';
+  let rememberLogin = false;
 
   onMount(() => {
     // Detect if accessing via IP address
@@ -37,6 +41,7 @@
   });
 
   function handleConnect() {
+    if (!$auth.user) return;
     localStorage.setItem('shugu-server-url', serverUrl);
     isConnecting = true;
     connect({ serverUrl });
@@ -46,18 +51,90 @@
   function handleDisconnect() {
     disconnect();
   }
+
+  function handleLogin(event: Event) {
+    event.preventDefault();
+    auth.clearError();
+    const result = auth.login(username, password, rememberLogin);
+
+    if (result.ok) {
+      password = '';
+    } else {
+      password = '';
+    }
+  }
+
+  function handleLogout() {
+    handleDisconnect();
+    auth.logout();
+    rememberLogin = false;
+    password = '';
+  }
 </script>
 
 <svelte:head>
-  <title>ShuGu Manager</title>
+  <title>Fllufy Mnanager</title>
 </svelte:head>
 
 <div class="app">
-  {#if $connectionStatus === 'disconnected' || $connectionStatus === 'error'}
+  {#if $auth.isRestoring}
     <div class="connect-screen">
       <div class="connect-card card card-glass">
-        <h1 class="title">ShuGu Manager</h1>
-        <p class="subtitle">Interactive Art Control System</p>
+        <h1 class="title">Fllufy Mnanager</h1>
+        <p class="subtitle">正在加载登录状态...</p>
+      </div>
+    </div>
+  {:else if !$auth.user}
+    <div class="connect-screen">
+      <div class="connect-card card card-glass">
+        <h1 class="title">Fllufy Mnanager</h1>
+
+        <form class="connect-form" on:submit|preventDefault={handleLogin} autocomplete="on">
+          <label class="form-label" for="username">用户名</label>
+          <input
+            id="username"
+            list="user-options"
+            type="text"
+            class="input"
+            bind:value={username}
+            placeholder="Eureka / Starno / VKong"
+            autocomplete="username"
+            on:input={() => auth.clearError()}
+          />
+          <datalist id="user-options">
+            {#each ALLOWED_USERNAMES as name}
+              <option value={name} />
+            {/each}
+          </datalist>
+
+          <label class="form-label" for="password">密码</label>
+          <input
+            id="password"
+            type="password"
+            class="input"
+            bind:value={password}
+            placeholder="******"
+            autocomplete="current-password"
+            on:input={() => auth.clearError()}
+          />
+
+          <label class="remember-row">
+            <input type="checkbox" bind:checked={rememberLogin} />
+            <span>保存登录状态</span>
+          </label>
+
+          {#if $auth.error}
+            <p class="error-message">{$auth.error}</p>
+          {/if}
+
+          <button class="btn btn-primary btn-lg w-full" type="submit">登录</button>
+        </form>
+      </div>
+    </div>
+  {:else if $connectionStatus === 'disconnected' || $connectionStatus === 'error'}
+    <div class="connect-screen">
+      <div class="connect-card card card-glass">
+        <h1 class="title">Fllufy Mnanager</h1>
 
         <div class="connect-form">
           <label class="form-label">Server URL</label>
@@ -67,6 +144,8 @@
             bind:value={serverUrl}
             placeholder="http://localhost:3001"
           />
+
+          <p class="status-note">已登录用户：{$auth.user}</p>
 
           {#if $connectionStatus === 'error'}
             <p class="error-message">Failed to connect. Please check the server URL.</p>
@@ -78,6 +157,10 @@
             disabled={isConnecting}
           >
             {isConnecting ? 'Connecting...' : 'Connect'}
+          </button>
+
+          <button class="btn btn-secondary btn-lg w-full" type="button" on:click={handleLogout}>
+            Logout
           </button>
         </div>
       </div>
@@ -100,7 +183,10 @@
       </aside>
     </main>
 
-    <button class="disconnect-btn" on:click={handleDisconnect}> Disconnect </button>
+    <div class="session-actions">
+      <button class="disconnect-btn" on:click={handleDisconnect}> Disconnect </button>
+      <button class="logout-btn" on:click={handleLogout}> Logout </button>
+    </div>
   {/if}
 </div>
 
@@ -157,6 +243,19 @@
     font-size: var(--text-sm);
   }
 
+  .status-note {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+  }
+
+  .remember-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+
   .main-content {
     display: grid;
     grid-template-columns: 300px 1fr 300px;
@@ -178,10 +277,16 @@
     gap: var(--space-lg);
   }
 
-  .disconnect-btn {
+  .session-actions {
     position: fixed;
     bottom: var(--space-lg);
     right: var(--space-lg);
+    display: flex;
+    gap: var(--space-sm);
+  }
+
+  .disconnect-btn,
+  .logout-btn {
     padding: var(--space-sm) var(--space-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -199,6 +304,12 @@
     border-color: var(--color-error);
   }
 
+  .logout-btn:hover {
+    background: var(--bg-secondary);
+    color: white;
+    border-color: var(--bg-secondary);
+  }
+
   @media (max-width: 1200px) {
     .main-content {
       grid-template-columns: 1fr;
@@ -211,6 +322,11 @@
 
     .content {
       order: 0;
+    }
+
+    .session-actions {
+      right: var(--space-md);
+      bottom: var(--space-md);
     }
   }
 </style>
