@@ -1,12 +1,16 @@
 <script lang="ts">
   import { sensorData, state } from '$lib/stores/manager';
 
+  let clientData: any = null;
+  let payload: any = {};
+
   $: selectedClientId = $state.selectedClientIds[0] ?? null;
   $: clientData = selectedClientId ? $sensorData.get(selectedClientId) : null;
+  $: payload = clientData?.payload ?? {};
 
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '--';
-    return val.toFixed(2);
+    return Number(val).toFixed(2);
   }
 </script>
 
@@ -34,15 +38,15 @@
           <h4 class="data-title">Gyroscope</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.alpha)}</span>
+              <span class="value">{formatValue(payload.alpha)}</span>
               <span class="label">Alpha</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.beta)}</span>
+              <span class="value">{formatValue(payload.beta)}</span>
               <span class="label">Beta</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.gamma)}</span>
+              <span class="value">{formatValue(payload.gamma)}</span>
               <span class="label">Gamma</span>
             </div>
           </div>
@@ -52,15 +56,15 @@
           <h4 class="data-title">Accelerometer</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.x)}</span>
+              <span class="value">{formatValue(payload.x)}</span>
               <span class="label">X</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.y)}</span>
+              <span class="value">{formatValue(payload.y)}</span>
               <span class="label">Y</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.z)}</span>
+              <span class="value">{formatValue(payload.z)}</span>
               <span class="label">Z</span>
             </div>
           </div>
@@ -70,15 +74,15 @@
           <h4 class="data-title">Orientation</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.alpha)}</span>
+              <span class="value">{formatValue(payload.alpha)}</span>
               <span class="label">Alpha</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.beta)}</span>
+              <span class="value">{formatValue(payload.beta)}</span>
               <span class="label">Beta</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.gamma)}</span>
+              <span class="value">{formatValue(payload.gamma)}</span>
               <span class="label">Gamma</span>
             </div>
           </div>
@@ -88,19 +92,19 @@
           <h4 class="data-title">Audio Analysis</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.volume)}</span>
+              <span class="value">{formatValue(payload.volume)}</span>
               <span class="label">Vol</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.lowEnergy)}</span>
+              <span class="value">{formatValue(payload.lowEnergy)}</span>
               <span class="label">Low</span>
             </div>
             <div class="data-item">
-              <span class="value">{formatValue(clientData.payload.highEnergy)}</span>
+              <span class="value">{formatValue(payload.highEnergy)}</span>
               <span class="label">High</span>
             </div>
             <div class="data-item">
-              <span class="value">{clientData.payload.bpm ?? '--'}</span>
+              <span class="value">{payload.bpm ?? '--'}</span>
               <span class="label">BPM</span>
             </div>
           </div>

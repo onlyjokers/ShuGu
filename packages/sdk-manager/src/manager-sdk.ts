@@ -318,6 +318,29 @@ export class ManagerSDK {
     }
 
     /**
+     * Update synthesized tone parameters without restarting playback
+     */
+    modulateSoundUpdate(
+        options: {
+            frequency?: number;
+            volume?: number;
+            waveform?: 'sine' | 'square' | 'sawtooth' | 'triangle';
+            modFrequency?: number;
+            modDepth?: number;
+            durationMs?: number;
+        },
+        toAll = false,
+        executeAt?: number
+    ): void {
+        const payload = { ...options };
+        if (toAll) {
+            this.sendControlToAll('modulateSoundUpdate', payload, executeAt);
+        } else {
+            this.sendControlToSelected('modulateSoundUpdate', payload, executeAt);
+        }
+    }
+
+    /**
      * Control screen color
      */
     screenColor(payload: { color: string; opacity?: number } | ScreenColorPayload, toAll = false, executeAt?: number): void {

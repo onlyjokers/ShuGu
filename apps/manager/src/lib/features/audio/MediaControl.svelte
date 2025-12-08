@@ -142,7 +142,7 @@
     </div>
 
     <div class="button-group single">
-      <Button variant="warning" on:click={() => handleInterrupt(true)} fullWidth>
+      <Button variant="danger" on:click={() => handleInterrupt(true)} fullWidth>
         ⏹ Interrupt All Media
       </Button>
     </div>

@@ -39,6 +39,7 @@ export type ControlAction =
     | 'screenBrightness'
     | 'vibrate'
     | 'modulateSound'
+    | 'modulateSoundUpdate'
     | 'playSound'
     | 'playMedia'
     | 'stopSound'

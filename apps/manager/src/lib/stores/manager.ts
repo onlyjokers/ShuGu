@@ -134,6 +134,21 @@ export function modulateSound(
     sdk?.modulateSound(options, toAll, executeAt);
 }
 
+export function modulateSoundUpdate(
+    options: {
+        frequency?: number;
+        volume?: number;
+        waveform?: 'sine' | 'square' | 'sawtooth' | 'triangle';
+        modFrequency?: number;
+        modDepth?: number;
+        durationMs?: number;
+    },
+    toAll = false,
+    executeAt?: number
+): void {
+    sdk?.modulateSoundUpdate(options, toAll, executeAt);
+}
+
 export function screenColor(
     colorOrPayload: string | ScreenColorPayload,
     opacity?: number,
@@ -170,11 +185,15 @@ export function stopMedia(toAll = false): void {
     sdk?.stopMedia(toAll);
 }
 
+export function stopSound(toAll = false): void {
+    sdk?.stopSound(toAll);
+}
+
 export function interruptMedia(toAll = false): void {
     // Stop video/audio/media streams and hide images
-    sdk?.stopMedia(toAll);
-    sdk?.stopSound(toAll);
-    sdk?.hideImage(toAll);
+    stopMedia(toAll);
+    stopSound(toAll);
+    hideImage(toAll);
 }
 
 export function showImage(

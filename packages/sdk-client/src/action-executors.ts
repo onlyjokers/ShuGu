@@ -683,6 +683,7 @@ export class ModulatedSoundPlayer {
     private carrier: OscillatorNode | null = null;
     private lfo: OscillatorNode | null = null;
     private lfoGain: GainNode | null = null;
+    private stopTimer: ReturnType<typeof setTimeout> | null = null;
 
     async play(payload: ModulateSoundPayload, sharedContext?: AudioContext | null, delaySeconds = 0): Promise<void> {
         await this.ensureContext(sharedContext);
@@ -736,19 +737,18 @@ export class ModulatedSoundPlayer {
         this.carrier.start(now);
         this.lfo?.start(now);
 
-        // Schedule stop
-        this.carrier.stop(now + duration + release * 2);
-        if (this.lfo) {
-            this.lfo.stop(now + duration + release * 2);
-        }
-
-        // Cleanup when finished (approximately)
-        const cleanup = () => this.stop();
-        // onended fires when the sound normally stops, which is good
-        this.carrier.onended = cleanup;
+        // Schedule stop via timeout so we can reschedule on updates
+        const stopMs = (duration + release * 2) * 1000;
+        if (this.stopTimer) clearTimeout(this.stopTimer);
+        this.stopTimer = setTimeout(() => this.stop(), Math.max(10, stopMs));
     }
 
     stop(): void {
+        if (this.stopTimer) {
+            clearTimeout(this.stopTimer);
+            this.stopTimer = null;
+        }
+
         this.carrier?.disconnect();
         this.carrier?.stop();
         this.carrier = null;
@@ -770,6 +770,71 @@ export class ModulatedSoundPlayer {
 
     getAudioContext(): AudioContext | null {
         return this.audioContext;
+    }
+
+    /**
+     * Update parameters of an active tone without restarting playback.
+     * If nothing is playing, fall back to play().
+     */
+    async update(payload: {
+        frequency?: number;
+        volume?: number;
+        waveform?: OscillatorType;
+        modFrequency?: number;
+        modDepth?: number;
+        durationMs?: number;
+    }): Promise<void> {
+        if (!this.carrier || !this.gainNode || !this.audioContext) {
+            await this.play({
+                frequency: payload.frequency,
+                volume: payload.volume,
+                duration: payload.durationMs ?? 200,
+                waveform: (payload.waveform as any) ?? 'square',
+                modFrequency: payload.modFrequency,
+                modDepth: payload.modDepth,
+            });
+            return;
+        }
+
+        const ctx = this.audioContext;
+        const now = ctx.currentTime;
+
+        if (payload.frequency !== undefined) {
+            this.carrier.frequency.setValueAtTime(payload.frequency, now);
+        }
+        if (payload.waveform) {
+            this.carrier.type = payload.waveform;
+        }
+        if (payload.volume !== undefined) {
+            this.gainNode.gain.setValueAtTime(Math.max(0, Math.min(1, payload.volume)), now);
+        }
+
+        // Update LFO
+        if (payload.modDepth !== undefined || payload.modFrequency !== undefined) {
+            if (!this.lfo || !this.lfoGain) {
+                // create if missing
+                this.lfo = ctx.createOscillator();
+                this.lfoGain = ctx.createGain();
+                this.lfo.connect(this.lfoGain);
+                this.lfoGain.connect(this.carrier.frequency);
+                this.lfo.start(now);
+            }
+            if (payload.modFrequency !== undefined) {
+                this.lfo.frequency.setValueAtTime(payload.modFrequency, now);
+            }
+            if (payload.modDepth !== undefined && this.lfoGain) {
+                const currentFreq = this.carrier.frequency.value;
+                this.lfoGain.gain.setValueAtTime(payload.modDepth * currentFreq, now);
+            }
+        }
+
+        // Reschedule stop if duration provided
+        if (payload.durationMs !== undefined) {
+            if (this.stopTimer) clearTimeout(this.stopTimer);
+            const release = 0.04; // keep minimal release to avoid click
+            const durationSec = Math.max(0.02, payload.durationMs / 1000);
+            this.stopTimer = setTimeout(() => this.stop(), (durationSec + release * 2) * 1000);
+        }
     }
 
     private async ensureContext(shared?: AudioContext | null): Promise<void> {

@@ -227,6 +227,16 @@ function handleControlMessage(message: ControlMessage): void {
                     delaySeconds // Use precise audio scheduling
                 );
                 break;
+            case 'modulateSoundUpdate':
+                modulatedSoundPlayer?.update({
+                    frequency: (message.payload as ModulateSoundPayload).frequency,
+                    volume: (message.payload as ModulateSoundPayload).volume,
+                    waveform: (message.payload as ModulateSoundPayload).waveform,
+                    modFrequency: (message.payload as ModulateSoundPayload).modFrequency,
+                    modDepth: (message.payload as ModulateSoundPayload).modDepth,
+                    durationMs: (message.payload as ModulateSoundPayload).duration,
+                });
+                break;
 
             case 'playSound':
                 soundPlayer?.play(message.payload as PlaySoundPayload, delaySeconds);

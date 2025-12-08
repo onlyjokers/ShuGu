@@ -3,11 +3,13 @@
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Input from '$lib/components/ui/Input.svelte';
+  import { streamEnabled } from '$lib/streaming/streaming';
 
   export let useSync = true;
   export let syncDelay = 500;
 
   let vibratePattern = '200,100,200';
+  let running = false;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
 
@@ -22,6 +24,13 @@
       .map((s) => parseInt(s.trim()))
       .filter((n) => !isNaN(n));
     vibrate(pattern, undefined, toAll, getExecuteAt());
+    running = true;
+  }
+
+  function stopVibrate(toAll = false) {
+    // send empty pattern to stop
+    vibrate([], 0, toAll, getExecuteAt());
+    running = false;
   }
 </script>
 
@@ -42,6 +51,10 @@
       <Button variant="secondary" on:click={() => handleVibrate(true)} fullWidth>
         Vibrate All
       </Button>
+      <Button variant="ghost" disabled={!hasSelection} on:click={() => stopVibrate(false)} fullWidth>
+        Stop Selected
+      </Button>
+      <Button variant="ghost" on:click={() => stopVibrate(true)} fullWidth>Stop All</Button>
     </div>
   </div>
 </Card>

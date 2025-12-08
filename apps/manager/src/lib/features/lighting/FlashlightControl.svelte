@@ -3,40 +3,92 @@
   import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Select from '$lib/components/ui/Select.svelte';
   import Slider from '$lib/components/ui/Slider.svelte';
+  import { streamEnabled } from '$lib/streaming/streaming';
+  import { onDestroy } from 'svelte';
 
   export let useSync = true;
   export let syncDelay = 500;
 
-  let flashlightMode: 'off' | 'on' | 'blink' = 'off';
-  let blinkFrequency = 2;
+  let frequencyHz = 1; // 1 Hz interpreted as steady on
   let blinkDutyCycle = 0.5;
+  let durationMs = 2000;
+  let playing = false;
+  let playingUntil = 0;
+  let updateTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopTimer: ReturnType<typeof setTimeout> | null = null;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
-  $: flashlightMode = $controlState.flashlightOn
-    ? (flashlightMode === 'blink' ? 'blink' : 'on')
-    : 'off';
+  $: $controlState; // keep reactive tie to shared state
 
   function getExecuteAt() {
     if (!useSync) return undefined;
     return Date.now() + $state.timeSync.offset + syncDelay;
   }
 
-  function handleFlashlight(toAll = false) {
-    const options =
-      flashlightMode === 'blink'
-        ? { frequency: blinkFrequency, dutyCycle: blinkDutyCycle }
-        : undefined;
-    flashlight(flashlightMode, options, toAll, getExecuteAt());
-    updateControlState({ flashlightOn: flashlightMode !== 'off' });
+  function scheduleStop(toAll = false) {
+    if (stopTimer) clearTimeout(stopTimer);
+    if (durationMs <= 0) return;
+    stopTimer = setTimeout(() => {
+      flashlight('off', undefined, toAll, getExecuteAt());
+      playing = false;
+    }, durationMs);
+    playingUntil = Date.now() + durationMs;
   }
 
-  const modeOptions = [
-    { value: 'off', label: 'Off' },
-    { value: 'on', label: 'On (Steady)' },
-    { value: 'blink', label: 'Blink' },
-  ];
+  function buildPayload() {
+    if (frequencyHz <= 1) {
+      return { mode: 'on' as const };
+    }
+    return {
+      mode: 'blink' as const,
+      frequency: frequencyHz,
+      dutyCycle: blinkDutyCycle,
+    };
+  }
+
+  function handleFlashlight(toAll = false) {
+    const payload = buildPayload();
+    flashlight(payload.mode, payload.frequency ? { frequency: payload.frequency, dutyCycle: payload.dutyCycle } : undefined, toAll, getExecuteAt());
+    updateControlState({ flashlightOn: true });
+    playing = true;
+    if (playing) {
+      scheduleStop(toAll);
+    } else {
+      if (stopTimer) clearTimeout(stopTimer);
+    }
+  }
+
+  function handleStop(toAll = false) {
+    if (stopTimer) clearTimeout(stopTimer);
+    playing = false;
+    playingUntil = 0;
+    flashlight('off', undefined, toAll, getExecuteAt());
+  }
+
+  function queueUpdate() {
+    if (!$streamEnabled) return;
+    if (!hasSelection || !playing) return;
+    if (durationMs > 0 && Date.now() > playingUntil) return;
+    if (updateTimer) clearTimeout(updateTimer);
+    updateTimer = setTimeout(() => {
+      const payload = buildPayload();
+      flashlight(
+        payload.mode,
+        payload.frequency ? { frequency: payload.frequency, dutyCycle: payload.dutyCycle } : undefined,
+        false,
+        getExecuteAt()
+      );
+    }, 30);
+  }
+
+  $: queueUpdate();
+
+  onDestroy(() => {
+    if (stopTimer) clearTimeout(stopTimer);
+    if (updateTimer) clearTimeout(updateTimer);
+  });
+
 </script>
 
 <Card title="💡 Flashlight">
@@ -45,41 +97,43 @@
   </div>
 
   <div class="control-group">
-    <Select label="Mode" options={modeOptions} bind:value={flashlightMode} />
+    <div class="sliders">
+      <Slider
+        label="Frequency"
+        min={0.2}
+        max={10}
+        step={0.2}
+        suffix=" Hz"
+        bind:value={frequencyHz}
+      />
+      <Slider
+        label="Duty Cycle"
+        min={0.1}
+        max={0.9}
+        step={0.05}
+        suffix="%"
+        bind:value={blinkDutyCycle}
+      />
+    </div>
 
-    {#if flashlightMode === 'blink'}
-      <div class="sliders">
-        <Slider
-          label="Frequency"
-          min={0.5}
-          max={10}
-          step={0.5}
-          suffix=" Hz"
-          bind:value={blinkFrequency}
-        />
-        <Slider
-          label="Duty Cycle"
-          min={0.1}
-          max={0.9}
-          step={0.1}
-          suffix="%"
-          bind:value={blinkDutyCycle}
-        />
-      </div>
-    {/if}
+    <Slider
+      label="Dur (ms)"
+      min={0}
+      max={8000}
+      step={50}
+      suffix=" ms"
+      bind:value={durationMs}
+    />
 
-    <div class="button-group">
-      <Button
-        variant="primary"
-        disabled={!hasSelection}
-        on:click={() => handleFlashlight(false)}
-        fullWidth
-      >
-        Apply to Selected
+    <div class="button-grid">
+      <Button variant="primary" disabled={!hasSelection} on:click={() => handleFlashlight(false)} fullWidth>
+        Play Selected
       </Button>
-      <Button variant="secondary" on:click={() => handleFlashlight(true)} fullWidth>
-        Apply to All
+      <Button variant="secondary" on:click={() => handleFlashlight(true)} fullWidth>Play All</Button>
+      <Button variant="ghost" disabled={!hasSelection} on:click={() => handleStop(false)} fullWidth>
+        Stop Selected
       </Button>
+      <Button variant="ghost" on:click={() => handleStop(true)} fullWidth>Stop All</Button>
     </div>
   </div>
 </Card>
@@ -100,9 +154,10 @@
     border-radius: var(--radius-md);
   }
 
-  .button-group {
+  .button-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-sm);
+    margin-top: var(--space-sm);
   }
 </style>

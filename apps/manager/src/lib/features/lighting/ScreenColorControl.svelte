@@ -6,39 +6,25 @@
   import Input from '$lib/components/ui/Input.svelte';
   import Slider from '$lib/components/ui/Slider.svelte';
   import Select from '$lib/components/ui/Select.svelte';
+  import { streamEnabled } from '$lib/streaming/streaming';
+  import { onDestroy } from 'svelte';
 
   export let useSync = true;
   export let syncDelay = 500;
 
   let selectedColor = '#6366f1';
   let colorOpacity = 1;
-  let screenMode: 'solid' | 'blink' | 'pulse' | 'cycle' | 'modulate' = 'solid';
-
-  // Blink params
-  let screenBlinkFrequency = 2;
-
-  // Pulse params
-  let screenPulseDuration = 1200;
-  let screenPulseMin = 0.2;
-
-  // Cycle params
-  let screenCycleColors = '#6366f1,#22d3ee,#a855f7';
-  let screenCycleDuration = 4000;
-
-  // Modulate/Common params
+  // Single unified Modulate model
   let screenWaveform: 'sine' | 'square' | 'triangle' | 'sawtooth' = 'sine';
   let screenFrequency = 1.5;
   let screenMinOpacity = 0;
   let screenMaxOpacity = 1;
   let screenSecondaryColor = '#ffffff';
-
-  const modes = [
-    { value: 'solid', label: 'Solid' },
-    { value: 'blink', label: 'Blink' },
-    { value: 'pulse', label: 'Pulse' },
-    { value: 'cycle', label: 'Cycle' },
-    { value: 'modulate', label: 'Modulate (Adv)' },
-  ];
+  let playing = false;
+  let updateTimer: ReturnType<typeof setTimeout> | null = null;
+  let durationMs = 2000;
+  let stopTimer: ReturnType<typeof setTimeout> | null = null;
+  let playingUntil = 0;
 
   const waveforms = [
     { value: 'sine', label: 'Sine' },
@@ -54,35 +40,31 @@
     return Date.now() + $state.timeSync.offset + syncDelay;
   }
 
-  function handleScreenColor(toAll = false) {
-    const payload: ScreenColorPayload = {
-      mode: screenMode,
+  function buildPayload(): ScreenColorPayload {
+    return {
+      mode: 'modulate',
       color: selectedColor,
-      opacity: colorOpacity,
+      secondaryColor: screenSecondaryColor,
+      opacity: screenMaxOpacity,
+      minOpacity: screenMinOpacity,
+      maxOpacity: screenMaxOpacity,
+      frequencyHz: screenFrequency,
+      waveform: screenWaveform,
     };
+  }
 
-    if (screenMode === 'blink') {
-      payload.blinkFrequency = screenBlinkFrequency;
-    } else if (screenMode === 'pulse') {
-      payload.pulseDuration = screenPulseDuration;
-      payload.pulseMin = screenPulseMin;
-      payload.waveform = screenWaveform;
-    } else if (screenMode === 'cycle') {
-      const colors = screenCycleColors
-        .split(',')
-        .map((c) => c.trim())
-        .filter(Boolean);
-      if (colors.length >= 2) payload.cycleColors = colors;
-      payload.cycleDuration = screenCycleDuration;
-    } else if (screenMode === 'modulate') {
-      payload.waveform = screenWaveform;
-      payload.frequencyHz = screenFrequency;
-      payload.minOpacity = screenMinOpacity;
-      payload.maxOpacity = screenMaxOpacity;
-      if (screenSecondaryColor) payload.secondaryColor = screenSecondaryColor;
+  function handleScreenColor(toAll = false) {
+    screenColor(buildPayload(), undefined, toAll, getExecuteAt());
+    playing = true;
+    if (stopTimer) clearTimeout(stopTimer);
+    if (durationMs > 0) {
+      stopTimer = setTimeout(() => {
+        handleClear(toAll);
+      }, durationMs);
+      playingUntil = Date.now() + durationMs;
+    } else {
+      playingUntil = 0;
     }
-
-    screenColor(payload, undefined, toAll, getExecuteAt());
   }
 
   function handleClear(toAll = false) {
@@ -92,79 +74,76 @@
       toAll,
       getExecuteAt()
     );
+    playing = false;
+    if (stopTimer) clearTimeout(stopTimer);
+    playingUntil = 0;
   }
+
+  function queueUpdate() {
+    if (!$streamEnabled) return;
+    if (!hasSelection || !playing) return;
+    if (durationMs > 0 && Date.now() > playingUntil) return;
+    if (updateTimer) clearTimeout(updateTimer);
+    updateTimer = setTimeout(() => {
+      screenColor(buildPayload(), undefined, false, getExecuteAt());
+    }, 30);
+  }
+
+  $: queueUpdate();
+
+  onDestroy(() => {
+    if (stopTimer) clearTimeout(stopTimer);
+    if (updateTimer) clearTimeout(updateTimer);
+  });
 </script>
 
 <Card title="🎨 Screen Color">
   <div class="control-group">
     <div class="main-controls">
-      <Select label="Mode" options={modes} bind:value={screenMode} />
-      <Input type="color" label="Color" bind:value={selectedColor} />
+      <Input type="color" label="Primary" bind:value={selectedColor} />
+      <Input type="color" label="Secondary" bind:value={screenSecondaryColor} />
     </div>
 
-    <Slider label="Opacity" bind:value={colorOpacity} step={0.05} max={1} suffix="" />
+    <div class="opacity-row">
+      <Slider label="Max Opacity" bind:value={screenMaxOpacity} step={0.05} max={1} suffix="" />
+      <Slider label="Min Opacity" bind:value={screenMinOpacity} step={0.05} max={1} suffix="" />
+    </div>
 
     <div class="params-section">
-      {#if screenMode === 'blink'}
-        <Slider
-          label="Frequency"
-          bind:value={screenBlinkFrequency}
-          min={0.5}
-          max={10}
-          step={0.5}
-          suffix=" Hz"
-        />
-      {:else if screenMode === 'pulse'}
-        <Slider
-          label="Duration"
-          bind:value={screenPulseDuration}
-          min={300}
-          max={4000}
-          step={100}
-          suffix=" ms"
-        />
-        <Slider label="Min Opacity" bind:value={screenPulseMin} step={0.05} max={1} suffix="" />
-        <Select label="Waveform" options={waveforms} bind:value={screenWaveform} />
-      {:else if screenMode === 'cycle'}
-        <Input label="Colors (csv)" bind:value={screenCycleColors} />
-        <Slider
-          label="Duration"
-          bind:value={screenCycleDuration}
-          min={600}
-          max={8000}
-          step={200}
-          suffix=" ms"
-        />
-      {:else if screenMode === 'modulate'}
-        <Select label="Waveform" options={waveforms} bind:value={screenWaveform} />
-        <Slider
-          label="Freq"
-          bind:value={screenFrequency}
-          min={0.2}
-          max={20}
-          step={0.1}
-          suffix=" Hz"
-        />
-        <div class="row">
-          <Slider label="Min Op" bind:value={screenMinOpacity} step={0.05} max={1} suffix="" />
-          <Slider label="Max Op" bind:value={screenMaxOpacity} step={0.05} max={1} suffix="" />
-        </div>
-        <Input type="color" label="Secondary Color" bind:value={screenSecondaryColor} />
-      {/if}
+      <Select label="Waveform" options={waveforms} bind:value={screenWaveform} />
+      <Slider
+        label="Frequency"
+        bind:value={screenFrequency}
+        min={0.2}
+        max={20}
+        step={0.1}
+        suffix=" Hz"
+      />
+      <Slider
+        label="Dur (ms)"
+        bind:value={durationMs}
+        min={0}
+        max={8000}
+        step={50}
+        suffix=" ms"
+      />
     </div>
 
-    <div class="button-group">
+    <div class="button-grid">
       <Button
         variant="primary"
         disabled={!hasSelection}
         on:click={() => handleScreenColor(false)}
-        fullWidth>Apply Selected</Button
+        fullWidth>Play Selected</Button
       >
       <Button variant="secondary" on:click={() => handleScreenColor(true)} fullWidth
-        >Apply All</Button
+        >Play All</Button
       >
+      <Button variant="ghost" disabled={!hasSelection} on:click={() => handleClear(false)} fullWidth>
+        Stop Selected
+      </Button>
+      <Button variant="ghost" on:click={() => handleClear(true)} fullWidth>Stop All</Button>
     </div>
-    <Button variant="ghost" on:click={() => handleClear(true)} fullWidth>Clear All Screens</Button>
   </div>
 </Card>
 
@@ -177,7 +156,7 @@
 
   .main-controls {
     display: grid;
-    grid-template-columns: 1fr 80px;
+    grid-template-columns: 1fr 1fr;
     gap: var(--space-md);
     align-items: start;
   }
@@ -191,15 +170,22 @@
     gap: var(--space-sm);
   }
 
+  .opacity-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-md);
+  }
+
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-md);
   }
 
-  .button-group {
+  .button-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-sm);
+    margin-top: var(--space-sm);
   }
 </style>

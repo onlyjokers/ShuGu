@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
+  import { streamEnabled } from '$lib/streaming/streaming';
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
@@ -239,6 +240,13 @@
           <input type="checkbox" bind:checked={useSync} />
           <span>⚡ Global Sync (500ms)</span>
         </label>
+        <Button
+          variant="ghost"
+          size="sm"
+          on:click={() => streamEnabled.update((v) => !v)}
+        >
+          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
+        </Button>
 
         <div class="spacer"></div>
 

@@ -33,8 +33,8 @@
     binding?: MidiBinding;
     lastRaw?: number;
     lastNormalized?: number;
+    groupId?: string;
     targetId?: string;
-    scope?: Scope;
     lastApplied?: string;
     lastUpdated?: number;
   };
@@ -50,9 +50,7 @@
   type ContinuousTarget = {
     id: string;
     label: string;
-    compute: (
-      normalized: number
-    ) => { value: unknown; display: string } | null;
+    compute: (normalized: number) => { value: unknown; display: string } | null;
     apply: (value: unknown, scope: Scope) => void;
   };
 
@@ -62,34 +60,82 @@
     onPress: (scope: Scope) => string | void;
   };
 
+  let scopeMode: Scope = 'all';
+  let clientSelectionSize = 1;
+  let lastClientAnchorIndex = 0;
+
+  // --- Target catalogs with grouping ---
   const continuousTargets: ContinuousTarget[] = [
+    {
+      id: 'client-scope',
+      label: '作用范围（0=选中，1=全部）',
+      compute: (normalized) => {
+        const nextScope: Scope = normalized >= 0.5 ? 'all' : 'selected';
+        return { value: nextScope, display: nextScope === 'all' ? 'All clients' : 'Selected clients' };
+      },
+      apply: (value, _scope) => {
+        if (value === 'all' || value === 'selected') {
+          scopeMode = value;
+          persistSlots();
+        }
+      },
+    },
     {
       id: 'client-selector',
       label: 'Clients (0-1 → select client)',
       compute: (normalized) => {
         if ($clients.length === 0) return { value: null, display: 'No clients' };
-    const idx = Math.min(
-      $clients.length - 1,
-      Math.max(0, Math.floor(normalized * $clients.length))
-    );
-    const client = $clients[idx];
+        const idx = Math.min(
+          $clients.length - 1,
+          Math.max(0, Math.floor(normalized * $clients.length))
+        );
+        const client = $clients[idx];
         return {
-          value: client.clientId,
-          display: `${formatClientId(client.clientId)} (#${idx + 1})`,
+          value: { clientId: client.clientId, index: idx },
+          display: `${formatClientId(client.clientId)} (#${idx + 1}) x${clientSelectionSize}`,
         };
       },
-      apply: (value) => {
-        if (typeof value === 'string') {
-          selectClients([value]);
-          updateControlState({});
-        }
+      apply: (value, _scope) => {
+        if (!value || $clients.length === 0) return;
+        const { clientId, index } =
+          typeof value === 'object' && 'clientId' in value
+            ? (value as { clientId: string; index: number })
+            : (() => {
+                const fallbackId = value as string;
+                const fallbackIndex = $clients.findIndex((c) => c.clientId === fallbackId);
+                return { clientId: fallbackId, index: fallbackIndex };
+              })();
+        const resolvedIndex =
+          index >= 0 ? index : Math.max(0, $clients.findIndex((c) => c.clientId === clientId));
+        if (resolvedIndex < 0) return;
+        lastClientAnchorIndex = resolvedIndex;
+        applySelectionWindow(resolvedIndex);
+        updateControlState({});
       },
     },
     {
-      id: 'freq-hz',
+      id: 'client-range',
+      label: '选择范围（人数）',
+      compute: (normalized) => {
+        const total = $clients.length;
+        if (total === 0) return { value: null, display: 'No clients' };
+        const maxCount = Math.max(1, Math.floor(total / 2));
+        const count = Math.max(1, Math.min(maxCount, Math.round(mapRange(normalized, 1, maxCount))));
+        return { value: count, display: `${count} 人` };
+      },
+      apply: (value, _scope) => {
+        if (typeof value !== 'number' || $clients.length === 0) return;
+        const maxCount = Math.max(1, Math.floor($clients.length / 2));
+        clientSelectionSize = Math.max(1, Math.min(value, maxCount));
+        applySelectionWindow(lastClientAnchorIndex);
+        persistSlots();
+      },
+    },
+    {
+      id: 'synth-freq',
       label: 'Synth Frequency (Hz)',
       compute: (normalized) => {
-        const freq = mapRange(normalized, 50, 1200);
+        const freq = mapRange(normalized, 20, 2000);
         return { value: freq, display: `${Math.round(freq)} Hz` };
       },
       apply: (value, scope) => {
@@ -107,6 +153,188 @@
       },
     },
     {
+      id: 'synth-dur',
+      label: 'Synth Dur (ms)',
+      compute: (normalized) => {
+        const dur = Math.round(mapRange(normalized, 50, 2000));
+        return { value: dur, display: `${dur} ms` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        modulateSound(
+          { duration: value, frequency: 300, volume: 0.6, waveform: 'sine' },
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'synth-vol',
+      label: 'Synth Volume',
+      compute: (normalized) => {
+        const vol = clamp01(normalized);
+        return { value: vol, display: `${Math.round(vol * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        modulateSound(
+          { volume: value, frequency: 300, duration: 160, waveform: 'sine' },
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'flashlight-freq',
+      label: 'Flashlight Freq (Hz, 1=steady)',
+      compute: (normalized) => {
+        const freq = mapRange(normalized, 0.2, 10);
+        return { value: freq, display: `${freq.toFixed(1)} Hz` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        if (value <= 1) {
+          flashlight('on', undefined, scope === 'all');
+          updateControlState({ flashlightOn: true });
+        } else {
+          flashlight('blink', { frequency: value, dutyCycle: 0.5 }, scope === 'all');
+          updateControlState({ flashlightOn: true });
+        }
+      },
+    },
+    {
+      id: 'flashlight-duty',
+      label: 'Flashlight Duty',
+      compute: (normalized) => {
+        const duty = mapRange(normalized, 0.1, 0.9);
+        return { value: duty, display: `${Math.round(duty * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        flashlight('blink', { frequency: 2, dutyCycle: value }, scope === 'all');
+        updateControlState({ flashlightOn: true });
+      },
+    },
+    {
+      id: 'flashlight-dur',
+      label: 'Flashlight Dur (ms)',
+      compute: (normalized) => {
+        const dur = Math.round(mapRange(normalized, 0, 8000));
+        return { value: dur, display: `${dur} ms` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        flashlight('on', undefined, scope === 'all');
+        updateControlState({ flashlightOn: true });
+        if (value > 0) {
+          setTimeout(() => flashlight('off', undefined, scope === 'all'), value);
+        }
+      },
+    },
+    {
+      id: 'screen-freq',
+      label: 'Screen Freq (Hz)',
+      compute: (normalized) => {
+        const freq = mapRange(normalized, 0.2, 20);
+        return { value: freq, display: `${freq.toFixed(1)} Hz` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'modulate',
+            color: '#ffffff',
+            secondaryColor: '#ffffff',
+            frequencyHz: value,
+            minOpacity: 0,
+            maxOpacity: 1,
+            waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-min',
+      label: 'Screen Min Opacity',
+      compute: (normalized) => {
+        const v = clamp01(normalized);
+        return { value: v, display: `${Math.round(v * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'modulate',
+            color: '#ffffff',
+            secondaryColor: '#ffffff',
+            minOpacity: value,
+            maxOpacity: 1,
+            frequencyHz: 1,
+            waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-max',
+      label: 'Screen Max Opacity',
+      compute: (normalized) => {
+        const v = clamp01(normalized);
+        return { value: v, display: `${Math.round(v * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'modulate',
+            color: '#ffffff',
+            secondaryColor: '#ffffff',
+            minOpacity: 0,
+            maxOpacity: value,
+            frequencyHz: 1,
+            waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-dur',
+      label: 'Screen Dur (ms)',
+      compute: (normalized) => {
+        const dur = Math.round(mapRange(normalized, 0, 8000));
+        return { value: dur, display: `${dur} ms` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'modulate',
+            color: '#ffffff',
+            secondaryColor: '#ffffff',
+            minOpacity: 0,
+            maxOpacity: 1,
+            frequencyHz: 1,
+            waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+        if (value > 0) {
+          setTimeout(() => {
+            screenColor(
+              { color: 'transparent', opacity: 0, mode: 'solid' },
+              undefined,
+              scope === 'all'
+            );
+          }, value);
+        }
+      },
+    },
+    {
       id: 'screen-opacity',
       label: 'Screen Opacity',
       compute: (normalized) => {
@@ -115,7 +343,11 @@
       },
       apply: (value, scope) => {
         if (typeof value !== 'number') return;
-        screenColor({ color: '#ffffff', opacity: value, mode: 'solid' }, undefined, scope === 'all');
+        screenColor(
+          { color: '#ffffff', opacity: value, mode: 'solid' },
+          undefined,
+          scope === 'all'
+        );
         updateControlState({ screenOpacity: value });
       },
     },
@@ -155,6 +387,15 @@
       },
     },
     {
+      id: 'flashlight-stop',
+      label: 'Flashlight Stop',
+      onPress: (scope) => {
+        flashlight('off', undefined, scope === 'all');
+        updateControlState({ flashlightOn: false });
+        return 'Flashlight OFF';
+      },
+    },
+    {
       id: 'ascii-toggle',
       label: 'Toggle ASCII overlay',
       onPress: (scope) => {
@@ -170,6 +411,14 @@
       onPress: (scope) => {
         vibrate([200, 100, 200], undefined, scope === 'all');
         return 'Vibe pulse';
+      },
+    },
+    {
+      id: 'vibe-stop',
+      label: 'Stop Vibration',
+      onPress: (scope) => {
+        vibrate([], 0, scope === 'all');
+        return 'Vibe stop';
       },
     },
     {
@@ -192,11 +441,55 @@
     },
   ];
 
+  const buttonGroups = [
+    { id: 'flashlight', label: 'Flashlight', targets: ['flashlight-toggle', 'flashlight-blink', 'flashlight-stop'] },
+    { id: 'screen', label: 'Screen', targets: [] },
+    { id: 'vibration', label: 'Vibration', targets: ['vibe-pulse', 'vibe-stop'] },
+    { id: 'ascii', label: 'ASCII', targets: ['ascii-toggle'] },
+    { id: 'scene', label: 'Scene/Media', targets: ['scene-toggle', 'stop-media'] },
+  ];
+
+  const continuousGroups = [
+    {
+      id: 'clients',
+      label: 'Clients',
+      targets: ['client-selector', 'client-range', 'client-scope'],
+    },
+    {
+      id: 'synth',
+      label: 'Synth',
+      targets: ['synth-freq', 'synth-dur', 'synth-vol'],
+    },
+    {
+      id: 'flashlight',
+      label: 'Flashlight',
+      targets: ['flashlight-freq', 'flashlight-duty', 'flashlight-dur'],
+    },
+    {
+      id: 'screen',
+      label: 'Screen Color',
+      targets: ['screen-freq', 'screen-min', 'screen-max', 'screen-dur', 'screen-opacity'],
+    },
+    {
+      id: 'ascii',
+      label: 'ASCII',
+      targets: ['ascii-resolution'],
+    },
+  ];
+
   let slots: ControlSlot[] = [];
   let slotCounter = 1;
 
-  let midiAccess: WebMidi.MIDIAccess | null = null;
-  let midiInputs: WebMidi.MIDIInput[] = [];
+  // Minimal WebMIDI typings (fallback if @types/webmidi not installed)
+  type MIDIAccessLite = {
+    inputs: Map<string, MIDIInputLite> | any;
+    onstatechange: ((ev: any) => void) | null;
+  };
+  type MIDIInputLite = { id: string; name?: string; onmidimessage: ((e: MIDIMessageEventLite) => void) | null };
+  type MIDIMessageEventLite = { data: Uint8Array };
+
+  let midiAccess: MIDIAccessLite | null = null;
+  let midiInputs: MIDIInputLite[] = [];
   let selectedInputId = '';
   let listeningSlotId: string | null = null;
   let errorMessage = '';
@@ -239,8 +532,9 @@
     if (!midiAccess) return;
     midiInputs = Array.from(midiAccess.inputs.values());
     const existing = midiInputs.find((input) => input.id === selectedInputId);
-    const preferred = midiInputs.find((input) =>
-      input.name?.toLowerCase().includes('smc') || input.name?.toLowerCase().includes('mvave')
+    const preferred = midiInputs.find(
+      (input) =>
+        input.name?.toLowerCase().includes('smc') || input.name?.toLowerCase().includes('mvave')
     );
 
     if (!existing && (preferred || midiInputs[0])) {
@@ -252,7 +546,7 @@
 
   function detachListeners() {
     if (!midiAccess) return;
-    midiAccess.inputs.forEach((input) => {
+    midiAccess.inputs.forEach((input: MIDIInputLite) => {
       input.onmidimessage = null;
     });
   }
@@ -277,7 +571,7 @@
     return true;
   }
 
-  function parseMessage(event: WebMidi.MIDIMessageEvent): ParsedMessage | null {
+  function parseMessage(event: MIDIMessageEventLite): ParsedMessage | null {
     const [status, data1 = 0, data2 = 0] = event.data;
     const command = status & 0xf0;
     const channel = status & 0x0f;
@@ -299,7 +593,8 @@
       // Control Change
       const value = data2;
       const normalized = value / 127;
-      const nature: 'button' | 'continuous' = value === 0 || value === 127 ? 'button' : 'continuous';
+      const nature: 'button' | 'continuous' =
+        value === 0 || value === 127 ? 'button' : 'continuous';
       return {
         binding: { messageType: 'cc', channel, number: data1 },
         raw: value,
@@ -325,7 +620,7 @@
     return null;
   }
 
-  function handleMidi(event: WebMidi.MIDIMessageEvent) {
+  function handleMidi(event: MIDIMessageEventLite) {
     const parsed = parseMessage(event);
     if (!parsed) return;
 
@@ -378,14 +673,21 @@
       return;
     }
     const id = `${kind}-${slotCounter++}`;
-    const label = kind === 'boolean' ? `Bool Map ${slotCounter - 1}` : `Fuzzy Map ${slotCounter - 1}`;
+    const label =
+      kind === 'boolean' ? `Bool Map ${slotCounter - 1}` : `Fuzzy Map ${slotCounter - 1}`;
+    const groupId =
+      kind === 'boolean' ? buttonGroups[0]?.id : continuousGroups[0]?.id;
+    const targetList =
+      kind === 'boolean'
+        ? buttonGroups.find((g) => g.id === groupId)?.targets ?? []
+        : continuousGroups.find((g) => g.id === groupId)?.targets ?? [];
     const newSlot: ControlSlot = {
       id,
       label,
       kind,
       binding: lastParsed.binding,
-      scope: 'all',
-      targetId: kind === 'boolean' ? buttonTargets[0]?.id : continuousTargets[0]?.id,
+      groupId,
+      targetId: targetList[0],
       lastRaw: lastParsed.raw,
       lastNormalized: lastParsed.normalized,
       lastUpdated: Date.now(),
@@ -421,6 +723,15 @@
     slots = slots.map((slot) => (slot.id === id ? updater(slot) : slot));
   }
 
+  function applySelectionWindow(anchorIndex: number) {
+    if ($clients.length === 0) return;
+    const maxCount = Math.max(1, Math.floor($clients.length / 2));
+    const count = Math.max(1, Math.min(clientSelectionSize, maxCount, $clients.length));
+    const start = Math.min(Math.max(0, anchorIndex), Math.max(0, $clients.length - count));
+    const selectedIds = $clients.slice(start, start + count).map((c) => c.clientId);
+    selectClients(selectedIds);
+  }
+
   function applyMapping(slotId: string, parsed: ParsedMessage) {
     const slot = slots.find((s) => s.id === slotId);
     if (!slot || !slot.targetId) return;
@@ -430,7 +741,7 @@
       return;
     }
 
-    const scope = slot.scope ?? 'selected';
+    const scope = scopeMode;
     const continuousTarget = continuousTargets.find((t) => t.id === slot.targetId);
     const buttonTarget = buttonTargets.find((t) => t.id === slot.targetId);
 
@@ -480,9 +791,23 @@
     persistSlots();
   }
 
-  function setScope(slotId: string, scope: Scope) {
-    updateSlot(slotId, (slot) => ({ ...slot, scope }));
+  function setGroup(slotId: string, groupId: string) {
+    updateSlot(slotId, (slot) => {
+      const groups = slot.kind === 'boolean' ? buttonGroups : continuousGroups;
+      const targets = groups.find((g) => g.id === groupId)?.targets ?? [];
+      return {
+        ...slot,
+        groupId,
+        targetId: targets[0] ?? '',
+        lastApplied: undefined,
+      };
+    });
     persistSlots();
+  }
+
+  function handleGroupChange(event: Event, slotId: string) {
+    const selectEl = event.currentTarget as HTMLSelectElement;
+    setGroup(slotId, selectEl.value);
   }
 
   function handleInputSelect(event: Event) {
@@ -496,17 +821,15 @@
     setTarget(slotId, selectEl.value);
   }
 
-  function handleScopeChange(event: Event, slotId: string) {
-    const selectEl = event.currentTarget as HTMLSelectElement;
-    setScope(slotId, selectEl.value as Scope);
-  }
-
   function persistSlots() {
     if (typeof localStorage === 'undefined') return;
     const payload = {
       slots,
       slotCounter,
       selectedInputId,
+      scopeMode,
+      clientSelectionSize,
+      lastClientAnchorIndex,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }
@@ -517,36 +840,52 @@
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        let legacyScope: Scope | undefined;
         if (Array.isArray(parsed.slots)) {
-          slots = parsed.slots.map((s: ControlSlot & { kind?: string }) => ({
-            ...s,
-            kind:
-              s.kind === 'button'
+          slots = parsed.slots.map((s: ControlSlot & { kind?: string; scope?: Scope }) => {
+            const { scope: _legacyScope, ...rest } = s;
+            if (!legacyScope && (s.scope === 'selected' || s.scope === 'all')) {
+              legacyScope = s.scope;
+            }
+            const rawKind = s.kind as string | undefined;
+            const kind: SlotKind =
+              rawKind === 'button'
                 ? 'boolean'
-                : s.kind === 'fader' || s.kind === 'knob'
+                : rawKind === 'fader' || rawKind === 'knob'
                   ? 'fuzzy'
-                  : (s.kind as SlotKind) ?? 'fuzzy',
-            scope: (s.scope as Scope) ?? 'all',
-          }));
+                  : ((rawKind as SlotKind) ?? 'fuzzy');
+            const groups = kind === 'boolean' ? buttonGroups : continuousGroups;
+            const fallbackGroup = groups[0]?.id ?? '';
+            const groupId = s.groupId ?? fallbackGroup;
+            const targetList = groups.find((g) => g.id === groupId)?.targets ?? [];
+            const targetId = s.targetId && targetList.includes(s.targetId)
+              ? s.targetId
+              : targetList[0] ?? '';
+            return {
+              ...rest,
+              kind,
+              groupId,
+              targetId,
+            };
+          });
         }
-        slotCounter = parsed.slotCounter ?? (Array.isArray(parsed.slots) ? parsed.slots.length + 1 : 1);
+        slotCounter =
+          parsed.slotCounter ?? (Array.isArray(parsed.slots) ? parsed.slots.length + 1 : 1);
         selectedInputId = parsed.selectedInputId ?? '';
+        scopeMode = (parsed.scopeMode as Scope) ?? legacyScope ?? 'all';
+        clientSelectionSize = Math.max(1, parsed.clientSelectionSize ?? 1);
+        lastClientAnchorIndex = Math.max(0, parsed.lastClientAnchorIndex ?? 0);
       } catch (err) {
         console.warn('Failed to parse MIDI mapper storage', err);
       }
     }
-    // Ensure scopes are not undefined
-    slots = slots.map((s) => ({ ...s, scope: s.scope ?? 'all' }));
   }
 </script>
 
 <div class="mapper">
   <div class="mapper-header">
     <div>
-      <h2>MIDI Mapper · MVAVE SMC Mixer</h2>
-      <p class="subtitle">
-        显示并映射该控制器的按钮 / 推杆 / 旋钮到 Manager 参数，自动把 MIDI 值归一化到 0–1。
-      </p>
+      <h2>MIDI Mapper</h2>
     </div>
     <div class="input-select">
       <label>输入</label>
@@ -578,19 +917,11 @@
         <div class="stat-value">{lastMessageBrief || '—'}</div>
       </div>
     </div>
-    <div class="card">
-      <div class="card-title">映射规则提示</div>
-      <div class="card-body tips">
-        <p>· 按钮类目标只允许按钮控制；连续型目标只允许推杆/旋钮。</p>
-        <p>· 频率、Clients 等非 0–1 参数会自动按 0–1 重新映射，右侧会显示原始值。</p>
-        <p>· Clients 列表变化时会重新计算映射，避免选中已退出的客户端。</p>
-      </div>
-    </div>
   </div>
 
   <section class="controls">
     <div class="section-head">
-      <h3>Boolean（按钮逻辑）</h3>
+      <h3>Boolean</h3>
       <Button size="sm" variant="secondary" on:click={() => addSlot('boolean')}>
         ＋ 使用最近 MIDI
       </Button>
@@ -607,7 +938,9 @@
                 <div class="control-binding">{describeBinding(slot.binding)}</div>
               </div>
               <div class="control-actions">
-                <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}>重学</Button>
+                <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}
+                  >重学</Button
+                >
                 <Button
                   size="sm"
                   variant="ghost"
@@ -630,18 +963,22 @@
 
               <div class="mapping-block">
                 <label>映射到</label>
-                <select bind:value={slot.targetId} on:change={(e) => handleTargetChange(e, slot.id)}>
-                  <option value="">未设置</option>
-                  {#each buttonTargets as target}
-                    <option value={target.id}>{target.label}</option>
-                  {/each}
-                </select>
-
-                <div class="scope-row">
-                  <label>作用范围</label>
-                  <select bind:value={slot.scope} on:change={(e) => handleScopeChange(e, slot.id)}>
-                    <option value="selected">Selected clients</option>
-                    <option value="all">All clients</option>
+                <div class="mapping-selects">
+                  <select bind:value={slot.groupId} on:change={(e) => handleGroupChange(e, slot.id)}>
+                    {#each buttonGroups as group}
+                      <option value={group.id}>{group.label}</option>
+                    {/each}
+                  </select>
+                  <select
+                    bind:value={slot.targetId}
+                    on:change={(e) => handleTargetChange(e, slot.id)}
+                  >
+                    <option value="">未设置</option>
+                    {#each (buttonGroups.find((g) => g.id === slot.groupId)?.targets ?? []) as tid}
+                      {#if buttonTargets.find((t) => t.id === tid)}
+                        <option value={tid}>{buttonTargets.find((t) => t.id === tid)?.label}</option>
+                      {/if}
+                    {/each}
                   </select>
                 </div>
 
@@ -656,7 +993,7 @@
     {/if}
 
     <div class="section-head">
-      <h3>Fuzzy（0–1 连续映射）</h3>
+      <h3>Fuzzy</h3>
       <Button size="sm" variant="secondary" on:click={() => addSlot('fuzzy')}>
         ＋ 使用最近 MIDI
       </Button>
@@ -673,7 +1010,9 @@
                 <div class="control-binding">{describeBinding(slot.binding)}</div>
               </div>
               <div class="control-actions">
-                <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}>重学</Button>
+                <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}
+                  >重学</Button
+                >
                 <Button
                   size="sm"
                   variant="ghost"
@@ -696,18 +1035,22 @@
 
               <div class="mapping-block">
                 <label>映射到</label>
-                <select bind:value={slot.targetId} on:change={(e) => handleTargetChange(e, slot.id)}>
-                  <option value="">未设置</option>
-                  {#each continuousTargets as target}
-                    <option value={target.id}>{target.label}</option>
-                  {/each}
-                </select>
-
-                <div class="scope-row">
-                  <label>作用范围</label>
-                  <select bind:value={slot.scope} on:change={(e) => handleScopeChange(e, slot.id)}>
-                    <option value="selected">Selected clients</option>
-                    <option value="all">All clients</option>
+                <div class="mapping-selects">
+                  <select bind:value={slot.groupId} on:change={(e) => handleGroupChange(e, slot.id)}>
+                    {#each continuousGroups as group}
+                      <option value={group.id}>{group.label}</option>
+                    {/each}
+                  </select>
+                  <select
+                    bind:value={slot.targetId}
+                    on:change={(e) => handleTargetChange(e, slot.id)}
+                  >
+                    <option value="">未设置</option>
+                    {#each (continuousGroups.find((g) => g.id === slot.groupId)?.targets ?? []) as tid}
+                      {#if continuousTargets.find((t) => t.id === tid)}
+                        <option value={tid}>{continuousTargets.find((t) => t.id === tid)?.label}</option>
+                      {/if}
+                    {/each}
                   </select>
                 </div>
 
@@ -735,11 +1078,6 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-lg);
-  }
-
-  .subtitle {
-    color: var(--text-secondary);
-    margin-top: 4px;
   }
 
   .input-select {
@@ -892,17 +1230,17 @@
     color: var(--text-secondary);
   }
 
-  .mapping-block {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
+.mapping-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 
-  .scope-row {
-    display: flex;
-    gap: var(--space-sm);
-    align-items: center;
-  }
+.mapping-selects {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-xs);
+}
 
   .applied {
     font-size: var(--text-sm);

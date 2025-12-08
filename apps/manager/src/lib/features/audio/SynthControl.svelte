@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { state, modulateSound } from '$lib/stores/manager';
+  import { state, modulateSound, modulateSoundUpdate } from '$lib/stores/manager';
   import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Input from '$lib/components/ui/Input.svelte';
   import Slider from '$lib/components/ui/Slider.svelte';
   import Select from '$lib/components/ui/Select.svelte';
+  import { streamEnabled } from '$lib/streaming/streaming';
+  import { stopSound } from '$lib/stores/manager';
 
   export let useSync = true;
   export let syncDelay = 500;
@@ -16,6 +18,8 @@
   let modWaveform: 'sine' | 'square' | 'sawtooth' | 'triangle' = 'square';
   let modDepth = 0;
   let modLfo = 12;
+  let playingUntil = 0;
+  let updateTimer: ReturnType<typeof setTimeout> | null = null;
 
   $: hasSelection = $state.selectedClientIds.length > 0;
   $: modFrequency = $controlState.modFrequency;
@@ -26,10 +30,11 @@
   }
 
   function handleModulateSound(toAll = false) {
+    const durMs = Number(modDuration) || 200;
     modulateSound(
       {
         frequency: Number(modFrequency) || 180,
-        duration: Number(modDuration) || 200,
+        duration: durMs,
         volume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
         waveform: modWaveform,
         modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
@@ -39,7 +44,34 @@
       getExecuteAt()
     );
     updateControlState({ modFrequency: Number(modFrequency) || 180 });
+    playingUntil = Date.now() + durMs + 200; // basic release buffer
   }
+
+  function queueUpdate() {
+    if (!$streamEnabled) return;
+    if (!hasSelection) return;
+    const now = Date.now();
+    if (now > playingUntil) return; // nothing currently playing
+
+    if (updateTimer) clearTimeout(updateTimer);
+    updateTimer = setTimeout(() => {
+      modulateSoundUpdate(
+        {
+          frequency: Number(modFrequency) || 180,
+          volume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
+          waveform: modWaveform,
+          modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
+          modDepth: modDepth > 0 ? Math.max(0, Math.min(1, modDepth)) : undefined,
+          durationMs: Number(modDuration) || 200,
+        },
+        false,
+        getExecuteAt()
+      );
+    }, 30);
+  }
+
+  // React to parameter changes while stream mode is on
+  $: queueUpdate();
 
   const waveforms = [
     { value: 'square', label: 'Square (Buzzy)' },
@@ -93,6 +125,26 @@
       </Button>
       <Button variant="secondary" on:click={() => handleModulateSound(true)} fullWidth>
         Play All
+      </Button>
+      <Button
+        variant="ghost"
+        on:click={() => {
+          playingUntil = 0;
+          stopSound(false);
+        }}
+        fullWidth
+      >
+        Stop Selected
+      </Button>
+      <Button
+        variant="ghost"
+        on:click={() => {
+          playingUntil = 0;
+          stopSound(true);
+        }}
+        fullWidth
+      >
+        Stop All
       </Button>
     </div>
   </div>

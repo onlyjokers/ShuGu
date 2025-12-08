@@ -12,6 +12,17 @@
   } from '$lib/stores/manager';
   import { controlState, updateControlState } from '$lib/stores/controlState';
   import type { ScreenColorPayload } from '@shugu/protocol';
+  import { onDestroy } from 'svelte';
+  import {
+    streamEnabled,
+    sampleRateFps,
+    setDraft,
+    startStreamLoop,
+    stopStreamLoop,
+    clearDrafts,
+    clearLastSent,
+  } from '$lib/streaming/streaming';
+  import { get } from 'svelte/store';
 
   let flashlightMode: 'off' | 'on' | 'blink' = 'off';
   let blinkFrequency = 2;
@@ -28,7 +39,7 @@
 
   let selectedColor = '#6366f1';
   let colorOpacity = 1;
-  let screenMode: 'solid' | 'blink' | 'pulse' | 'cycle' = 'solid';
+  let screenMode: 'solid' | 'blink' | 'pulse' | 'cycle' | 'modulate' = 'solid';
   let screenBlinkFrequency = 2;
   let screenPulseDuration = 1200;
   let screenPulseMin = 0.2;
@@ -48,6 +59,7 @@
   let asciiOn = true;
   let asciiRes = 11;
   let useSync = true; // Default to true for better experience
+  let streamSampleRate = 30;
 
   $: synced = $controlState;
   $: asciiOn = synced.asciiOn;
@@ -59,6 +71,7 @@
   $: hasSelection = $state.selectedClientIds.length > 0;
   $: serverTime = Date.now() + $state.timeSync.offset;
   $: syncDelay = 500; // ms
+  $: sampleRateFps.set(streamSampleRate);
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -74,6 +87,18 @@
         : undefined;
     flashlight(flashlightMode, options, toAll, getExecuteAt());
     updateControlState({ flashlightOn: flashlightMode !== 'off' });
+  }
+
+  function getFlashlightPayload() {
+    const options =
+      flashlightMode === 'blink'
+        ? { frequency: blinkFrequency, dutyCycle: blinkDutyCycle }
+        : undefined;
+    return {
+      mode: flashlightMode,
+      frequency: options?.frequency,
+      dutyCycle: options?.dutyCycle,
+    };
   }
 
   function handleVibrate(toAll = false) {
@@ -153,6 +178,78 @@
     asciiResolution(Number(asciiRes), toAll, getExecuteAt());
     updateControlState({ asciiResolution: Number(asciiRes) });
   }
+
+  // --- Streaming mode helpers ---
+  function refreshStreamLoop() {
+    // touch sampleRate to make Svelte track it as a dependency
+    const _fps = streamSampleRate;
+    void _fps;
+    if ($streamEnabled) {
+      startStreamLoop({
+        senders: {
+          screenColor: (payload, executeAt) => screenColor(payload, undefined, false, executeAt),
+          asciiMode: (payload, executeAt) => asciiMode(payload.enabled, false, executeAt),
+          asciiResolution: (payload, executeAt) => asciiResolution(payload.cellSize, false, executeAt),
+          visualSceneSwitch: (payload, executeAt) => switchScene(payload.sceneId, false, executeAt),
+          flashlight: (payload, executeAt) =>
+            flashlight(payload.mode, { frequency: payload.frequency, dutyCycle: payload.dutyCycle }, false, executeAt),
+        },
+        getExecuteAt,
+        hasSelection: () => get(state).selectedClientIds.length > 0,
+      });
+    } else {
+      stopStreamLoop();
+      clearDrafts();
+      clearLastSent();
+    }
+  }
+
+  $: refreshStreamLoop();
+
+  $: if ($streamEnabled) {
+    setDraft('screenColor', (() => {
+      const payload: ScreenColorPayload = {
+        mode: screenMode,
+        color: selectedColor,
+        opacity: colorOpacity,
+      };
+
+      if (screenMode === 'blink') {
+        payload.blinkFrequency = screenBlinkFrequency;
+      } else if (screenMode === 'pulse') {
+        payload.pulseDuration = screenPulseDuration;
+        payload.pulseMin = screenPulseMin;
+        payload.waveform = screenWaveform;
+      } else if (screenMode === 'cycle') {
+        const colors = screenCycleColors
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean);
+        if (colors.length >= 2) {
+          payload.cycleColors = colors;
+        }
+        payload.cycleDuration = screenCycleDuration;
+      } else if (screenMode === 'modulate') {
+        payload.waveform = screenWaveform;
+        payload.frequencyHz = screenFrequency;
+        payload.minOpacity = screenMinOpacity;
+        payload.maxOpacity = screenMaxOpacity;
+        if (screenSecondaryColor) {
+          payload.secondaryColor = screenSecondaryColor;
+        }
+      }
+      return payload;
+    })());
+
+    setDraft('asciiMode', { enabled: asciiOn });
+    setDraft('asciiResolution', { cellSize: Number(asciiRes) });
+    setDraft('visualSceneSwitch', { sceneId: selectedScene });
+    setDraft('flashlight', getFlashlightPayload());
+  }
+
+  onDestroy(() => {
+    stopStreamLoop();
+  });
 </script>
 
 <div class="card">
@@ -166,6 +263,30 @@
         <input type="checkbox" bind:checked={useSync} />
         <span class="sync-label">⚡ Sync (500ms)</span>
       </label>
+      <button
+        class="btn btn-ghost stream-btn"
+        on:click={() => streamEnabled.set(true)}
+        disabled={$streamEnabled}
+        title="Start Stream mode"
+      >
+        ▶ Stream
+      </button>
+      <label class="sync-toggle" title="Stream mode sends changes automatically at set FPS">
+        <input type="checkbox" bind:checked={$streamEnabled} />
+        <span class="sync-label">🌊 Stream</span>
+      </label>
+      {#if $streamEnabled}
+        <div class="sample-rate">
+          <input
+            type="range"
+            min="10"
+            max="60"
+            step="1"
+            bind:value={streamSampleRate}
+          />
+          <span class="sync-label">{streamSampleRate} fps</span>
+        </div>
+      {/if}
     </div>
     {#if hasSelection}
       <span class="selection-count">{$state.selectedClientIds.length} selected</span>
@@ -478,7 +599,9 @@
             <label class="control-label">Secondary Color</label>
             <input type="color" class="color-picker" bind:value={screenSecondaryColor} />
             <input type="text" class="input input-small" bind:value={screenSecondaryColor} />
-            <p class="hint">Used when crossfading with waveform; set same as primary to only change brightness.</p>
+            <p class="hint">
+              Used when crossfading with waveform; set same as primary to only change brightness.
+            </p>
           </div>
         {/if}
 
@@ -514,7 +637,13 @@
           </button>
           <button
             class="btn btn-secondary"
-            on:click={() => screenColor({ color: 'transparent', opacity: 0, mode: 'solid' }, undefined, true, getExecuteAt())}
+            on:click={() =>
+              screenColor(
+                { color: 'transparent', opacity: 0, mode: 'solid' },
+                undefined,
+                true,
+                getExecuteAt()
+              )}
           >
             Clear All
           </button>
@@ -672,6 +801,21 @@
     font-size: var(--text-xs);
     font-weight: 600;
     color: var(--color-warning);
+  }
+
+  .sample-rate {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    min-width: 120px;
+  }
+
+  .stream-btn {
+    padding: 4px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
   }
 
   .control-sections {
