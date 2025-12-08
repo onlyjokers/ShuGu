@@ -3,17 +3,30 @@
   import { onMount } from 'svelte';
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
-  import ConnectionBar from '$lib/components/ConnectionBar.svelte';
+
+  // Layouts & Components
+  import AppShell from '$lib/layouts/AppShell.svelte';
   import ClientList from '$lib/components/ClientList.svelte';
-  import ControlPanel from '$lib/components/ControlPanel.svelte';
   import SensorDisplay from '$lib/components/SensorDisplay.svelte';
   import PluginControl from '$lib/components/PluginControl.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+
+  // Feature Controls
+  import FlashlightControl from '$lib/features/lighting/FlashlightControl.svelte';
+  import VibrationControl from '$lib/features/haptics/VibrationControl.svelte';
+  import SynthControl from '$lib/features/audio/SynthControl.svelte';
+  import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
+  import MediaControl from '$lib/features/audio/MediaControl.svelte';
+  import SceneControl from '$lib/features/visuals/SceneControl.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
   let username: AuthUser | '' = '';
   let password = '';
   let rememberLogin = false;
+
+  // Global Sync State
+  let useSync = true;
 
   onMount(() => {
     // Detect if accessing via IP address
@@ -73,24 +86,24 @@
 </script>
 
 <svelte:head>
-  <title>Fllufy Mnanager</title>
+  <title>Fluffy Manager</title>
 </svelte:head>
 
 <div class="app">
   {#if $auth.isRestoring}
     <div class="connect-screen">
       <div class="connect-card card card-glass">
-        <h1 class="title">Fllufy Mnanager</h1>
-        <p class="subtitle">正在加载登录状态...</p>
+        <h1 class="title">Fluffy Manager</h1>
+        <p class="subtitle">Restoring session...</p>
       </div>
     </div>
   {:else if !$auth.user}
     <div class="connect-screen">
       <div class="connect-card card card-glass">
-        <h1 class="title">Fllufy Mnanager</h1>
+        <h1 class="title">Fluffy Manager</h1>
 
         <form class="connect-form" on:submit|preventDefault={handleLogin} autocomplete="on">
-          <label class="form-label" for="username">用户名</label>
+          <label class="form-label" for="username">Username</label>
           <input
             id="username"
             list="user-options"
@@ -107,7 +120,7 @@
             {/each}
           </datalist>
 
-          <label class="form-label" for="password">密码</label>
+          <label class="form-label" for="password">Password</label>
           <input
             id="password"
             type="password"
@@ -120,21 +133,21 @@
 
           <label class="remember-row">
             <input type="checkbox" bind:checked={rememberLogin} />
-            <span>保存登录状态</span>
+            <span>Remember me</span>
           </label>
 
           {#if $auth.error}
             <p class="error-message">{$auth.error}</p>
           {/if}
 
-          <button class="btn btn-primary btn-lg w-full" type="submit">登录</button>
+          <button class="btn btn-primary btn-lg w-full" type="submit">Login</button>
         </form>
       </div>
     </div>
   {:else if $connectionStatus === 'disconnected' || $connectionStatus === 'error'}
     <div class="connect-screen">
       <div class="connect-card card card-glass">
-        <h1 class="title">Fllufy Mnanager</h1>
+        <h1 class="title">Fluffy Manager</h1>
 
         <div class="connect-form">
           <label class="form-label">Server URL</label>
@@ -142,51 +155,74 @@
             type="text"
             class="input"
             bind:value={serverUrl}
-            placeholder="http://localhost:3001"
+            placeholder="https://localhost:3001"
           />
 
-          <p class="status-note">已登录用户：{$auth.user}</p>
+          <p class="status-note">Logged in as: <strong>{$auth.user}</strong></p>
 
           {#if $connectionStatus === 'error'}
             <p class="error-message">Failed to connect. Please check the server URL.</p>
           {/if}
 
-          <button
-            class="btn btn-primary btn-lg w-full"
+          <Button
+            variant="primary"
+            size="lg"
+            fullWidth
             on:click={handleConnect}
             disabled={isConnecting}
           >
             {isConnecting ? 'Connecting...' : 'Connect'}
-          </button>
+          </Button>
 
-          <button class="btn btn-secondary btn-lg w-full" type="button" on:click={handleLogout}>
-            Logout
-          </button>
+          <Button variant="secondary" size="lg" fullWidth on:click={handleLogout}>Logout</Button>
         </div>
       </div>
     </div>
   {:else}
-    <ConnectionBar />
-
-    <main class="main-content">
-      <aside class="sidebar">
+    <AppShell>
+      <div slot="sidebar" class="sidebar-content">
         <ClientList />
+        <div class="sidebar-divider"></div>
         <PluginControl />
-      </aside>
-
-      <div class="content">
-        <ControlPanel />
       </div>
 
-      <aside class="sidebar-right">
+      <div slot="right-sidebar">
         <SensorDisplay />
-      </aside>
-    </main>
+      </div>
 
-    <div class="session-actions">
-      <button class="disconnect-btn" on:click={handleDisconnect}> Disconnect </button>
-      <button class="logout-btn" on:click={handleLogout}> Logout </button>
-    </div>
+      <div class="dashboard-grid">
+        <div class="grid-item">
+          <FlashlightControl {useSync} />
+        </div>
+        <div class="grid-item">
+          <ScreenColorControl {useSync} />
+        </div>
+        <div class="grid-item">
+          <SynthControl {useSync} />
+        </div>
+        <div class="grid-item">
+          <MediaControl {useSync} />
+        </div>
+        <div class="grid-item">
+          <VibrationControl {useSync} />
+        </div>
+        <div class="grid-item">
+          <SceneControl {useSync} />
+        </div>
+      </div>
+
+      <div slot="footer" class="footer-actions">
+        <label class="sync-toggle">
+          <input type="checkbox" bind:checked={useSync} />
+          <span>⚡ Global Sync (500ms)</span>
+        </label>
+
+        <div class="spacer"></div>
+
+        <Button variant="danger" size="sm" on:click={handleDisconnect}>Disconnect</Button>
+        <Button variant="ghost" size="sm" on:click={handleLogout}>Logout</Button>
+      </div>
+    </AppShell>
   {/if}
 </div>
 
@@ -194,8 +230,10 @@
   .app {
     min-height: 100vh;
     background: var(--bg-primary);
+    color: var(--text-primary);
   }
 
+  /* Connect Screen Styles */
   .connect-screen {
     display: flex;
     align-items: center;
@@ -209,21 +247,21 @@
     max-width: 400px;
     width: 100%;
     text-align: center;
+    padding: var(--space-xl);
   }
 
   .title {
     font-size: var(--text-3xl);
     font-weight: 700;
+    margin-bottom: var(--space-md);
     background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    margin-bottom: var(--space-sm);
   }
 
   .subtitle {
     color: var(--text-muted);
-    margin-bottom: var(--space-xl);
   }
 
   .connect-form {
@@ -231,6 +269,7 @@
     flex-direction: column;
     gap: var(--space-md);
     text-align: left;
+    margin-top: var(--space-lg);
   }
 
   .form-label {
@@ -238,12 +277,29 @@
     color: var(--text-secondary);
   }
 
+  .input {
+    width: 100%;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 1rem;
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+
   .error-message {
     color: var(--color-error);
     font-size: var(--text-sm);
+    text-align: center;
   }
 
   .status-note {
+    text-align: center;
     color: var(--text-secondary);
     font-size: var(--text-sm);
   }
@@ -251,82 +307,50 @@
   .remember-row {
     display: flex;
     align-items: center;
-    gap: var(--space-xs);
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-  }
-
-  .main-content {
-    display: grid;
-    grid-template-columns: 300px 1fr 300px;
-    gap: var(--space-lg);
-    padding: var(--space-lg);
-    min-height: calc(100vh - 60px);
-  }
-
-  .sidebar,
-  .sidebar-right {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-lg);
-  }
-
-  .content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-lg);
-  }
-
-  .session-actions {
-    position: fixed;
-    bottom: var(--space-lg);
-    right: var(--space-lg);
-    display: flex;
     gap: var(--space-sm);
-  }
-
-  .disconnect-btn,
-  .logout-btn {
-    padding: var(--space-sm) var(--space-md);
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-family: var(--font-sans);
     font-size: var(--text-sm);
-    transition: all var(--transition-fast);
+    color: var(--text-secondary);
+    cursor: pointer;
   }
 
-  .disconnect-btn:hover {
-    background: var(--color-error);
-    color: white;
-    border-color: var(--color-error);
+  /* Dashboard Grid */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--space-lg);
+    padding-bottom: var(--space-xl);
   }
 
-  .logout-btn:hover {
-    background: var(--bg-secondary);
-    color: white;
-    border-color: var(--bg-secondary);
+  .sidebar-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+    height: 100%;
   }
 
-  @media (max-width: 1200px) {
-    .main-content {
-      grid-template-columns: 1fr;
-    }
+  .sidebar-divider {
+    height: 1px;
+    background: var(--border-color);
+  }
 
-    .sidebar,
-    .sidebar-right {
-      order: 1;
-    }
+  .footer-actions {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: var(--space-md);
+  }
 
-    .content {
-      order: 0;
-    }
+  .spacer {
+    flex: 1;
+  }
 
-    .session-actions {
-      right: var(--space-md);
-      bottom: var(--space-md);
-    }
+  .sync-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    font-size: var(--text-sm);
+    color: var(--color-warning);
+    font-weight: 500;
+    cursor: pointer;
   }
 </style>

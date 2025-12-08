@@ -1,6 +1,5 @@
 <script lang="ts">
   import { sensorData, state } from '$lib/stores/manager';
-  import type { SensorDataMessage } from '@shugu/protocol';
 
   $: selectedClientId = $state.selectedClientIds[0] ?? null;
   $: clientData = selectedClientId ? $sensorData.get(selectedClientId) : null;
@@ -11,9 +10,9 @@
   }
 </script>
 
-<div class="card">
-  <div class="card-header">
-    <h3 class="card-title">Sensor Data</h3>
+<div class="sensor-display-container">
+  <div class="header">
+    <h3 class="title">Sensor Data</h3>
     {#if selectedClientId}
       <span class="client-badge">{selectedClientId.slice(-8)}</span>
     {/if}
@@ -21,29 +20,30 @@
 
   {#if !selectedClientId}
     <div class="empty-state">
-      <span class="text-muted">Select a client to view sensor data</span>
+      <p>Select a client to view live sensor telemetry.</p>
     </div>
   {:else if !clientData}
     <div class="empty-state">
-      <span class="text-muted">Waiting for data...</span>
+      <div class="loader"></div>
+      <p>Waiting for data...</p>
     </div>
   {:else}
-    <div class="sensor-data">
+    <div class="data-content">
       {#if clientData.sensorType === 'gyro'}
         <div class="data-section">
           <h4 class="data-title">Gyroscope</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.alpha)}</span>
-              <span class="data-label">Alpha</span>
+              <span class="value">{formatValue(clientData.payload.alpha)}</span>
+              <span class="label">Alpha</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.beta)}</span>
-              <span class="data-label">Beta</span>
+              <span class="value">{formatValue(clientData.payload.beta)}</span>
+              <span class="label">Beta</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.gamma)}</span>
-              <span class="data-label">Gamma</span>
+              <span class="value">{formatValue(clientData.payload.gamma)}</span>
+              <span class="label">Gamma</span>
             </div>
           </div>
         </div>
@@ -52,16 +52,16 @@
           <h4 class="data-title">Accelerometer</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.x)}</span>
-              <span class="data-label">X</span>
+              <span class="value">{formatValue(clientData.payload.x)}</span>
+              <span class="label">X</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.y)}</span>
-              <span class="data-label">Y</span>
+              <span class="value">{formatValue(clientData.payload.y)}</span>
+              <span class="label">Y</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.z)}</span>
-              <span class="data-label">Z</span>
+              <span class="value">{formatValue(clientData.payload.z)}</span>
+              <span class="label">Z</span>
             </div>
           </div>
         </div>
@@ -70,38 +70,38 @@
           <h4 class="data-title">Orientation</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.alpha)}</span>
-              <span class="data-label">Alpha</span>
+              <span class="value">{formatValue(clientData.payload.alpha)}</span>
+              <span class="label">Alpha</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.beta)}</span>
-              <span class="data-label">Beta</span>
+              <span class="value">{formatValue(clientData.payload.beta)}</span>
+              <span class="label">Beta</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.gamma)}</span>
-              <span class="data-label">Gamma</span>
+              <span class="value">{formatValue(clientData.payload.gamma)}</span>
+              <span class="label">Gamma</span>
             </div>
           </div>
         </div>
       {:else if clientData.sensorType === 'mic'}
         <div class="data-section">
-          <h4 class="data-title">Audio Features</h4>
+          <h4 class="data-title">Audio Analysis</h4>
           <div class="data-grid">
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.volume)}</span>
-              <span class="data-label">Volume</span>
+              <span class="value">{formatValue(clientData.payload.volume)}</span>
+              <span class="label">Vol</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.lowEnergy)}</span>
-              <span class="data-label">Low</span>
+              <span class="value">{formatValue(clientData.payload.lowEnergy)}</span>
+              <span class="label">Low</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{formatValue(clientData.payload.highEnergy)}</span>
-              <span class="data-label">High</span>
+              <span class="value">{formatValue(clientData.payload.highEnergy)}</span>
+              <span class="label">High</span>
             </div>
             <div class="data-item">
-              <span class="data-value">{clientData.payload.bpm ?? '--'}</span>
-              <span class="data-label">BPM</span>
+              <span class="value">{clientData.payload.bpm ?? '--'}</span>
+              <span class="label">BPM</span>
             </div>
           </div>
         </div>
@@ -116,43 +116,90 @@
 </div>
 
 <style>
-  .empty-state {
-    padding: var(--space-xl);
-    text-align: center;
+  .sensor-display-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--space-sm);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .title {
+    font-size: var(--text-base);
+    font-weight: 600;
   }
 
   .client-badge {
     font-family: var(--font-mono);
     font-size: var(--text-xs);
-    padding: var(--space-xs) var(--space-sm);
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-full);
-    color: var(--text-secondary);
+    padding: 2px 6px;
+    background: var(--color-primary);
+    color: white;
+    border-radius: var(--radius-sm);
   }
 
-  .sensor-data {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-lg);
+  .empty-state {
+    padding: var(--space-xl);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius-md);
   }
 
   .data-section {
-    padding: var(--space-md);
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
   }
 
   .data-title {
     font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+
+  .data-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+  }
+
+  .data-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--space-md);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--radius-md);
+  }
+
+  .value {
+    font-family: var(--font-mono);
+    font-size: var(--text-lg);
     font-weight: 600;
-    margin-bottom: var(--space-md);
-    color: var(--text-secondary);
+    color: var(--color-accent);
+  }
+
+  .label {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    margin-top: 4px;
   }
 
   .data-raw {
     font-family: var(--font-mono);
     font-size: var(--text-xs);
-    color: var(--text-secondary);
+    background: rgba(0, 0, 0, 0.3);
+    padding: var(--space-sm);
+    border-radius: var(--radius-sm);
     overflow-x: auto;
   }
 </style>
