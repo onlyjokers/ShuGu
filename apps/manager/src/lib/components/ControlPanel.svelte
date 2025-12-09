@@ -203,10 +203,16 @@
         senders: {
           screenColor: (payload, executeAt) => screenColor(payload, undefined, false, executeAt),
           asciiMode: (payload, executeAt) => asciiMode(payload.enabled, false, executeAt),
-          asciiResolution: (payload, executeAt) => asciiResolution(payload.cellSize, false, executeAt),
+          asciiResolution: (payload, executeAt) =>
+            asciiResolution(payload.cellSize, false, executeAt),
           visualSceneSwitch: (payload, executeAt) => switchScene(payload.sceneId, false, executeAt),
           flashlight: (payload, executeAt) =>
-            flashlight(payload.mode, { frequency: payload.frequency, dutyCycle: payload.dutyCycle }, false, executeAt),
+            flashlight(
+              payload.mode,
+              { frequency: payload.frequency, dutyCycle: payload.dutyCycle },
+              false,
+              executeAt
+            ),
         },
         getExecuteAt,
         hasSelection: () => get(state).selectedClientIds.length > 0,
@@ -221,39 +227,42 @@
   $: refreshStreamLoop();
 
   $: if ($streamEnabled) {
-    setDraft('screenColor', (() => {
-      const payload: ScreenColorPayload = {
-        mode: screenMode,
-        color: selectedColor,
-        opacity: colorOpacity,
-      };
+    setDraft(
+      'screenColor',
+      (() => {
+        const payload: ScreenColorPayload = {
+          mode: screenMode,
+          color: selectedColor,
+          opacity: colorOpacity,
+        };
 
-      if (screenMode === 'blink') {
-        payload.blinkFrequency = screenBlinkFrequency;
-      } else if (screenMode === 'pulse') {
-        payload.pulseDuration = screenPulseDuration;
-        payload.pulseMin = screenPulseMin;
-        payload.waveform = screenWaveform;
-      } else if (screenMode === 'cycle') {
-        const colors = screenCycleColors
-          .split(',')
-          .map((c) => c.trim())
-          .filter(Boolean);
-        if (colors.length >= 2) {
-          payload.cycleColors = colors;
+        if (screenMode === 'blink') {
+          payload.blinkFrequency = screenBlinkFrequency;
+        } else if (screenMode === 'pulse') {
+          payload.pulseDuration = screenPulseDuration;
+          payload.pulseMin = screenPulseMin;
+          payload.waveform = screenWaveform;
+        } else if (screenMode === 'cycle') {
+          const colors = screenCycleColors
+            .split(',')
+            .map((c) => c.trim())
+            .filter(Boolean);
+          if (colors.length >= 2) {
+            payload.cycleColors = colors;
+          }
+          payload.cycleDuration = screenCycleDuration;
+        } else if (screenMode === 'modulate') {
+          payload.waveform = screenWaveform;
+          payload.frequencyHz = screenFrequency;
+          payload.minOpacity = screenMinOpacity;
+          payload.maxOpacity = screenMaxOpacity;
+          if (screenSecondaryColor) {
+            payload.secondaryColor = screenSecondaryColor;
+          }
         }
-        payload.cycleDuration = screenCycleDuration;
-      } else if (screenMode === 'modulate') {
-        payload.waveform = screenWaveform;
-        payload.frequencyHz = screenFrequency;
-        payload.minOpacity = screenMinOpacity;
-        payload.maxOpacity = screenMaxOpacity;
-        if (screenSecondaryColor) {
-          payload.secondaryColor = screenSecondaryColor;
-        }
-      }
-      return payload;
-    })());
+        return payload;
+      })()
+    );
 
     setDraft('asciiMode', { enabled: asciiOn });
     setDraft('asciiResolution', { cellSize: Number(asciiRes) });
@@ -291,13 +300,7 @@
       </label>
       {#if $streamEnabled}
         <div class="sample-rate">
-          <input
-            type="range"
-            min="10"
-            max="60"
-            step="1"
-            bind:value={streamSampleRate}
-          />
+          <input type="range" min="10" max="60" step="1" bind:value={streamSampleRate} />
           <span class="sync-label">{streamSampleRate} fps</span>
         </div>
       {/if}
@@ -675,16 +678,16 @@
         </div>
         <div class="control-row">
           <label class="control-label">Volume</label>
-        <input
-          type="range"
-          class="range-slider"
-          bind:value={soundVolume}
-          min="0"
-          max="1"
-          step="0.1"
-          on:input={() => updateControlState({ soundVolume: Number(soundVolume) || 0 })}
-        />
-        <span class="value-display">{Math.round(soundVolume * 100)}%</span>
+          <input
+            type="range"
+            class="range-slider"
+            bind:value={soundVolume}
+            min="0"
+            max="1"
+            step="0.1"
+            on:input={() => updateControlState({ soundVolume: Number(soundVolume) || 0 })}
+          />
+          <span class="value-display">{Math.round(soundVolume * 100)}%</span>
         </div>
         <div class="control-row">
           <label class="checkbox-label">
