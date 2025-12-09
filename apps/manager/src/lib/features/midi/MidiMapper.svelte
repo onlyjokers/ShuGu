@@ -13,7 +13,7 @@
     switchScene,
     vibrate,
   } from '$lib/stores/manager';
-  import { updateControlState } from '$lib/stores/controlState';
+  import { controlState, updateControlState } from '$lib/stores/controlState';
   import Button from '$lib/components/ui/Button.svelte';
   import { formatClientId } from '@shugu/ui-kit';
 
@@ -699,6 +699,10 @@
 
   const STORAGE_KEY = 'midi-mapper-slots-v1';
   const INPUT_KEY = 'midi-mapper-input';
+
+  // Keep MIDI local toggles in sync with shared control state so UI & MIDI don't fight
+  $: asciiState = $controlState.asciiOn;
+  $: sceneIsMel = $controlState.selectedScene === 'mel-scene';
 
   onMount(() => {
     hydrateFromStorage();

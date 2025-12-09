@@ -70,7 +70,12 @@
     <div class="separator"></div>
 
     <div class="section">
-      <Toggle label="ASCII Overlay" bind:checked={asciiOn} description="Retro text effect" />
+      <Toggle
+        label="ASCII Overlay"
+        bind:checked={asciiOn}
+        description="Retro text effect"
+        on:change={() => updateControlState({ asciiOn })}
+      />
       <div class="button-group">
         <Button
           variant="primary"
@@ -92,6 +97,7 @@
         step={1}
         bind:value={asciiRes}
         suffix=" px"
+        on:input={() => updateControlState({ asciiResolution: Number(asciiRes) })}
       />
       <div class="button-group">
         <Button
