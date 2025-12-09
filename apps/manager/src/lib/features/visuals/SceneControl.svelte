@@ -48,7 +48,12 @@
 <Card title="🎬 Scene & Effects">
   <div class="control-group">
     <div class="section">
-      <Select label="Visual Scene" options={scenes} bind:value={selectedScene} />
+      <Select
+        label="Visual Scene"
+        options={scenes}
+        bind:value={selectedScene}
+        on:change={() => updateControlState({ selectedScene })}
+      />
       <div class="button-group">
         <Button
           variant="primary"

@@ -60,7 +60,7 @@
     onPress: (scope: Scope) => string | void;
   };
 
-  let scopeMode: Scope = 'all';
+  let scopeMode: Scope = 'selected';
   let clientSelectionSize = 1;
   let lastClientAnchorIndex = 0;
 
@@ -165,6 +165,7 @@
           { duration: value, frequency: 300, volume: 0.6, waveform: 'sine' },
           scope === 'all'
         );
+        updateControlState({ modDuration: value });
       },
     },
     {
@@ -180,6 +181,53 @@
           { volume: value, frequency: 300, duration: 160, waveform: 'sine' },
           scope === 'all'
         );
+        updateControlState({ modVolume: value });
+      },
+    },
+    {
+      id: 'synth-depth',
+      label: 'Synth Wobble Depth',
+      compute: (normalized) => {
+        const depth = clamp01(normalized);
+        return { value: depth, display: `${Math.round(depth * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        modulateSound(
+          {
+            modDepth: value,
+            modFrequency: value > 0 ? 12 : undefined,
+            frequency: 300,
+            duration: 160,
+            volume: 0.6,
+            waveform: 'sine',
+          },
+          scope === 'all'
+        );
+        updateControlState({ modDepth: value });
+      },
+    },
+    {
+      id: 'synth-lfo',
+      label: 'Wobble Rate (Hz)',
+      compute: (normalized) => {
+        const rate = Math.round(mapRange(normalized, 1, 40));
+        return { value: rate, display: `${rate} Hz` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        modulateSound(
+          {
+            modFrequency: value,
+            modDepth: 0.2,
+            frequency: 300,
+            duration: 160,
+            volume: 0.6,
+            waveform: 'sine',
+          },
+          scope === 'all'
+        );
+        updateControlState({ modLfo: value });
       },
     },
     {
@@ -254,6 +302,31 @@
       },
     },
     {
+      id: 'screen-blink-freq',
+      label: 'Screen Blink Freq (Hz)',
+      compute: (normalized) => {
+        const freq = mapRange(normalized, 0.5, 10);
+        return { value: freq, display: `${freq.toFixed(1)} Hz` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'blink',
+            color: '#ffffff',
+            secondaryColor: '#ffffff',
+            blinkFrequency: value,
+            minOpacity: 0,
+            maxOpacity: 1,
+            waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+        updateControlState({ screenOpacity: 1 });
+      },
+    },
+    {
       id: 'screen-min',
       label: 'Screen Min Opacity',
       compute: (normalized) => {
@@ -271,6 +344,74 @@
             maxOpacity: 1,
             frequencyHz: 1,
             waveform: 'sine',
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-pulse-dur',
+      label: 'Screen Pulse Duration (ms)',
+      compute: (normalized) => {
+        const dur = Math.round(mapRange(normalized, 300, 4000));
+        return { value: dur, display: `${dur} ms` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'pulse',
+            color: '#ffffff',
+            pulseDuration: value,
+            pulseMin: 0.2,
+            waveform: 'sine',
+            opacity: 1,
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-pulse-min',
+      label: 'Screen Pulse Min Opacity',
+      compute: (normalized) => {
+        const v = clamp01(normalized);
+        return { value: v, display: `${Math.round(v * 100)}%` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'pulse',
+            color: '#ffffff',
+            pulseDuration: 1200,
+            pulseMin: value,
+            waveform: 'sine',
+            opacity: 1,
+          },
+          undefined,
+          scope === 'all'
+        );
+      },
+    },
+    {
+      id: 'screen-cycle-dur',
+      label: 'Screen Cycle Duration (ms)',
+      compute: (normalized) => {
+        const dur = Math.round(mapRange(normalized, 600, 8000));
+        return { value: dur, display: `${dur} ms` };
+      },
+      apply: (value, scope) => {
+        if (typeof value !== 'number') return;
+        screenColor(
+          {
+            mode: 'cycle',
+            color: '#ffffff',
+            cycleColors: ['#6366f1', '#22d3ee', '#a855f7'],
+            cycleDuration: value,
+            opacity: 1,
           },
           undefined,
           scope === 'all'
@@ -364,6 +505,18 @@
         updateControlState({ asciiResolution: value });
       },
     },
+    {
+      id: 'sound-volume',
+      label: 'Sound Volume (Play sound section)',
+      compute: (normalized) => {
+        const vol = clamp01(normalized);
+        return { value: vol, display: `${Math.round(vol * 100)}%` };
+      },
+      apply: (value) => {
+        if (typeof value !== 'number') return;
+        updateControlState({ soundVolume: value });
+      },
+    },
   ];
 
   const buttonTargets: ButtonTarget[] = [
@@ -432,6 +585,26 @@
       },
     },
     {
+      id: 'scene-box',
+      label: 'Scene: 3D Box',
+      onPress: (scope) => {
+        sceneIsMel = false;
+        switchScene('box-scene', scope === 'all');
+        updateControlState({ selectedScene: 'box-scene' });
+        return 'Scene: 3D Box';
+      },
+    },
+    {
+      id: 'scene-mel',
+      label: 'Scene: Mel Spectrogram',
+      onPress: (scope) => {
+        sceneIsMel = true;
+        switchScene('mel-scene', scope === 'all');
+        updateControlState({ selectedScene: 'mel-scene' });
+        return 'Scene: Mel Spectrogram';
+      },
+    },
+    {
       id: 'stop-media',
       label: 'Stop all media',
       onPress: (scope) => {
@@ -446,7 +619,7 @@
     { id: 'screen', label: 'Screen', targets: [] },
     { id: 'vibration', label: 'Vibration', targets: ['vibe-pulse', 'vibe-stop'] },
     { id: 'ascii', label: 'ASCII', targets: ['ascii-toggle'] },
-    { id: 'scene', label: 'Scene/Media', targets: ['scene-toggle', 'stop-media'] },
+    { id: 'scene', label: 'Scene/Media', targets: ['scene-toggle', 'scene-box', 'scene-mel', 'stop-media'] },
   ];
 
   const continuousGroups = [
@@ -458,7 +631,7 @@
     {
       id: 'synth',
       label: 'Synth',
-      targets: ['synth-freq', 'synth-dur', 'synth-vol'],
+      targets: ['synth-freq', 'synth-dur', 'synth-vol', 'synth-depth', 'synth-lfo'],
     },
     {
       id: 'flashlight',
@@ -468,12 +641,27 @@
     {
       id: 'screen',
       label: 'Screen Color',
-      targets: ['screen-freq', 'screen-min', 'screen-max', 'screen-dur', 'screen-opacity'],
+      targets: [
+        'screen-freq',
+        'screen-blink-freq',
+        'screen-min',
+        'screen-max',
+        'screen-dur',
+        'screen-pulse-dur',
+        'screen-pulse-min',
+        'screen-cycle-dur',
+        'screen-opacity',
+      ],
     },
     {
       id: 'ascii',
       label: 'ASCII',
       targets: ['ascii-resolution'],
+    },
+    {
+      id: 'sound',
+      label: 'Sound',
+      targets: ['sound-volume'],
     },
   ];
 
@@ -872,7 +1060,7 @@
         slotCounter =
           parsed.slotCounter ?? (Array.isArray(parsed.slots) ? parsed.slots.length + 1 : 1);
         selectedInputId = parsed.selectedInputId ?? '';
-        scopeMode = (parsed.scopeMode as Scope) ?? legacyScope ?? 'all';
+        scopeMode = (parsed.scopeMode as Scope) ?? legacyScope ?? 'selected';
         clientSelectionSize = Math.max(1, parsed.clientSelectionSize ?? 1);
         lastClientAnchorIndex = Math.max(0, parsed.lastClientAnchorIndex ?? 0);
       } catch (err) {

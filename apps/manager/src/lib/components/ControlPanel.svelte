@@ -52,6 +52,7 @@
   let screenSecondaryColor = '#ffffff';
 
   let soundUrl = '';
+  let soundUrl = '';
   let soundVolume = 1;
   let soundLoop = false;
 
@@ -65,7 +66,13 @@
   $: asciiOn = synced.asciiOn;
   $: asciiRes = synced.asciiResolution;
   $: modFrequency = synced.modFrequency;
+  $: modDuration = synced.modDuration;
+  $: modVolume = synced.modVolume;
+  $: modDepth = synced.modDepth;
+  $: modLfo = synced.modLfo;
+  $: modWaveform = synced.modWaveform;
   $: selectedScene = synced.selectedScene;
+  $: soundVolume = synced.soundVolume;
   $: flashlightMode = synced.flashlightOn ? (flashlightMode === 'blink' ? 'blink' : 'on') : 'off';
 
   $: hasSelection = $state.selectedClientIds.length > 0;
@@ -122,7 +129,14 @@
       toAll,
       getExecuteAt()
     );
-    updateControlState({ modFrequency: Number(modFrequency) || 180 });
+    updateControlState({
+      modFrequency: Number(modFrequency) || 180,
+      modDuration: Number(modDuration) || 200,
+      modVolume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
+      modDepth: Math.max(0, Math.min(1, modDepth)) || 0,
+      modLfo: Number(modLfo) || 12,
+      modWaveform,
+    });
   }
 
   function handleScreenColor(toAll = false) {
@@ -661,15 +675,16 @@
         </div>
         <div class="control-row">
           <label class="control-label">Volume</label>
-          <input
-            type="range"
-            class="range-slider"
-            bind:value={soundVolume}
-            min="0"
-            max="1"
-            step="0.1"
-          />
-          <span class="value-display">{Math.round(soundVolume * 100)}%</span>
+        <input
+          type="range"
+          class="range-slider"
+          bind:value={soundVolume}
+          min="0"
+          max="1"
+          step="0.1"
+          on:input={() => updateControlState({ soundVolume: Number(soundVolume) || 0 })}
+        />
+        <span class="value-display">{Math.round(soundVolume * 100)}%</span>
         </div>
         <div class="control-row">
           <label class="checkbox-label">

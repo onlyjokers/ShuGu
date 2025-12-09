@@ -23,6 +23,11 @@
 
   $: hasSelection = $state.selectedClientIds.length > 0;
   $: modFrequency = $controlState.modFrequency;
+  $: modDuration = $controlState.modDuration;
+  $: modVolume = $controlState.modVolume;
+  $: modDepth = $controlState.modDepth;
+  $: modLfo = $controlState.modLfo;
+  $: modWaveform = $controlState.modWaveform;
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -43,7 +48,14 @@
       toAll,
       getExecuteAt()
     );
-    updateControlState({ modFrequency: Number(modFrequency) || 180 });
+    updateControlState({
+      modFrequency: Number(modFrequency) || 180,
+      modDuration: durMs,
+      modVolume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
+      modDepth: Math.max(0, Math.min(1, modDepth)) || 0,
+      modLfo: Number(modLfo) || 12,
+      modWaveform,
+    });
     playingUntil = Date.now() + durMs + 200; // basic release buffer
   }
 
