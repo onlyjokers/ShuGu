@@ -6,6 +6,7 @@
     clients,
     flashlight,
     modulateSound,
+    selectedClients,
     screenColor,
     selectClients,
     stopMedia,
@@ -35,6 +36,7 @@
     lastNormalized?: number;
     groupId?: string;
     targetId?: string;
+    scope?: Scope; // Per-slot scope configuration
     lastApplied?: string;
     lastUpdated?: number;
   };
@@ -67,20 +69,6 @@
   // --- Target catalogs with grouping ---
   const continuousTargets: ContinuousTarget[] = [
     {
-      id: 'client-scope',
-      label: '作用范围（0=选中，1=全部）',
-      compute: (normalized) => {
-        const nextScope: Scope = normalized >= 0.5 ? 'all' : 'selected';
-        return { value: nextScope, display: nextScope === 'all' ? 'All clients' : 'Selected clients' };
-      },
-      apply: (value, _scope) => {
-        if (value === 'all' || value === 'selected') {
-          scopeMode = value;
-          persistSlots();
-        }
-      },
-    },
-    {
       id: 'client-selector',
       label: 'Clients (0-1 → select client)',
       compute: (normalized) => {
@@ -106,7 +94,12 @@
                 return { clientId: fallbackId, index: fallbackIndex };
               })();
         const resolvedIndex =
-          index >= 0 ? index : Math.max(0, $clients.findIndex((c) => c.clientId === clientId));
+          index >= 0
+            ? index
+            : Math.max(
+                0,
+                $clients.findIndex((c) => c.clientId === clientId)
+              );
         if (resolvedIndex < 0) return;
         lastClientAnchorIndex = resolvedIndex;
         applySelectionWindow(resolvedIndex);
@@ -120,7 +113,10 @@
         const total = $clients.length;
         if (total === 0) return { value: null, display: 'No clients' };
         const maxCount = Math.max(1, Math.floor(total / 2));
-        const count = Math.max(1, Math.min(maxCount, Math.round(mapRange(normalized, 1, maxCount))));
+        const count = Math.max(
+          1,
+          Math.min(maxCount, Math.round(mapRange(normalized, 1, maxCount)))
+        );
         return { value: count, display: `${count} 人` };
       },
       apply: (value, _scope) => {
@@ -615,18 +611,26 @@
   ];
 
   const buttonGroups = [
-    { id: 'flashlight', label: 'Flashlight', targets: ['flashlight-toggle', 'flashlight-blink', 'flashlight-stop'] },
+    {
+      id: 'flashlight',
+      label: 'Flashlight',
+      targets: ['flashlight-toggle', 'flashlight-blink', 'flashlight-stop'],
+    },
     { id: 'screen', label: 'Screen', targets: [] },
     { id: 'vibration', label: 'Vibration', targets: ['vibe-pulse', 'vibe-stop'] },
     { id: 'ascii', label: 'ASCII', targets: ['ascii-toggle'] },
-    { id: 'scene', label: 'Scene/Media', targets: ['scene-toggle', 'scene-box', 'scene-mel', 'stop-media'] },
+    {
+      id: 'scene',
+      label: 'Scene/Media',
+      targets: ['scene-toggle', 'scene-box', 'scene-mel', 'stop-media'],
+    },
   ];
 
   const continuousGroups = [
     {
       id: 'clients',
       label: 'Clients',
-      targets: ['client-selector', 'client-range', 'client-scope'],
+      targets: ['client-selector', 'client-range'],
     },
     {
       id: 'synth',
@@ -673,7 +677,11 @@
     inputs: Map<string, MIDIInputLite> | any;
     onstatechange: ((ev: any) => void) | null;
   };
-  type MIDIInputLite = { id: string; name?: string; onmidimessage: ((e: MIDIMessageEventLite) => void) | null };
+  type MIDIInputLite = {
+    id: string;
+    name?: string;
+    onmidimessage: ((e: MIDIMessageEventLite) => void) | null;
+  };
   type MIDIMessageEventLite = { data: Uint8Array };
 
   let midiAccess: MIDIAccessLite | null = null;
@@ -863,12 +871,11 @@
     const id = `${kind}-${slotCounter++}`;
     const label =
       kind === 'boolean' ? `Bool Map ${slotCounter - 1}` : `Fuzzy Map ${slotCounter - 1}`;
-    const groupId =
-      kind === 'boolean' ? buttonGroups[0]?.id : continuousGroups[0]?.id;
+    const groupId = kind === 'boolean' ? buttonGroups[0]?.id : continuousGroups[0]?.id;
     const targetList =
       kind === 'boolean'
-        ? buttonGroups.find((g) => g.id === groupId)?.targets ?? []
-        : continuousGroups.find((g) => g.id === groupId)?.targets ?? [];
+        ? (buttonGroups.find((g) => g.id === groupId)?.targets ?? [])
+        : (continuousGroups.find((g) => g.id === groupId)?.targets ?? []);
     const newSlot: ControlSlot = {
       id,
       label,
@@ -876,6 +883,7 @@
       binding: lastParsed.binding,
       groupId,
       targetId: targetList[0],
+      scope: 'selected', // Default to selected clients only
       lastRaw: lastParsed.raw,
       lastNormalized: lastParsed.normalized,
       lastUpdated: Date.now(),
@@ -920,6 +928,8 @@
     selectClients(selectedIds);
   }
 
+  const selectionTargetIds = new Set(['client-selector', 'client-range', 'client-scope']);
+
   function applyMapping(slotId: string, parsed: ParsedMessage) {
     const slot = slots.find((s) => s.id === slotId);
     if (!slot || !slot.targetId) return;
@@ -929,7 +939,16 @@
       return;
     }
 
-    const scope = scopeMode;
+    // Use slot's own scope, defaulting to 'selected'
+    const scope = slot.scope ?? 'selected';
+    const hasSelection = $selectedClients.length > 0;
+
+    // For non-selection-related targets, require selection when scope is 'selected'
+    if (scope === 'selected' && !hasSelection && !selectionTargetIds.has(slot.targetId)) {
+      infoMessage = '请选择至少一个客户端后再触发该映射。';
+      return;
+    }
+
     const continuousTarget = continuousTargets.find((t) => t.id === slot.targetId);
     const buttonTarget = buttonTargets.find((t) => t.id === slot.targetId);
 
@@ -1009,6 +1028,14 @@
     setTarget(slotId, selectEl.value);
   }
 
+  function toggleSlotScope(slotId: string) {
+    updateSlot(slotId, (slot) => ({
+      ...slot,
+      scope: slot.scope === 'all' ? 'selected' : 'all',
+    }));
+    persistSlots();
+  }
+
   function persistSlots() {
     if (typeof localStorage === 'undefined') return;
     const payload = {
@@ -1031,10 +1058,7 @@
         let legacyScope: Scope | undefined;
         if (Array.isArray(parsed.slots)) {
           slots = parsed.slots.map((s: ControlSlot & { kind?: string; scope?: Scope }) => {
-            const { scope: _legacyScope, ...rest } = s;
-            if (!legacyScope && (s.scope === 'selected' || s.scope === 'all')) {
-              legacyScope = s.scope;
-            }
+            // Note: We're NOT destructuring scope out, we want to preserve it
             const rawKind = s.kind as string | undefined;
             const kind: SlotKind =
               rawKind === 'button'
@@ -1046,14 +1070,23 @@
             const fallbackGroup = groups[0]?.id ?? '';
             const groupId = s.groupId ?? fallbackGroup;
             const targetList = groups.find((g) => g.id === groupId)?.targets ?? [];
-            const targetId = s.targetId && targetList.includes(s.targetId)
-              ? s.targetId
-              : targetList[0] ?? '';
+            const targetId =
+              s.targetId && targetList.includes(s.targetId) ? s.targetId : (targetList[0] ?? '');
+
+            // Preserve scope if it exists, otherwise default to 'selected'
+            const scope = s.scope === 'all' || s.scope === 'selected' ? s.scope : 'selected';
+
+            // Track legacy global scope for migration
+            if (!legacyScope && (s.scope === 'selected' || s.scope === 'all')) {
+              legacyScope = s.scope;
+            }
+
             return {
-              ...rest,
+              ...s,
               kind,
               groupId,
               targetId,
+              scope,
             };
           });
         }
@@ -1126,6 +1159,15 @@
                 <div class="control-binding">{describeBinding(slot.binding)}</div>
               </div>
               <div class="control-actions">
+                <button
+                  class="scope-toggle-btn scope-{slot.scope ?? 'selected'}"
+                  on:click={() => toggleSlotScope(slot.id)}
+                  title={slot.scope === 'all'
+                    ? 'Scope: All clients (click to change)'
+                    : 'Scope: Selected clients (click to change)'}
+                >
+                  {slot.scope === 'all' ? '🌍' : '🎯'}
+                </button>
                 <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}
                   >重学</Button
                 >
@@ -1152,7 +1194,10 @@
               <div class="mapping-block">
                 <label>映射到</label>
                 <div class="mapping-selects">
-                  <select bind:value={slot.groupId} on:change={(e) => handleGroupChange(e, slot.id)}>
+                  <select
+                    bind:value={slot.groupId}
+                    on:change={(e) => handleGroupChange(e, slot.id)}
+                  >
                     {#each buttonGroups as group}
                       <option value={group.id}>{group.label}</option>
                     {/each}
@@ -1162,9 +1207,10 @@
                     on:change={(e) => handleTargetChange(e, slot.id)}
                   >
                     <option value="">未设置</option>
-                    {#each (buttonGroups.find((g) => g.id === slot.groupId)?.targets ?? []) as tid}
+                    {#each buttonGroups.find((g) => g.id === slot.groupId)?.targets ?? [] as tid}
                       {#if buttonTargets.find((t) => t.id === tid)}
-                        <option value={tid}>{buttonTargets.find((t) => t.id === tid)?.label}</option>
+                        <option value={tid}>{buttonTargets.find((t) => t.id === tid)?.label}</option
+                        >
                       {/if}
                     {/each}
                   </select>
@@ -1198,6 +1244,15 @@
                 <div class="control-binding">{describeBinding(slot.binding)}</div>
               </div>
               <div class="control-actions">
+                <button
+                  class="scope-toggle-btn scope-{slot.scope ?? 'selected'}"
+                  on:click={() => toggleSlotScope(slot.id)}
+                  title={slot.scope === 'all'
+                    ? 'Scope: All clients (click to change)'
+                    : 'Scope: Selected clients (click to change)'}
+                >
+                  {slot.scope === 'all' ? '🌍' : '🎯'}
+                </button>
                 <Button size="sm" variant="ghost" on:click={() => startLearning(slot.id)}
                   >重学</Button
                 >
@@ -1224,7 +1279,10 @@
               <div class="mapping-block">
                 <label>映射到</label>
                 <div class="mapping-selects">
-                  <select bind:value={slot.groupId} on:change={(e) => handleGroupChange(e, slot.id)}>
+                  <select
+                    bind:value={slot.groupId}
+                    on:change={(e) => handleGroupChange(e, slot.id)}
+                  >
                     {#each continuousGroups as group}
                       <option value={group.id}>{group.label}</option>
                     {/each}
@@ -1234,9 +1292,11 @@
                     on:change={(e) => handleTargetChange(e, slot.id)}
                   >
                     <option value="">未设置</option>
-                    {#each (continuousGroups.find((g) => g.id === slot.groupId)?.targets ?? []) as tid}
+                    {#each continuousGroups.find((g) => g.id === slot.groupId)?.targets ?? [] as tid}
                       {#if continuousTargets.find((t) => t.id === tid)}
-                        <option value={tid}>{continuousTargets.find((t) => t.id === tid)?.label}</option>
+                        <option value={tid}
+                          >{continuousTargets.find((t) => t.id === tid)?.label}</option
+                        >
                       {/if}
                     {/each}
                   </select>
@@ -1418,21 +1478,63 @@
     color: var(--text-secondary);
   }
 
-.mapping-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+  .mapping-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
 
-.mapping-selects {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-xs);
-}
+  .mapping-selects {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-xs);
+  }
 
   .applied {
     font-size: var(--text-sm);
     color: var(--text-secondary);
+  }
+
+  .scope-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    min-width: 36px;
+    height: 32px;
+  }
+
+  .scope-toggle-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  .scope-toggle-btn:active {
+    transform: translateY(0);
+  }
+
+  .scope-toggle-btn.scope-all {
+    background: linear-gradient(135deg, var(--color-primary) 0%, #4f46e5 100%);
+    border-color: var(--color-primary);
+    color: white;
+  }
+
+  .scope-toggle-btn.scope-selected {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+  }
+
+  .scope-toggle-btn.scope-selected:hover {
+    border-color: var(--color-secondary);
+    background: var(--bg-tertiary);
   }
 
   @media (max-width: 720px) {
