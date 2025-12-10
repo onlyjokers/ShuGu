@@ -5,8 +5,13 @@ import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
 import type { SensorDataMessage, ClientInfo, ScreenColorPayload } from '@shugu/protocol';
 
+import { ManagerClient } from '../core/client-entity';
+import { parameterRegistry } from '../parameters/registry';
+
 // SDK instance
 let sdk: ManagerSDK | null = null;
+// Client entities map
+const clientEntities = new Map<string, ManagerClient>();
 
 // Core state store
 export const state = writable<ManagerState>({
@@ -51,6 +56,30 @@ export function connect(config: ManagerSDKConfig): void {
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
         state.set(newState);
+
+        // --- ManagerClient Lifecycle Management ---
+        const activeIds = new Set(newState.clients.map(c => c.clientId));
+        
+        // 1. Handle New / Reconnected Clients
+        for (const clientInfo of newState.clients) {
+            const id = clientInfo.clientId;
+            if (!clientEntities.has(id)) {
+                // New Client
+                clientEntities.set(id, new ManagerClient(id));
+                console.log(`[Manager] Client ${id} initialized`);
+            } else {
+                // Reconnected Client (Soft Delete -> Online)
+                clientEntities.get(id)?.setOnline();
+            }
+        }
+
+        // 2. Handle Disconnected Clients (Soft Delete)
+        for (const [id, entity] of clientEntities) {
+            if (!activeIds.has(id)) {
+                entity.setOffline();
+                // We keep the entity in the map!
+            }
+        }
     });
 
     // Subscribe to sensor data
@@ -71,6 +100,11 @@ export function disconnect(): void {
     sdk?.disconnect();
     sdk = null;
     sensorData.set(new Map());
+    
+    // Cleanup all clients
+    clientEntities.forEach(c => c.cleanup());
+    clientEntities.clear();
+    parameterRegistry.clear();
 }
 
 /**
@@ -240,4 +274,11 @@ export function sendPluginControl(
  */
 export function getSDK(): ManagerSDK | null {
     return sdk;
+}
+
+/**
+ * Get Client Entity (for direct access/debugging)
+ */
+export function getClientEntity(id: string): ManagerClient | undefined {
+    return clientEntities.get(id);
 }

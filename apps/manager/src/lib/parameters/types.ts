@@ -1,6 +1,6 @@
-export type ParameterType = 'number' | 'boolean' | 'enum' | 'trigger' | 'string';
+export type ParameterType = 'number' | 'boolean' | 'enum' | 'trigger' | 'string' | 'color';
 
-export type ParameterSource = 'ui' | 'midi' | 'node' | 'script' | 'system' | string;
+export type ParameterSource = 'UI' | 'MIDI' | 'DEVICE' | 'SYSTEM' | 'NODE' | string;
 
 export interface ParameterMetadata {
   label?: string;
@@ -9,7 +9,8 @@ export interface ParameterMetadata {
   section?: string;
   step?: number;
   unit?: string;
-  widget?: 'slider' | 'toggle' | 'select' | 'button' | 'input';
+  widgetType?: 'slider' | 'knob' | 'toggle' | 'select' | 'button' | 'input' | 'color'; // Renamed from widget
+  hidden?: boolean;
 }
 
 export interface EnumOption {
@@ -30,7 +31,7 @@ export interface ParameterOptions<T> {
 export interface ParameterChange<T> {
   newValue: T;
   oldValue: T;
-  source?: ParameterSource;
+  source: ParameterSource; // Made required
   kind: 'base' | 'modulation' | 'effective';
 }
 
@@ -44,4 +45,5 @@ export interface ParameterSnapshot<T = unknown> {
   max?: number;
   metadata?: ParameterMetadata;
   enumOptions?: EnumOption[];
+  isOffline?: boolean;
 }

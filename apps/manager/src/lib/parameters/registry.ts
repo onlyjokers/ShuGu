@@ -18,7 +18,12 @@ export class ParameterRegistry {
   register<T>(options: ParameterOptions<T>): Parameter<T> {
     const path = normalizePath(options.path);
     const existing = this.parameters.get(path);
-    if (existing) return existing as Parameter<T>;
+    // Reuse existing parameter to preserve references (crucial for Node Graph/Listeners)
+    if (existing) {
+        // If it was offline, bring it back
+        existing.setOffline(false);
+        return existing as unknown as Parameter<T>;
+    }
 
     const param = new Parameter<T>({ ...options, path });
     this.parameters.set(path, param);
@@ -33,6 +38,24 @@ export class ParameterRegistry {
     return this.parameters.has(normalizePath(path));
   }
 
+  /**
+   * Mark parameters under a prefix as offline (Soft Delete).
+   * Do NOT remove them from the map.
+   */
+  markOffline(prefix: string): void {
+     this.list(prefix).forEach(p => p.setOffline(true));
+  }
+  
+  /**
+   * Mark parameters under a prefix as online.
+   */
+  markOnline(prefix: string): void {
+    this.list(prefix).forEach(p => p.setOffline(false));
+  }
+
+  /**
+   * Hard delete - only use if you really mean it (e.g. app reset)
+   */
   remove(path: string): boolean {
     return this.parameters.delete(normalizePath(path));
   }

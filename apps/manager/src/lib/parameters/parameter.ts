@@ -25,6 +25,15 @@ function shallowEqual<T>(a: T, b: T): boolean {
   return a === b;
 }
 
+function normalizePath(path: string): string {
+  return path
+    .replace(/\/+/g, '/')
+    .replace(/^\//, '')
+    .replace(/\/$/, '');
+}
+
+export { normalizePath };
+
 export class Parameter<T = number> {
   readonly path: string;
   readonly type: ParameterType;
@@ -37,6 +46,9 @@ export class Parameter<T = number> {
   private _max?: number;
   private modulators: Map<string, number> = new Map();
   private listeners: Set<Listener<T>> = new Set();
+  
+  // Robustness state
+  private _isOffline = false;
 
   constructor(options: ParameterOptions<T>) {
     this.path = normalizePath(options.path);
@@ -72,6 +84,10 @@ export class Parameter<T = number> {
   get max(): number | undefined {
     return this._max;
   }
+  
+  get isOffline(): boolean {
+    return this._isOffline;
+  }
 
   get effectiveValue(): T {
     if (this.type === 'number') {
@@ -82,14 +98,20 @@ export class Parameter<T = number> {
     return this._baseValue;
   }
 
+  setOffline(offline: boolean): void {
+    this._isOffline = offline;
+    // We might want to emit an event here, but usually UI just redraws
+  }
+
   /**
-   * Set the base value (usually from UI)
+   * Set the base value.
+   * STRICT REQUIREMENT: source must be provided.
    */
-  setValue(val: T, source: ParameterSource = 'ui'): boolean {
+  setValue(val: T, source: ParameterSource): boolean {
     return this.setBaseValue(val, source);
   }
 
-  setBaseValue(val: T, source: ParameterSource = 'ui'): boolean {
+  setBaseValue(val: T, source: ParameterSource): boolean {
     const oldEffective = this.effectiveValue;
     let nextBase: T = val;
 
@@ -118,7 +140,7 @@ export class Parameter<T = number> {
   /**
    * Apply or update modulation contribution from a source (MIDI / node / automation)
    */
-  setModulation(sourceId: string, offset: number, source: ParameterSource = 'midi'): boolean {
+  setModulation(sourceId: string, offset: number, source: ParameterSource = 'MIDI'): boolean {
     if (this.type !== 'number') return false;
     const oldEffective = this.effectiveValue as unknown as number;
     if (numbersEqual(this.modulators.get(sourceId) ?? 0, offset)) {
@@ -135,7 +157,7 @@ export class Parameter<T = number> {
     return true;
   }
 
-  clearModulation(sourceId?: string, source: ParameterSource = 'midi'): boolean {
+  clearModulation(sourceId?: string, source: ParameterSource = 'MIDI'): boolean {
     if (this.type !== 'number') return false;
     const oldEffective = this.effectiveValue as unknown as number;
     let changed = false;
@@ -156,7 +178,7 @@ export class Parameter<T = number> {
     return true;
   }
 
-  reset(source: ParameterSource = 'system'): void {
+  reset(source: ParameterSource = 'SYSTEM'): void {
     this.modulators.clear();
     this._baseValue = this._defaultValue;
     this.emit({
@@ -178,6 +200,7 @@ export class Parameter<T = number> {
       max: this._max,
       metadata: this.metadata,
       enumOptions: this.enumOptions,
+      isOffline: this._isOffline,
     };
   }
 
@@ -195,14 +218,4 @@ export class Parameter<T = number> {
       }
     });
   }
-}
-
-/**
- * Normalize parameter path to avoid duplicate slashes and ensure no leading slash
- */
-export function normalizePath(path: string): string {
-  return path
-    .replace(/\/+/g, '/')
-    .replace(/^\//, '')
-    .replace(/\/$/, '');
 }
