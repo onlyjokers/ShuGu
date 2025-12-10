@@ -22,6 +22,7 @@
   import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
   import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
+  import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
@@ -29,7 +30,7 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'midi' = 'dashboard';
+  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' | 'midi' = 'dashboard';
 
   // Global Sync State
   let useSync = true;
@@ -212,6 +213,9 @@
         >
           🎹 Registry MIDI
         </button>
+        <button class:active={activePage === 'nodes'} on:click={() => (activePage = 'nodes')}>
+          📊 Node Graph
+        </button>
         <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
           MIDI (Legacy)
         </button>
@@ -249,6 +253,12 @@
       <div class:hide={activePage !== 'registry-midi'}>
         <div class="midi-pane">
           <RegistryMidiPanel />
+        </div>
+      </div>
+
+      <div class:hide={activePage !== 'nodes'}>
+        <div class="nodes-pane">
+          <NodeCanvas />
         </div>
       </div>
 
