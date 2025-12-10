@@ -4,12 +4,15 @@
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
+  import { selectedClients } from '$lib/stores/manager'; // [NEW]
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
+  import ControlPanel from '$lib/components/ControlPanel.svelte'; // [NEW]
+  import AutoControlPanel from '$lib/components/AutoControlPanel.svelte'; // [NEW]
   import ClientList from '$lib/components/ClientList.svelte';
   import SensorDisplay from '$lib/components/SensorDisplay.svelte';
-  import PluginControl from '$lib/components/PluginControl.svelte';
+  // import PluginControl from '$lib/components/PluginControl.svelte'; // [REMOVED]
   import Button from '$lib/components/ui/Button.svelte';
 
   // Feature Controls
@@ -187,7 +190,21 @@
       <div slot="sidebar" class="sidebar-content">
         <ClientList />
         <div class="sidebar-divider"></div>
-        <PluginControl />
+        <!-- Control Panel (Right Side) -->
+        <section class="panel-section">
+          <!-- New Auto Panel for selected client(s) -->
+          {#if $selectedClients.length > 0}
+            <!-- For demo/phase 2, just show panel for first selected client to prove concept -->
+            <div class="card mb-4">
+              <div class="card-header">
+                <h3 class="card-title">Auto-UI (Active: {$selectedClients[0].clientId})</h3>
+              </div>
+              <AutoControlPanel clientId={$selectedClients[0].clientId} />
+            </div>
+          {/if}
+
+          <ControlPanel />
+        </section>
       </div>
 
       <div slot="right-sidebar">
@@ -240,11 +257,7 @@
           <input type="checkbox" bind:checked={useSync} />
           <span>⚡ Global Sync (500ms)</span>
         </label>
-        <Button
-          variant="ghost"
-          size="sm"
-          on:click={() => streamEnabled.update((v) => !v)}
-        >
+        <Button variant="ghost" size="sm" on:click={() => streamEnabled.update((v) => !v)}>
           {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
         </Button>
 
