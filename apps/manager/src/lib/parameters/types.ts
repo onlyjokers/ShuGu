@@ -46,4 +46,5 @@ export interface ParameterSnapshot<T = unknown> {
   metadata?: ParameterMetadata;
   enumOptions?: EnumOption[];
   isOffline?: boolean;
+  modulators?: Record<string, number>;
 }

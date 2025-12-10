@@ -9,6 +9,7 @@
 import { writable, get, type Writable } from 'svelte/store';
 import type { NodeInstance, Connection, NodeDefinition, ProcessContext, GraphState } from './types';
 import { nodeRegistry } from './registry';
+import { parameterRegistry } from '../parameters/registry';
 
 const TICK_INTERVAL = 33; // ~30 FPS
 
@@ -48,6 +49,10 @@ class NodeEngineClass {
     
     this.needsRecompile = true;
     this.syncGraphState();
+
+    // Clear any modulation offsets contributed by this node
+    const sourceId = `node-${nodeId}`;
+    parameterRegistry.list().forEach((param) => param.clearModulation?.(sourceId, 'NODE'));
   }
 
   updateNodeConfig(nodeId: string, config: Record<string, unknown>): void {
@@ -76,6 +81,28 @@ class NodeEngineClass {
         c.targetPortId === connection.targetPortId
     );
     if (exists) return false;
+
+    // Type guard: ensure port types are compatible
+    const sourceNode = this.nodes.get(connection.sourceNodeId);
+    const targetNode = this.nodes.get(connection.targetNodeId);
+    if (!sourceNode || !targetNode) return false;
+
+    const sourceDef = nodeRegistry.get(sourceNode.type);
+    const targetDef = nodeRegistry.get(targetNode.type);
+    const sourcePort = sourceDef?.outputs.find((p) => p.id === connection.sourcePortId);
+    const targetPort = targetDef?.inputs.find((p) => p.id === connection.targetPortId);
+
+    if (!sourcePort || !targetPort) return false;
+    const sourceType = sourcePort.type ?? 'any';
+    const targetType = targetPort.type ?? 'any';
+    const typeMismatch =
+      sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType;
+    if (typeMismatch) {
+      this.lastError.set(
+        `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
+      );
+      return false;
+    }
 
     // Temporarily add connection to check for cycles
     this.connections.push(connection);
@@ -246,6 +273,9 @@ class NodeEngineClass {
     this.executionOrder = [];
     this.needsRecompile = true;
     this.syncGraphState();
+
+    // Reset all node-origin modulation
+    parameterRegistry.list().forEach((param) => param.clearModulation?.(undefined, 'NODE'));
   }
 
   // ========== Serialization ==========
@@ -265,6 +295,9 @@ class NodeEngineClass {
     this.connections = [...state.connections];
     this.needsRecompile = true;
     this.syncGraphState();
+
+    // Existing node modulations may no longer apply to new graph; clear them
+    parameterRegistry.list().forEach((param) => param.clearModulation?.(undefined, 'NODE'));
   }
 
   exportGraph(): GraphState {

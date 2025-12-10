@@ -4,6 +4,7 @@
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
+  import { loadLocalProject, saveLocalProject, startAutoSave, stopAutoSave } from '$lib/project/projectManager';
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
@@ -19,7 +20,6 @@
   import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
-  import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
   import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
   import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
@@ -30,7 +30,10 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' | 'midi' = 'dashboard';
+let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
+
+  let projectRestored = false;
+  let autoSaveStarted = false;
 
   // Global Sync State
   let useSync = true;
@@ -57,6 +60,29 @@
 
     return () => {
       disconnect();
+      stopAutoSave();
+    };
+  });
+
+  // Restore project once we're connected (parameters are registered after connect)
+  $: if (!projectRestored && $connectionStatus === 'connected') {
+    if (loadLocalProject()) {
+      console.info('[Project] restored from local storage');
+    }
+    projectRestored = true;
+  }
+
+  // Start autosave once connected
+  $: if ($connectionStatus === 'connected' && !autoSaveStarted) {
+    startAutoSave();
+    autoSaveStarted = true;
+  }
+
+  onMount(() => {
+    const handler = () => saveLocalProject('beforeunload');
+    window.addEventListener('beforeunload', handler);
+    return () => {
+      window.removeEventListener('beforeunload', handler);
     };
   });
 
@@ -157,8 +183,9 @@
         <h1 class="title">Fluffy Manager</h1>
 
         <div class="connect-form">
-          <label class="form-label">Server URL</label>
+          <label class="form-label" for="server-url">Server URL</label>
           <input
+            id="server-url"
             type="text"
             class="input"
             bind:value={serverUrl}
@@ -216,9 +243,6 @@
         <button class:active={activePage === 'nodes'} on:click={() => (activePage = 'nodes')}>
           📊 Node Graph
         </button>
-        <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
-          MIDI (Legacy)
-        </button>
       </div>
 
       <div class:hide={activePage !== 'dashboard'}>
@@ -259,12 +283,6 @@
       <div class:hide={activePage !== 'nodes'}>
         <div class="nodes-pane">
           <NodeCanvas />
-        </div>
-      </div>
-
-      <div class:hide={activePage !== 'midi'}>
-        <div class="midi-pane">
-          <MidiMapper />
         </div>
       </div>
 

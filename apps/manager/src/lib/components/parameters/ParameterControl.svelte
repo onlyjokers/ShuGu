@@ -1,5 +1,6 @@
 <script lang="ts">
   import { parameterRegistry, parameterWritable } from '$lib/parameters';
+  import { writable, type Writable } from 'svelte/store';
   import type { Parameter } from '$lib/parameters';
   import Slider from '$lib/components/ui/Slider.svelte';
   import Input from '$lib/components/ui/Input.svelte';
@@ -13,7 +14,7 @@
   export let disabled = false;
 
   let param: Parameter<any> | undefined;
-  let store;
+  let store: Writable<any> = writable(0);
   let widget: string | undefined;
   let type: string | undefined;
   let min: number | undefined;
@@ -27,7 +28,7 @@
     | undefined;
 
   $: param = parameterRegistry.get(path);
-  $: store = param ? parameterWritable(param) : null;
+  $: store = param ? (parameterWritable(param) as Writable<any>) : store;
   $: widget = param?.metadata?.widgetType;
   $: type = param?.type;
   $: min = param?.min;
@@ -52,8 +53,8 @@
 {:else if type === 'number' && (widget === 'slider' || widget === undefined)}
   <Slider
     bind:value={$store}
-    {min}
-    {max}
+    min={min ?? 0}
+    max={max ?? 1}
     step={step ?? 0.01}
     label={label ?? param.metadata?.label ?? param.path}
     {disabled}
@@ -62,9 +63,9 @@
   <Input
     type="number"
     bind:value={$store}
-    {min}
-    {max}
-    {step}
+    min={min ?? 0}
+    max={max ?? 1}
+    step={step ?? 0.01}
     label={label ?? param.metadata?.label ?? param.path}
     {disabled}
   />

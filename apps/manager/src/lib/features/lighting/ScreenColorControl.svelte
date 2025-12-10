@@ -176,11 +176,7 @@
     gap: var(--space-md);
   }
 
-  .row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-md);
-  }
+  /* .row unused */
 
   .button-grid {
     display: grid;

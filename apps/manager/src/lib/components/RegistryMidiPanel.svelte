@@ -181,7 +181,7 @@
 
             <div class="binding-controls">
               <div class="control-group">
-                <label>Mode:</label>
+                <span class="control-label">Mode:</span>
                 <button
                   class="mode-toggle mode-{binding.mode.toLowerCase()}"
                   on:click={() => toggleMode(binding.id)}
@@ -191,7 +191,7 @@
               </div>
 
               <div class="control-group">
-                <label>Range:</label>
+                <span class="control-label">Range:</span>
                 <input
                   type="number"
                   class="range-input"
@@ -208,14 +208,15 @@
               </div>
 
               <div class="control-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={binding.mapping.invert}
-                    on:change={() => toggleInvert(binding.id)}
-                  />
+                <label class="control-label" for={`invert-${binding.id}`}>
                   Invert
                 </label>
+                <input
+                  id={`invert-${binding.id}`}
+                  type="checkbox"
+                  checked={binding.mapping.invert}
+                  on:change={() => toggleInvert(binding.id)}
+                />
               </div>
 
               <div class="control-group">
@@ -403,7 +404,7 @@
     font-size: var(--text-sm, 0.875rem);
   }
 
-  .control-group label {
+  .control-label {
     color: var(--text-secondary, #aaa);
   }
 

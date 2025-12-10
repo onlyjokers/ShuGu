@@ -201,6 +201,7 @@ export class Parameter<T = number> {
       metadata: this.metadata,
       enumOptions: this.enumOptions,
       isOffline: this._isOffline,
+      modulators: Object.fromEntries(this.modulators.entries()),
     };
   }
 

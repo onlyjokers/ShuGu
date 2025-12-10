@@ -1,185 +1,188 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { writable } from 'svelte/store';
-  import {
-    SvelteFlow,
-    Controls,
-    Background,
-    MiniMap,
-    type Node,
-    type Edge,
-    type Connection as FlowConnection,
-  } from '@xyflow/svelte';
-  import '@xyflow/svelte/dist/style.css';
+  // @ts-nocheck
+  import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
+  import { ClassicPreset, NodeEditor } from 'rete';
+  import { AreaPlugin, AreaExtensions } from 'rete-area-plugin';
+  import { ConnectionPlugin, Presets as ConnectionPresets } from 'rete-connection-plugin';
+  import { HistoryPlugin } from 'rete-history-plugin';
+  import { SveltePlugin, Presets as SveltePresets } from 'rete-svelte-plugin';
 
-  import { nodeEngine, nodeRegistry } from '$lib/nodes';
-  import type { NodeInstance, Connection } from '$lib/nodes/types';
-  import { parameterRegistry } from '$lib/parameters/registry';
   import Button from '$lib/components/ui/Button.svelte';
+  import { nodeEngine, nodeRegistry } from '$lib/nodes';
+  import type { NodeInstance, Connection as EngineConnection } from '$lib/nodes/types';
 
-  // Convert our node format to Svelte Flow format
-  const nodesStore = writable<Node[]>([]);
-  const edgesStore = writable<Edge[]>([]);
+  // Rete core handles the view; nodeEngine remains the source of truth for execution
 
-  // Node ID counter
-  let nodeIdCounter = 0;
+  let container: HTMLDivElement | null = null;
+  let editor: NodeEditor<any> | null = null;
+  let areaPlugin: any = null;
+  let graphUnsub: (() => void) | null = null;
 
-  // For adding nodes
-  let showNodeMenu = false;
-  let menuPosition = { x: 0, y: 0 };
+  // Shared sockets mapped to our port types
+  const sockets = {
+    number: new ClassicPreset.Socket('number'),
+    boolean: new ClassicPreset.Socket('boolean'),
+    string: new ClassicPreset.Socket('string'),
+    any: new ClassicPreset.Socket('any'),
+  } as const;
 
-  // Subscribe to engine state safely
+  const nodeMap = new Map<string, any>();
+  const connectionMap = new Map<string, any>();
+
+  let selectedType = '';
+  let nodeCount = 0;
+
+  // Store handles
   let graphStateStore = nodeEngine?.graphState;
   let isRunningStore = nodeEngine?.isRunning;
   let lastErrorStore = nodeEngine?.lastError;
 
-  // Local state for nodes/edges
-  $: if (graphStateStore) {
-    const state = $graphStateStore;
-    nodesStore.set(state.nodes.map(convertToFlowNode));
-    edgesStore.set(state.connections.map(convertToFlowEdge));
-  }
+  const nodeCategories = nodeRegistry.listByCategory();
 
-  function convertToFlowNode(node: NodeInstance): Node {
-    const definition = nodeRegistry.get(node.type);
-    return {
-      id: node.id,
-      type: 'default', // We'll use custom nodes later
-      position: node.position,
-      data: {
-        label: definition?.label ?? node.type,
-        config: node.config,
-        nodeType: node.type,
-        inputs: definition?.inputs ?? [],
-        outputs: definition?.outputs ?? [],
-      },
-    };
-  }
-
-  function convertToFlowEdge(conn: Connection): Edge {
-    return {
-      id: conn.id,
-      source: conn.sourceNodeId,
-      sourceHandle: conn.sourcePortId,
-      target: conn.targetNodeId,
-      targetHandle: conn.targetPortId,
-    };
+  function socketFor(type: string | undefined) {
+    if (type && type in sockets) return sockets[type as keyof typeof sockets];
+    return sockets.any;
   }
 
   function generateId(): string {
-    return `node-${++nodeIdCounter}-${Date.now()}`;
+    return `node-${crypto.randomUUID?.() ?? Date.now()}`;
   }
 
-  function handleAddNode(type: string) {
-    const definition = nodeRegistry.get(type);
-    if (!definition) return;
+  function buildReteNode(instance: NodeInstance): any {
+    const def = nodeRegistry.get(instance.type);
+    const node: any = new ClassicPreset.Node(def?.label ?? instance.type);
 
-    const config: Record<string, unknown> = {};
-    for (const field of definition.configSchema) {
-      config[field.key] = field.defaultValue;
+    for (const input of def?.inputs ?? []) {
+      node.addInput(
+        input.id,
+        new ClassicPreset.Input(socketFor(input.type), input.label ?? input.id, false)
+      );
     }
 
+    for (const output of def?.outputs ?? []) {
+      node.addOutput(
+        output.id,
+        new ClassicPreset.Output(socketFor(output.type), output.label ?? output.id)
+      );
+    }
+
+    node.position = [instance.position.x, instance.position.y];
+    return node;
+  }
+
+  async function syncGraph(state: { nodes: NodeInstance[]; connections: EngineConnection[] }) {
+    if (!editor || !areaPlugin) return;
+
+    nodeCount = state.nodes.length;
+
+    // Add / update nodes
+    for (const n of state.nodes) {
+      let reteNode = nodeMap.get(n.id);
+      if (!reteNode) {
+        reteNode = buildReteNode(n);
+        await editor.addNode(reteNode);
+        nodeMap.set(n.id, reteNode);
+      }
+      reteNode.position = [n.position.x, n.position.y];
+    }
+
+    // Remove stale nodes
+    for (const [id, reteNode] of Array.from(nodeMap.entries())) {
+      if (!state.nodes.find((n) => n.id === id)) {
+        editor.removeNode(reteNode);
+        nodeMap.delete(id);
+      }
+    }
+
+    // Add connections
+    for (const c of state.connections) {
+      if (connectionMap.has(c.id)) continue;
+      const src = nodeMap.get(c.sourceNodeId);
+      const tgt = nodeMap.get(c.targetNodeId);
+      if (!src || !tgt) continue;
+      const conn: any = new ClassicPreset.Connection(src, c.sourcePortId, tgt, c.targetPortId);
+      await editor.addConnection(conn);
+      connectionMap.set(c.id, conn);
+    }
+
+    // Remove stale connections
+    for (const [id, conn] of Array.from(connectionMap.entries())) {
+      if (!state.connections.find((c) => c.id === id)) {
+        editor.removeConnection(conn);
+        connectionMap.delete(id);
+      }
+    }
+  }
+
+  // Mirror Rete interactions back into nodeEngine
+  function bindEditorPipes() {
+    if (!editor) return;
+    editor.addPipe(async (ctx) => {
+      if (!ctx || typeof ctx !== 'object') return ctx;
+
+      // Connection created by user drag
+      if (ctx.type === 'connectioncreated') {
+        const c = ctx.data as any;
+        const engineConn: EngineConnection = {
+          id: String(c.id),
+          sourceNodeId: String(c.source),
+          sourcePortId: String(c.sourceOutput),
+          targetNodeId: String(c.target),
+          targetPortId: String(c.targetInput),
+        };
+        nodeEngine.addConnection(engineConn);
+      }
+
+      // Connection removed via UI
+      if (ctx.type === 'connectionremoved') {
+        nodeEngine.removeConnection((ctx.data as any).id);
+      }
+
+      // Node removed via UI
+      if (ctx.type === 'noderemoved') {
+        nodeEngine.removeNode((ctx.data as any).id);
+      }
+
+      return ctx;
+    });
+
+    // Track node drag to persist positions
+    if (areaPlugin) {
+      areaPlugin.addPipe((ctx: any) => {
+        if (ctx?.type === 'nodetranslated') {
+          const { id, position } = ctx.data ?? {};
+          if (id && position) {
+            nodeEngine.updateNodePosition(String(id), { x: position.x, y: position.y });
+          }
+        }
+        return ctx;
+      });
+    }
+  }
+
+  function addNode(type: string) {
+    const def = nodeRegistry.get(type);
+    if (!def) return;
+    const config: Record<string, unknown> = {};
+    for (const field of def.configSchema) {
+      config[field.key] = field.defaultValue;
+    }
     const newNode: NodeInstance = {
       id: generateId(),
       type,
-      position: { x: menuPosition.x, y: menuPosition.y },
+      position: { x: 100, y: 100 },
       config,
       inputValues: {},
       outputValues: {},
     };
-
     nodeEngine.addNode(newNode);
-    showNodeMenu = false;
   }
 
-  function handleConnect(event: CustomEvent<FlowConnection>) {
-    const conn = event.detail;
-    if (!conn.source || !conn.target) return;
-
-    const connection: Connection = {
-      id: `edge-${Date.now()}`,
-      sourceNodeId: conn.source,
-      sourcePortId: conn.sourceHandle ?? 'value',
-      targetNodeId: conn.target,
-      targetPortId: conn.targetHandle ?? 'value',
-    };
-
-    const success = nodeEngine.addConnection(connection);
-    if (!success) {
-      console.warn('Connection rejected (possibly cycle detected)');
+  function handleAddNode() {
+    if (selectedType) {
+      addNode(selectedType);
     }
-  }
-
-  // Svelte Flow v2 callback-style handlers
-  function handleConnectCallback(conn: FlowConnection) {
-    if (!conn.source || !conn.target) return;
-
-    const connection: Connection = {
-      id: `edge-${Date.now()}`,
-      sourceNodeId: conn.source,
-      sourcePortId: conn.sourceHandle ?? 'value',
-      targetNodeId: conn.target,
-      targetPortId: conn.targetHandle ?? 'value',
-    };
-
-    const success = nodeEngine.addConnection(connection);
-    if (!success) {
-      console.warn('Connection rejected (possibly cycle detected)');
-    }
-  }
-
-  function handleDeleteCallback({
-    nodes: deletedNodes,
-    edges: deletedEdges,
-  }: {
-    nodes: Node[];
-    edges: Edge[];
-  }) {
-    for (const edge of deletedEdges) {
-      nodeEngine.removeConnection(edge.id);
-    }
-    for (const node of deletedNodes) {
-      nodeEngine.removeNode(node.id);
-    }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function handleNodeDragStopCallback(...args: any[]) {
-    const node = args[1] as Node;
-    if (node?.id) {
-      nodeEngine.updateNodePosition(node.id, node.position);
-    }
-  }
-
-  function handlePaneClickCallback() {
-    showNodeMenu = false;
-  }
-
-  function handleEdgesDelete(event: CustomEvent<Edge[]>) {
-    for (const edge of event.detail) {
-      nodeEngine.removeConnection(edge.id);
-    }
-  }
-
-  function handleNodesDelete(event: CustomEvent<Node[]>) {
-    for (const node of event.detail) {
-      nodeEngine.removeNode(node.id);
-    }
-  }
-
-  function handleNodeDragStop(event: CustomEvent<{ node: Node }>) {
-    const { node } = event.detail;
-    nodeEngine.updateNodePosition(node.id, node.position);
-  }
-
-  function handleContextMenu(event: MouseEvent) {
-    event.preventDefault();
-    menuPosition = { x: event.clientX - 250, y: event.clientY - 100 };
-    showNodeMenu = true;
-  }
-
-  function handlePaneClick() {
-    showNodeMenu = false;
   }
 
   function handleToggleEngine() {
@@ -196,21 +199,43 @@
     }
   }
 
-  // Get available node types grouped by category
-  $: nodeCategories = nodeRegistry.listByCategory();
-
-  // Get available parameters for dropdown
-  $: availableParams = parameterRegistry.list().map((p) => ({
-    path: p.path,
-    label: p.metadata?.label || p.path,
-  }));
-
-  let nodesRegistered = false;
-
   onMount(async () => {
-    // Import nodes to trigger registration
-    await import('$lib/nodes/nodes');
-    nodesRegistered = true;
+    if (!container) return;
+
+    editor = new NodeEditor('fluffy-rete');
+    // @ts-expect-error runtime constructor expects container element
+    areaPlugin = new AreaPlugin(container);
+    const connection: any = new ConnectionPlugin();
+    const render: any = new SveltePlugin();
+    const history = new HistoryPlugin();
+
+    editor.use(areaPlugin);
+    editor.use(connection);
+    editor.use(render);
+    editor.use(history);
+
+    // Types in presets are strict to ClassicScheme; runtime is fine for our usage
+    // @ts-expect-error loose preset application
+    connection.addPreset(ConnectionPresets.classic.setup());
+    // @ts-expect-error preset type mismatch
+    render.addPreset(SveltePresets.classic.setup());
+
+    await syncGraph(get(graphStateStore));
+    graphUnsub = graphStateStore?.subscribe((state) => syncGraph(state));
+
+    // Fit view on first render
+    if (areaPlugin) {
+      AreaExtensions.zoomAt(areaPlugin, Array.from(nodeMap.values()));
+    }
+
+    bindEditorPipes();
+  });
+
+  onDestroy(() => {
+    graphUnsub?.();
+    editor?.clear();
+    nodeMap.clear();
+    connectionMap.clear();
   });
 </script>
 
@@ -225,7 +250,7 @@
         {$isRunningStore ? '⏹ Stop' : '▶ Start'}
       </Button>
       <Button variant="ghost" size="sm" on:click={handleClear}>🗑️ Clear</Button>
-      <span class="node-count">{$nodesStore.length} nodes</span>
+      <span class="node-count">{nodeCount} nodes</span>
     </div>
     <div class="toolbar-right">
       {#if $lastErrorStore}
@@ -234,39 +259,26 @@
     </div>
   </div>
 
-  <div class="canvas-wrapper" on:contextmenu={handleContextMenu}>
-    <SvelteFlow
-      nodes={nodesStore}
-      edges={edgesStore}
-      fitView
-      on:connect={handleConnect}
-      on:edgesdelete={handleEdgesDelete}
-      on:nodesdelete={handleNodesDelete}
-      on:nodedragstop={handleNodeDragStop}
-      on:paneclick={handlePaneClick}
-    >
-      <Controls />
-      <Background />
-      <MiniMap />
-    </SvelteFlow>
+  <div class="canvas-actions">
+    <select bind:value={selectedType}>
+      <option value="">Add node...</option>
+      {#each [...nodeCategories] as [category, defs]}
+        <optgroup label={category}>
+          {#each defs as def}
+            <option value={def.type}>{def.label}</option>
+          {/each}
+        </optgroup>
+      {/each}
+    </select>
+    <Button variant="secondary" size="sm" on:click={handleAddNode} disabled={!selectedType}>Add</Button>
   </div>
 
-  <!-- Add Node Menu -->
-  {#if showNodeMenu}
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-    <div class="node-menu" style="left: {menuPosition.x}px; top: {menuPosition.y}px;">
-      <div class="menu-header">Add Node</div>
-      {#each [...nodeCategories] as [category, nodeDefs]}
-        <div class="menu-category">{category}</div>
-        {#each nodeDefs as def}
-          <button class="menu-item" on:click={() => handleAddNode(def.type)}>
-            {def.label}
-          </button>
-        {/each}
-      {/each}
-    </div>
-  {/if}
+  <div
+    class="canvas-wrapper"
+    bind:this={container}
+    role="application"
+    aria-label="Node graph editor"
+  ></div>
 </div>
 
 <style>
@@ -277,6 +289,7 @@
     background: var(--bg-primary, #1a1a1a);
     border-radius: var(--radius-md, 8px);
     overflow: hidden;
+    border: 1px solid var(--border-color, #444);
   }
 
   .canvas-toolbar {
@@ -304,70 +317,24 @@
     font-size: var(--text-sm, 0.875rem);
   }
 
-  .canvas-wrapper {
-    flex: 1;
-    position: relative;
-  }
-
-  .node-menu {
-    position: fixed;
-    z-index: 1000;
-    min-width: 180px;
-    background: var(--bg-secondary, #252525);
-    border: 1px solid var(--border-color, #444);
-    border-radius: var(--radius-md, 8px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    overflow: hidden;
-  }
-
-  .menu-header {
+  .canvas-actions {
+    display: flex;
+    gap: var(--space-sm, 8px);
+    align-items: center;
     padding: var(--space-sm, 8px) var(--space-md, 16px);
-    font-weight: 600;
-    color: var(--text-primary, #fff);
     background: var(--bg-tertiary, #2a2a2a);
     border-bottom: 1px solid var(--border-color, #444);
   }
 
-  .menu-category {
-    padding: var(--space-xs, 4px) var(--space-md, 16px);
-    font-size: var(--text-xs, 0.75rem);
-    color: var(--text-secondary, #aaa);
-    background: var(--bg-primary, #1a1a1a);
-  }
-
-  .menu-item {
-    display: block;
-    width: 100%;
-    padding: var(--space-xs, 4px) var(--space-md, 16px);
-    text-align: left;
-    background: none;
-    border: none;
+  .canvas-actions select {
+    background: var(--bg-secondary, #252525);
     color: var(--text-primary, #fff);
-    cursor: pointer;
-    font-size: var(--text-sm, 0.875rem);
+    border: 1px solid var(--border-color, #444);
+    border-radius: var(--radius-sm, 6px);
+    padding: 6px 10px;
   }
 
-  .menu-item:hover {
-    background: var(--color-primary, #6366f1);
-  }
-
-  /* Svelte Flow overrides for dark theme */
-  :global(.svelte-flow) {
-    background: var(--bg-primary, #1a1a1a) !important;
-  }
-
-  :global(.svelte-flow__node) {
-    background: var(--bg-secondary, #252525) !important;
-    border: 1px solid var(--border-color, #444) !important;
-    border-radius: 6px !important;
-    color: var(--text-primary, #fff) !important;
-  }
-
-  :global(.svelte-flow__node.selected) {
-    border-color: var(--color-primary, #6366f1) !important;
-  }
-
-  :global(.svelte-flow__edge path) {
-    stroke: var(--color-primary, #6366f1) !important;
+  .canvas-wrapper {
+    flex: 1;
   }
 </style>
