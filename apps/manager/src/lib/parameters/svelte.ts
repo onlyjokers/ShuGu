@@ -1,46 +1,63 @@
-import { readable, writable, type Readable, type Writable } from 'svelte/store';
+/**
+ * Svelte integration utilities for Parameter system.
+ * Re-exports from the stores module for convenient access.
+ */
+import { writable, type Writable } from 'svelte/store';
 import type { Parameter } from './parameter';
-import type { ParameterSource } from './types';
+import type { ParameterChange } from './types';
 
 /**
- * One-way Svelte readable store that mirrors a Parameter's effective value.
+ * Creates a simple writable store that syncs with a Parameter.
+ * This is a simpler version that just exposes the effective value.
+ * For full base/effective/offline state, use createParamStore from stores/param-store.ts
  */
-export function parameterReadable<T>(param: Parameter<T>): Readable<T> {
-  return readable(param.effectiveValue, (set) => {
-    const stop = param.addListener((value) => set(value));
-    set(param.effectiveValue);
-    return stop;
-  });
-}
+export function parameterWritable<T>(parameter: Parameter<T>): Writable<T> {
+  const store = writable<T>(parameter.effectiveValue);
 
-/**
- * Two-way Svelte writable store. Updates from UI propagate into the Parameter,
- * and Parameter changes propagate back without causing loops.
- */
-export function parameterWritable<T>(
-  param: Parameter<T>,
-  source: ParameterSource = 'ui'
-): Writable<T> {
-  const base = writable<T>(param.effectiveValue);
-  let fromParam = false;
-
-  const stopParam = param.addListener((value) => {
-    fromParam = true;
-    base.set(value);
-    fromParam = false;
-  });
-
-  const { subscribe, set } = base;
-
-  return {
-    subscribe,
-    set: (value: T) => {
-      if (fromParam) return;
-      param.setValue(value, source);
-    },
-    update: (updater) => {
-      const next = updater(param.effectiveValue);
-      param.setValue(next, source);
-    },
+  // Subscribe to parameter changes
+  let unsubscribe: (() => void) | null = null;
+  
+  const originalSubscribe = store.subscribe;
+  let subscriberCount = 0;
+  
+  // Override subscribe to manage listener lifecycle
+  store.subscribe = (run, invalidate?) => {
+    subscriberCount++;
+    
+    if (subscriberCount === 1 && !unsubscribe) {
+      unsubscribe = parameter.addListener((val: T, _change: ParameterChange<T>) => {
+        store.set(val);
+      });
+    }
+    
+    const unsub = originalSubscribe(run, invalidate);
+    
+    return () => {
+      unsub();
+      subscriberCount--;
+      if (subscriberCount === 0 && unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+      }
+    };
   };
+
+  // Override set to update parameter
+  const originalSet = store.set;
+  store.set = (value: T) => {
+    parameter.setValue(value, 'UI');
+    originalSet(value);
+  };
+
+  // Override update to use parameter
+  store.update = (fn: (value: T) => T) => {
+    const newValue = fn(parameter.effectiveValue);
+    parameter.setValue(newValue, 'UI');
+    originalSet(newValue);
+  };
+
+  return store;
 }
+
+// Re-export for convenience
+export { createParamStore, type ParamStore, type ParamStoreValue } from '../stores/param-store';

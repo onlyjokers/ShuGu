@@ -52,7 +52,6 @@
   let screenSecondaryColor = '#ffffff';
 
   let soundUrl = '';
-  let soundUrl = '';
   let soundVolume = 1;
   let soundLoop = false;
 

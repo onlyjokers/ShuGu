@@ -4,15 +4,12 @@
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
-  import { selectedClients } from '$lib/stores/manager'; // [NEW]
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
-  import ControlPanel from '$lib/components/ControlPanel.svelte'; // [NEW]
-  import AutoControlPanel from '$lib/components/AutoControlPanel.svelte'; // [NEW]
   import ClientList from '$lib/components/ClientList.svelte';
   import SensorDisplay from '$lib/components/SensorDisplay.svelte';
-  // import PluginControl from '$lib/components/PluginControl.svelte'; // [REMOVED]
+  import PluginControl from '$lib/components/PluginControl.svelte';
   import Button from '$lib/components/ui/Button.svelte';
 
   // Feature Controls
@@ -23,6 +20,7 @@
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
   import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
+  import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
@@ -30,7 +28,7 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'midi' = 'dashboard';
+  let activePage: 'dashboard' | 'auto' | 'midi' = 'dashboard';
 
   // Global Sync State
   let useSync = true;
@@ -190,21 +188,7 @@
       <div slot="sidebar" class="sidebar-content">
         <ClientList />
         <div class="sidebar-divider"></div>
-        <!-- Control Panel (Right Side) -->
-        <section class="panel-section">
-          <!-- New Auto Panel for selected client(s) -->
-          {#if $selectedClients.length > 0}
-            <!-- For demo/phase 2, just show panel for first selected client to prove concept -->
-            <div class="card mb-4">
-              <div class="card-header">
-                <h3 class="card-title">Auto-UI (Active: {$selectedClients[0].clientId})</h3>
-              </div>
-              <AutoControlPanel clientId={$selectedClients[0].clientId} />
-            </div>
-          {/if}
-
-          <ControlPanel />
-        </section>
+        <PluginControl />
       </div>
 
       <div slot="right-sidebar">
@@ -217,6 +201,9 @@
           on:click={() => (activePage = 'dashboard')}
         >
           控制台
+        </button>
+        <button class:active={activePage === 'auto'} on:click={() => (activePage = 'auto')}>
+          🎛️ Auto UI
         </button>
         <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
           MIDI Mapper
@@ -243,6 +230,12 @@
           <div class="grid-item">
             <SceneControl {useSync} />
           </div>
+        </div>
+      </div>
+
+      <div class:hide={activePage !== 'auto'}>
+        <div class="auto-pane">
+          <AutoControlPanel />
         </div>
       </div>
 
@@ -391,6 +384,10 @@
   }
 
   .midi-pane {
+    margin-top: var(--space-sm);
+  }
+
+  .auto-pane {
     margin-top: var(--space-sm);
   }
 

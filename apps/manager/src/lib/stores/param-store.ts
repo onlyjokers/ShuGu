@@ -1,62 +1,88 @@
+/**
+ * Svelte Store Adapter for Parameter objects.
+ * Bridges OOP Parameter class to Svelte's reactive store system.
+ */
 import { readable, type Readable } from 'svelte/store';
 import type { Parameter } from '../parameters/parameter';
+import type { ParameterChange } from '../parameters/types';
 
-export interface ParamStoreValue<T> {
-  value: T;          // Current effective value (alias)
-  base: T;           // Base value (User controlled)
-  effective: T;      // Effective value (Base + Modulation)
+export interface ParamStoreValue<T = unknown> {
+  base: T;
+  effective: T;
   isOffline: boolean;
+  min?: number;
+  max?: number;
+  metadata?: Record<string, unknown>;
 }
 
-export interface ParamStore<T> extends Readable<ParamStoreValue<T>> {
-  set(value: T): void;
+export interface ParamStore<T = unknown> extends Readable<ParamStoreValue<T>> {
+  /** Set the base value (from UI) */
+  set: (value: T) => void;
+  /** Get the underlying Parameter object */
+  getParameter: () => Parameter<T>;
 }
 
 /**
- * Creates a Svelte Store from a Parameter.
- * Automatically manages listeners (subscribe/unsubscribe).
+ * Creates a Svelte store that wraps a Parameter object.
+ * Automatically handles listener lifecycle (no memory leaks).
  */
-export function createParamStore<T>(param: Parameter<T>): ParamStore<T> {
+export function createParamStore<T>(parameter: Parameter<T>): ParamStore<T> {
+  // Create readable store with custom start/stop logic
   const { subscribe } = readable<ParamStoreValue<T>>(
-    // Initial value
     {
-      value: param.effectiveValue,
-      base: param.baseValue,
-      effective: param.effectiveValue,
-      isOffline: param.isOffline,
+      base: parameter.baseValue,
+      effective: parameter.effectiveValue,
+      isOffline: parameter.isOffline,
+      min: parameter.min,
+      max: parameter.max,
+      metadata: parameter.metadata as Record<string, unknown>,
     },
-    // Start function (called when first subscriber joins)
     (set) => {
-      // Listener for parameter changes
-      const removeListener = param.addListener((val, change) => {
+      // This function runs when first subscriber connects
+      const updateStore = () => {
         set({
-          value: param.effectiveValue,
-          base: param.baseValue,
-          effective: param.effectiveValue,
-          isOffline: param.isOffline,
+          base: parameter.baseValue,
+          effective: parameter.effectiveValue,
+          isOffline: parameter.isOffline,
+          min: parameter.min,
+          max: parameter.max,
+          metadata: parameter.metadata as Record<string, unknown>,
         });
+      };
+
+      // Subscribe to parameter changes
+      const unsubscribe = parameter.addListener((_val: T, _change: ParameterChange<T>) => {
+        updateStore();
       });
 
-      // Since 'isOffline' might not trigger value change but is important,
-      // in a real app we'd have an event for that too. 
-      // For now, we assume parameter updates emit for offline state changes if implemented,
-      // or we trust that value updates cover most cases. 
-      // TODO: Add 'status' event to Parameter class if needed specifically for offline/online toggles without value change.
-
-      // Stop function (called when last subscriber leaves)
+      // Return cleanup function (runs when last subscriber disconnects)
       return () => {
-        removeListener();
+        unsubscribe();
       };
     }
   );
 
   return {
     subscribe,
-    /**
-     * Set the Base Value (User Action)
-     */
     set: (value: T) => {
-      param.setValue(value, 'UI');
+      parameter.setValue(value, 'UI');
     },
+    getParameter: () => parameter,
   };
+}
+
+/**
+ * Utility to create stores for all parameters under a prefix.
+ */
+import { parameterRegistry } from '../parameters/registry';
+
+export function createParamStoresForClient(clientId: string): Map<string, ParamStore<unknown>> {
+  const stores = new Map<string, ParamStore<unknown>>();
+  const params = parameterRegistry.list(`client/${clientId}`);
+  
+  for (const param of params) {
+    stores.set(param.path, createParamStore(param));
+  }
+  
+  return stores;
 }

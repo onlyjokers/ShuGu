@@ -1,41 +1,79 @@
 <script lang="ts">
-  import type { Parameter } from '../../parameters/parameter';
+  import { createEventDispatcher } from 'svelte';
+  import type { Parameter } from '$lib/parameters/parameter';
   import ParamSlider from './widgets/ParamSlider.svelte';
   import ParamToggle from './widgets/ParamToggle.svelte';
   import ParamColor from './widgets/ParamColor.svelte';
+  import ParamSelect from './widgets/ParamSelect.svelte';
 
   export let parameter: Parameter<any>;
+  export let label: string | undefined = undefined;
 
-  // Infer widget type if not explicitly set
-  $: type = parameter.metadata?.widgetType || inferWidgetType(parameter);
+  const dispatch = createEventDispatcher<{
+    contextmenu: { parameter: Parameter<any>; event: MouseEvent };
+  }>();
 
-  function inferWidgetType(p: Parameter<any>): string {
-    if (p.type === 'number') return 'slider';
-    if (p.type === 'boolean') return 'toggle';
-    if (p.type === 'string' && (p.path.includes('color') || p.path.includes('Color')))
-      return 'color';
-    return 'unknown';
+  function handleContextMenu(e: CustomEvent<{ parameter: Parameter<any>; event: MouseEvent }>) {
+    dispatch('contextmenu', e.detail);
+  }
+
+  // Determine widget type
+  $: widgetType = parameter.metadata?.widgetType ?? inferWidgetType(parameter);
+
+  function inferWidgetType(param: Parameter<any>): string {
+    switch (param.type) {
+      case 'number':
+        return 'slider';
+      case 'boolean':
+        return 'toggle';
+      case 'enum':
+        return 'select';
+      case 'color':
+        return 'color';
+      case 'string':
+        // Check if it looks like a color
+        if (param.path.includes('color') || param.metadata?.widgetType === 'color') {
+          return 'color';
+        }
+        return 'input';
+      default:
+        return 'input';
+    }
   }
 </script>
 
-{#if type === 'slider' && parameter.type === 'number'}
-  <ParamSlider {parameter} on:contextmenu />
-{:else if type === 'toggle' && parameter.type === 'boolean'}
-  <ParamToggle {parameter} on:contextmenu />
-{:else if type === 'color'}
-  <ParamColor {parameter} on:contextmenu />
+{#if widgetType === 'slider' || widgetType === 'knob'}
+  <ParamSlider {parameter} {label} on:contextmenu={handleContextMenu} />
+{:else if widgetType === 'toggle'}
+  <ParamToggle {parameter} {label} on:contextmenu={handleContextMenu} />
+{:else if widgetType === 'color'}
+  <ParamColor {parameter} {label} on:contextmenu={handleContextMenu} />
+{:else if widgetType === 'select'}
+  <ParamSelect {parameter} {label} on:contextmenu={handleContextMenu} />
 {:else}
-  <!-- Fallback or Unknown -->
-  <div class="fallback-widget">
-    <span>{parameter.metadata?.label || parameter.path} ({parameter.type})</span>
+  <!-- Fallback: simple text display -->
+  <div class="param-fallback">
+    <span class="fallback-label">{label ?? parameter.path}</span>
+    <span class="fallback-value">{parameter.effectiveValue}</span>
   </div>
 {/if}
 
 <style>
-  .fallback-widget {
-    padding: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    color: #94a3b8;
-    font-size: 0.8rem;
+  .param-fallback {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--space-sm, 8px);
+    background: var(--bg-tertiary, #2a2a2a);
+    border-radius: var(--radius-sm, 4px);
+  }
+
+  .fallback-label {
+    color: var(--text-secondary, #a0a0a0);
+    font-size: var(--text-sm, 0.875rem);
+  }
+
+  .fallback-value {
+    color: var(--text-primary, #ffffff);
+    font-family: var(--font-mono, monospace);
   }
 </style>
