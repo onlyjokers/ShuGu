@@ -26,7 +26,8 @@ export class ParameterRegistry {
     }
 
     const param = new Parameter<T>({ ...options, path });
-    this.parameters.set(path, param);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.parameters.set(path, param as any);
     return param;
   }
 

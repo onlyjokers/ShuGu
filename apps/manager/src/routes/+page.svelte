@@ -21,6 +21,7 @@
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
   import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
   import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
+  import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
@@ -28,7 +29,7 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'auto' | 'midi' = 'dashboard';
+  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'midi' = 'dashboard';
 
   // Global Sync State
   let useSync = true;
@@ -205,8 +206,14 @@
         <button class:active={activePage === 'auto'} on:click={() => (activePage = 'auto')}>
           🎛️ Auto UI
         </button>
+        <button
+          class:active={activePage === 'registry-midi'}
+          on:click={() => (activePage = 'registry-midi')}
+        >
+          🎹 Registry MIDI
+        </button>
         <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
-          MIDI Mapper
+          MIDI (Legacy)
         </button>
       </div>
 
@@ -236,6 +243,12 @@
       <div class:hide={activePage !== 'auto'}>
         <div class="auto-pane">
           <AutoControlPanel />
+        </div>
+      </div>
+
+      <div class:hide={activePage !== 'registry-midi'}>
+        <div class="midi-pane">
+          <RegistryMidiPanel />
         </div>
       </div>
 

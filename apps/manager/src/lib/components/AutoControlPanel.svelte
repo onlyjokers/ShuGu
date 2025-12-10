@@ -3,6 +3,7 @@
   import { parameterRegistry } from '$lib/parameters/registry';
   import type { Parameter } from '$lib/parameters/parameter';
   import ParamWidgetFactory from './parameters/ParamWidgetFactory.svelte';
+  import MidiLearnPopup from './MidiLearnPopup.svelte';
 
   export let clientId: string | undefined = undefined;
 
@@ -17,6 +18,10 @@
   }
 
   let groups: ParamGroup[] = [];
+
+  // MIDI Learn state
+  let showMidiLearn = false;
+  let midiLearnTarget: { path: string; label: string; x: number; y: number } | null = null;
 
   // Refresh params from registry
   function refreshParams() {
@@ -75,7 +80,23 @@
   function handleParamContextMenu(
     e: CustomEvent<{ parameter: Parameter<any>; event: MouseEvent }>
   ) {
+    const { parameter, event } = e.detail;
+
+    // Show MIDI Learn popup
+    showMidiLearn = true;
+    midiLearnTarget = {
+      path: parameter.path,
+      label: parameter.metadata?.label || parameter.path.split('/').pop() || parameter.path,
+      x: event.clientX,
+      y: event.clientY,
+    };
+
     dispatch('paramContextMenu', e.detail);
+  }
+
+  function handleMidiLearnClose() {
+    showMidiLearn = false;
+    midiLearnTarget = null;
   }
 </script>
 
@@ -118,6 +139,18 @@
     </div>
   {/if}
 </div>
+
+<!-- MIDI Learn Popup -->
+{#if showMidiLearn && midiLearnTarget}
+  <MidiLearnPopup
+    targetPath={midiLearnTarget.path}
+    targetLabel={midiLearnTarget.label}
+    x={midiLearnTarget.x}
+    y={midiLearnTarget.y}
+    on:close={handleMidiLearnClose}
+    on:bound={handleMidiLearnClose}
+  />
+{/if}
 
 <style>
   .auto-control-panel {

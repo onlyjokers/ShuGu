@@ -28,7 +28,7 @@
 
   $: param = parameterRegistry.get(path);
   $: store = param ? parameterWritable(param) : null;
-  $: widget = param?.metadata?.widget;
+  $: widget = param?.metadata?.widgetType;
   $: type = param?.type;
   $: min = param?.min;
   $: max = param?.max;
@@ -56,17 +56,17 @@
     {max}
     step={step ?? 0.01}
     label={label ?? param.metadata?.label ?? param.path}
-    disabled={disabled}
+    {disabled}
   />
 {:else if type === 'number'}
   <Input
     type="number"
     bind:value={$store}
-    min={min}
-    max={max}
-    step={step}
+    {min}
+    {max}
+    {step}
     label={label ?? param.metadata?.label ?? param.path}
-    disabled={disabled}
+    {disabled}
   />
 {:else if type === 'boolean'}
   <Toggle
@@ -83,18 +83,14 @@
       label: opt.label ?? opt.value,
     })) ?? []}
     label={label ?? param.metadata?.label ?? param.path}
-    disabled={disabled}
+    {disabled}
   />
 {:else if type === 'trigger'}
-  <Button variant="secondary" size="sm" fullWidth on:click={handleTrigger} disabled={disabled}>
+  <Button variant="secondary" size="sm" fullWidth on:click={handleTrigger} {disabled}>
     {label ?? param.metadata?.label ?? param.path}
   </Button>
 {:else}
-  <Input
-    bind:value={$store}
-    label={label ?? param.metadata?.label ?? param.path}
-    disabled={disabled}
-  />
+  <Input bind:value={$store} label={label ?? param.metadata?.label ?? param.path} {disabled} />
 {/if}
 
 <style>
