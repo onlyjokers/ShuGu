@@ -3,8 +3,7 @@
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import { ParameterControl } from '$lib/components/parameters';
-  import { registerDefaultControlParameters } from '$lib/parameters/presets';
-  import { parameterWritable } from '$lib/parameters';
+  import { parameterRegistry, parameterWritable } from '$lib/parameters';
   import { streamEnabled } from '$lib/streaming/streaming';
 
   export let useSync = true;
@@ -14,13 +13,13 @@
   let updateTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Register & bind parameters (single source of truth)
-  const params = registerDefaultControlParameters();
-  const frequency = parameterWritable(params['controls/synth/frequency']);
-  const duration = parameterWritable(params['controls/synth/duration']);
-  const volume = parameterWritable(params['controls/synth/volume']);
-  const modDepth = parameterWritable(params['controls/synth/modDepth']);
-  const modLfo = parameterWritable(params['controls/synth/modLfo']);
-  const waveform = parameterWritable(params['controls/synth/waveform']);
+  type SynthWaveform = 'sine' | 'square' | 'sawtooth' | 'triangle';
+  const frequency = parameterWritable(parameterRegistry.get<number>('controls/synth/frequency')!);
+  const duration = parameterWritable(parameterRegistry.get<number>('controls/synth/duration')!);
+  const volume = parameterWritable(parameterRegistry.get<number>('controls/synth/volume')!);
+  const modDepth = parameterWritable(parameterRegistry.get<number>('controls/synth/modDepth')!);
+  const modLfo = parameterWritable(parameterRegistry.get<number>('controls/synth/modLfo')!);
+  const waveform = parameterWritable(parameterRegistry.get<SynthWaveform>('controls/synth/waveform')!);
 
   $: hasSelection = $state.selectedClientIds.length > 0;
 
@@ -40,7 +39,7 @@
         frequency: freq,
         duration: durMs,
         volume: vol,
-        waveform: $waveform as typeof $waveform,
+        waveform: $waveform,
         modFrequency: depth > 0 ? lfo : undefined,
         modDepth: depth > 0 ? depth : undefined,
       },
@@ -64,7 +63,7 @@
         {
           frequency: Number($frequency) || 180,
           volume: clamp01(Number($volume) || 0.7),
-          waveform: $waveform as typeof $waveform,
+          waveform: $waveform,
           modFrequency: depth > 0 ? lfo : undefined,
           modDepth: depth > 0 ? depth : undefined,
           durationMs: Number($duration) || 200,

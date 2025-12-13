@@ -24,6 +24,14 @@
   $: asciiOn = $controlState.asciiOn;
   $: asciiRes = $controlState.asciiResolution;
 
+  function handleSceneChange(e: CustomEvent<Event>) {
+    const raw = e.detail;
+    const next = (raw.target as HTMLSelectElement | null)?.value;
+    if (!next) return;
+    selectedScene = next;
+    updateControlState({ selectedScene: next });
+  }
+
   function getExecuteAt() {
     if (!useSync) return undefined;
     return Date.now() + $state.timeSync.offset + syncDelay;
@@ -52,7 +60,7 @@
         label="Visual Scene"
         options={scenes}
         bind:value={selectedScene}
-        on:change={() => updateControlState({ selectedScene })}
+        on:change={handleSceneChange}
       />
       <div class="button-group">
         <Button

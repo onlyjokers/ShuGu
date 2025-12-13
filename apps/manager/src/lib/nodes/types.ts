@@ -2,14 +2,20 @@
  * Node Graph Type Definitions
  */
 
-export type PortType = 'number' | 'boolean' | 'string' | 'any';
+export type PortType = 'number' | 'boolean' | 'string' | 'client' | 'command' | 'any';
 export type NodeMode = 'REMOTE' | 'MODULATION';
+export type PortKind = 'data' | 'sink';
 
 export interface NodePort {
   id: string;
   label: string;
   type: PortType;
   defaultValue?: unknown;
+  /**
+   * `data` ports participate in graph execution order (DAG).
+   * `sink` ports are side-effect inputs (delivered after compute), so they don't create cycles.
+   */
+  kind?: PortKind;
 }
 
 export interface NodeDefinition {
@@ -24,6 +30,15 @@ export interface NodeDefinition {
     config: Record<string, unknown>,
     context: ProcessContext
   ) => Record<string, unknown>;
+  /**
+   * Optional hook for sink inputs (side-effect ports).
+   * Called after the compute pass when sink values change.
+   */
+  onSink?: (
+    inputs: Record<string, unknown>,
+    config: Record<string, unknown>,
+    context: ProcessContext
+  ) => void;
 }
 
 export interface ConfigField {

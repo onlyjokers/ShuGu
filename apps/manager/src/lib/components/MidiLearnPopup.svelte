@@ -1,7 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
-  import { midiParamBridge, type MidiBindingMode } from '$lib/features/midi/midi-param-bridge';
+  import {
+    midiParamBridge,
+    type MidiBindingMode,
+    type MidiTarget,
+  } from '$lib/features/midi/midi-param-bridge';
   import Button from '$lib/components/ui/Button.svelte';
 
   export let targetPath: string;
@@ -17,10 +21,13 @@
 
   let lastMessage = midiService.lastMessage;
   let learnMode = midiParamBridge.learnMode;
-  let capturedEvent: MidiEvent | null = null;
+  let started = false;
+  let closed = false;
 
   onMount(() => {
-    midiParamBridge.startLearn(targetPath, defaultMode);
+    const target: MidiTarget = { type: 'PARAM', path: targetPath };
+    midiParamBridge.startLearn(target, defaultMode);
+    started = true;
   });
 
   onDestroy(() => {
@@ -30,13 +37,14 @@
   });
 
   // Watch for successful binding
-  $: if (!$learnMode.active && $learnMode.targetPath === null) {
-    // Learn completed
+  $: if (started && !closed && !$learnMode.active && $learnMode.target === null) {
     dispatch('bound', { targetPath });
     dispatch('close');
+    closed = true;
   }
 
   function handleCancel() {
+    closed = true;
     midiParamBridge.cancelLearn();
     dispatch('close');
   }

@@ -6,6 +6,7 @@ import { writable, type Writable } from 'svelte/store';
 import { normalizeMidi } from './midi-math';
 
 export interface MidiEvent {
+  inputId: string;
   type: 'cc' | 'note' | 'pitchbend';
   channel: number;
   number?: number;  // CC number or note number
@@ -25,6 +26,7 @@ type MidiMessageHandler = (event: MidiEvent) => void;
 class MidiServiceClass {
   private access: MIDIAccess | null = null;
   private activeInputId: string | null = null;
+  private boundInputIds: Set<string> = new Set();
   private handlers: Set<MidiMessageHandler> = new Set();
   
   // Stores for UI
@@ -61,6 +63,12 @@ class MidiServiceClass {
     const inputList: MidiInput[] = [];
     this.access.inputs.forEach((input) => {
       inputList.push({ id: input.id, name: input.name || `MIDI Device ${input.id}` });
+
+      // Listen to all inputs so different bindings can map to different devices.
+      if (!this.boundInputIds.has(input.id)) {
+        input.onmidimessage = (e) => this.handleMidiMessage(e, input.id);
+        this.boundInputIds.add(input.id);
+      }
     });
     
     this.inputs.set(inputList);
@@ -73,25 +81,15 @@ class MidiServiceClass {
 
   selectInput(id: string): void {
     if (!this.access) return;
-    
-    // Detach from old input
-    if (this.activeInputId) {
-      const oldInput = this.access.inputs.get(this.activeInputId);
-      if (oldInput) {
-        oldInput.onmidimessage = null;
-      }
-    }
-    
-    // Attach to new input
+
+    // Selection is used for UI monitor and for scoping MIDI learn.
     const input = this.access.inputs.get(id);
-    if (input) {
-      input.onmidimessage = (e) => this.handleMidiMessage(e);
-      this.activeInputId = id;
-      this.selectedInputId.set(id);
-    }
+    if (!input) return;
+    this.activeInputId = id;
+    this.selectedInputId.set(id);
   }
 
-  private handleMidiMessage(e: MIDIMessageEvent): void {
+  private handleMidiMessage(e: MIDIMessageEvent, inputId: string): void {
     const [status, data1 = 0, data2 = 0] = e.data || [];
     const command = status & 0xf0;
     const channel = status & 0x0f;
@@ -102,6 +100,7 @@ class MidiServiceClass {
     if (command === 0x90 || command === 0x80) {
       const velocity = command === 0x80 ? 0 : data2;
       event = {
+        inputId,
         type: 'note',
         channel,
         number: data1,
@@ -114,6 +113,7 @@ class MidiServiceClass {
     // Control Change
     else if (command === 0xb0) {
       event = {
+        inputId,
         type: 'cc',
         channel,
         number: data1,
@@ -126,6 +126,7 @@ class MidiServiceClass {
     else if (command === 0xe0) {
       const value14 = data1 + (data2 << 7);
       event = {
+        inputId,
         type: 'pitchbend',
         channel,
         rawValue: value14,
@@ -152,12 +153,12 @@ class MidiServiceClass {
   }
 
   destroy(): void {
-    if (this.access && this.activeInputId) {
-      const input = this.access.inputs.get(this.activeInputId);
-      if (input) {
+    if (this.access) {
+      this.access.inputs.forEach((input) => {
         input.onmidimessage = null;
-      }
+      });
     }
+    this.boundInputIds.clear();
     this.handlers.clear();
   }
 }

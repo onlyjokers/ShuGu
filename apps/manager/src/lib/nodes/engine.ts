@@ -63,6 +63,13 @@ class NodeEngineClass {
     }
   }
 
+  updateNodeInputValue(nodeId: string, portId: string, value: unknown): void {
+    const node = this.nodes.get(nodeId);
+    if (!node) return;
+    node.inputValues[portId] = value;
+    // Avoid syncing graph state on every knob turn; graphState holds live references anyway.
+  }
+
   updateNodePosition(nodeId: string, position: { x: number; y: number }): void {
     const node = this.nodes.get(nodeId);
     if (node) {
@@ -145,6 +152,14 @@ class NodeEngineClass {
     }
     
     for (const conn of this.connections) {
+      const targetNode = nodeMap.get(conn.targetNodeId);
+      if (targetNode) {
+        const targetDef = nodeRegistry.get(targetNode.type);
+        const targetPort = targetDef?.inputs.find((p) => p.id === conn.targetPortId);
+        // Sink edges do not participate in the execution DAG.
+        if (targetPort?.kind === 'sink') continue;
+      }
+
       const currentIn = inDegree.get(conn.targetNodeId) ?? 0;
       inDegree.set(conn.targetNodeId, currentIn + 1);
       
@@ -222,6 +237,7 @@ class NodeEngineClass {
       // Gather inputs from connected outputs
       const inputs: Record<string, unknown> = {};
       for (const port of definition.inputs) {
+        if (port.kind === 'sink') continue;
         // Check for connected output
         const conn = this.connections.find(
           (c) => c.targetNodeId === node.id && c.targetPortId === port.id
@@ -235,6 +251,7 @@ class NodeEngineClass {
           // Use default or stored input value
           inputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
         }
+        node.inputValues[port.id] = inputs[port.id];
       }
 
       // Execute node
@@ -246,6 +263,63 @@ class NodeEngineClass {
         console.error(`[NodeEngine] Error in node ${node.id}:`, err);
       }
     }
+
+    // Deliver sink inputs (side effects) after compute pass
+    for (const node of this.executionOrder) {
+      const definition = nodeRegistry.get(node.type);
+      if (!definition?.onSink) continue;
+
+      const sinkInputs: Record<string, unknown> = {};
+      for (const conn of this.connections) {
+        if (conn.targetNodeId !== node.id) continue;
+
+        const port = definition.inputs.find((p) => p.id === conn.targetPortId);
+        if (!port || port.kind !== 'sink') continue;
+
+        const sourceNode = this.nodes.get(conn.sourceNodeId);
+        if (!sourceNode) continue;
+
+        const value = sourceNode.outputValues[conn.sourcePortId];
+        const prev = sinkInputs[conn.targetPortId];
+        if (prev === undefined) {
+          sinkInputs[conn.targetPortId] = value;
+        } else if (Array.isArray(prev)) {
+          prev.push(value);
+        } else {
+          sinkInputs[conn.targetPortId] = [prev, value];
+        }
+      }
+
+      if (Object.keys(sinkInputs).length === 0) continue;
+
+      let changed = false;
+      for (const [portId, next] of Object.entries(sinkInputs)) {
+        if (!this.deepEqual(node.inputValues[portId], next)) {
+          changed = true;
+        }
+        node.inputValues[portId] = next;
+      }
+
+      if (!changed) continue;
+      context.nodeId = node.id;
+      try {
+        definition.onSink(sinkInputs, node.config, context);
+      } catch (err) {
+        console.error(`[NodeEngine] Sink handler error in node ${node.id}:`, err);
+      }
+    }
+  }
+
+  private deepEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+      try {
+        return JSON.stringify(a) === JSON.stringify(b);
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   // ========== Lifecycle ==========
@@ -290,7 +364,7 @@ class NodeEngineClass {
   loadGraph(state: GraphState): void {
     this.nodes.clear();
     for (const node of state.nodes) {
-      this.nodes.set(node.id, { ...node, inputValues: {}, outputValues: {} });
+      this.nodes.set(node.id, { ...node, inputValues: { ...(node.inputValues ?? {}) }, outputValues: {} });
     }
     this.connections = [...state.connections];
     this.needsRecompile = true;

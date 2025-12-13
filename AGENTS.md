@@ -21,6 +21,7 @@
 - Components: `PascalCase.svelte`; utilities/helpers: `camelCase.ts`.
 - Favor small, pure functions inside `packages/*`; avoid side-effects in module scope.
 - Run `pnpm format` before pushing; Prettier config is repo-wide.
+- Remember to comment when adding new features.
 
 ## Testing Guidelines
 - Add focused unit tests alongside code (e.g., `*.spec.ts`) when introducing protocol or DSP changes.

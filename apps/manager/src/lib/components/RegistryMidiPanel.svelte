@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
-  import { midiParamBridge, type MidiBinding } from '$lib/features/midi/midi-param-bridge';
+  import { midiService } from '$lib/features/midi/midi-service';
+  import {
+    midiParamBridge,
+    type MidiBinding,
+    type MidiTarget,
+  } from '$lib/features/midi/midi-param-bridge';
   import { parameterRegistry } from '$lib/parameters/registry';
   import Button from '$lib/components/ui/Button.svelte';
 
@@ -11,28 +15,118 @@
   let bindings = midiParamBridge.bindings;
   let learnMode = midiParamBridge.learnMode;
 
-  let availableParams: { path: string; label: string }[] = [];
-  let newTargetPath = '';
+  type TargetOption = { id: string; label: string; target: MidiTarget };
+  type ParamGroup = { key: string; label: string; params: TargetOption[] };
+
+  let availableGroups: ParamGroup[] = [];
+  let selectedGroupKey = '';
+  let selectedTargetId = '';
+  let selectedTarget: MidiTarget | null = null;
+  let unsubscribeRegistry: (() => void) | null = null;
+  let refreshQueued = false;
 
   onMount(async () => {
     await midiService.init();
     midiParamBridge.init();
     refreshParams();
+    unsubscribeRegistry = parameterRegistry.subscribe(() => scheduleRefresh());
   });
 
   onDestroy(() => {
     midiParamBridge.destroy();
+    unsubscribeRegistry?.();
   });
 
-  function refreshParams() {
-    const params = parameterRegistry.list();
-    availableParams = params.map((p) => ({
-      path: p.path,
-      label: p.metadata?.label || p.path.split('/').pop() || p.path,
-    }));
-    if (availableParams.length > 0 && !newTargetPath) {
-      newTargetPath = availableParams[0].path;
+  function scheduleRefresh() {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    queueMicrotask(() => {
+      refreshQueued = false;
+      refreshParams();
+    });
+  }
+
+  function computeGroup(path: string, metadataGroup?: string): { key: string; label: string } {
+    if (metadataGroup) return { key: metadataGroup, label: metadataGroup };
+
+    const parts = path.split('/');
+    // Strip prefix for more human grouping
+    if (parts[0] === 'controls') {
+      const key = parts[1] ?? 'Controls';
+      return { key, label: key };
     }
+    if (parts[0] === 'client') {
+      const key = parts[2] ?? 'Client';
+      return { key, label: key };
+    }
+    const fallback = parts[0] || 'Other';
+    return { key: fallback, label: fallback };
+  }
+
+  function refreshParams() {
+    // MIDI mapper currently supports numeric targets (range mapping) plus special targets.
+    const params = parameterRegistry
+      .list('controls')
+      .filter((p) => p.type === 'number')
+      .filter((p) => !p.metadata?.hidden)
+      .filter((p) => !p.isOffline);
+
+    const groups = new Map<string, ParamGroup>();
+    for (const p of params) {
+      const group = computeGroup(p.path, p.metadata?.group);
+      const entry = groups.get(group.key) ?? {
+        key: group.key,
+        label: group.label,
+        params: [] as TargetOption[],
+      };
+      entry.params.push({
+        id: p.path,
+        label: p.metadata?.label || p.path.split('/').pop() || p.path,
+        target: { type: 'PARAM', path: p.path },
+      });
+      groups.set(group.key, entry);
+    }
+
+    const nextGroups = Array.from(groups.values())
+      .map((g) => ({
+        ...g,
+        params: g.params.sort((a, b) => a.label.localeCompare(b.label)),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    const clientGroup: ParamGroup = {
+      key: 'Clients',
+      label: 'Clients',
+      params: [
+        { id: 'clients:range', label: 'Range', target: { type: 'CLIENT_RANGE' } },
+        { id: 'clients:object', label: 'Object', target: { type: 'CLIENT_OBJECT' } },
+      ],
+    };
+
+    availableGroups = [clientGroup, ...nextGroups];
+
+    // Keep selection stable where possible
+    if (!availableGroups.some((g) => g.key === selectedGroupKey)) {
+      selectedGroupKey = availableGroups[0]?.key ?? '';
+    }
+
+    const selectedGroup = availableGroups.find((g) => g.key === selectedGroupKey);
+    const groupParams = selectedGroup?.params ?? [];
+    if (!groupParams.some((p) => p.id === selectedTargetId)) {
+      selectedTargetId = groupParams[0]?.id ?? '';
+    }
+  }
+
+  $: if (selectedGroupKey) {
+    const group = availableGroups.find((g) => g.key === selectedGroupKey);
+    if (group && !group.params.some((p) => p.id === selectedTargetId)) {
+      selectedTargetId = group.params[0]?.id ?? '';
+    }
+  }
+
+  $: {
+    const group = availableGroups.find((g) => g.key === selectedGroupKey);
+    selectedTarget = group?.params.find((p) => p.id === selectedTargetId)?.target ?? null;
   }
 
   function handleInputChange(e: Event) {
@@ -40,8 +134,8 @@
     midiService.selectInput(select.value);
   }
 
-  function startLearn(targetPath: string) {
-    midiParamBridge.startLearn(targetPath, 'REMOTE');
+  function startLearn(target: MidiTarget) {
+    midiParamBridge.startLearn(target, 'REMOTE');
   }
 
   function cancelLearn() {
@@ -59,6 +153,7 @@
   function updateRange(id: string, field: 'min' | 'max', value: number) {
     const binding = $bindings.find((b) => b.id === id);
     if (!binding) return;
+    if (binding.target.type !== 'PARAM') return;
     midiParamBridge.updateBinding(id, {
       mapping: { ...binding.mapping, [field]: value },
     });
@@ -73,8 +168,22 @@
   }
 
   function describeSource(source: MidiBinding['source']): string {
-    if (source.type === 'pitchbend') return `PitchBend ch${source.channel + 1}`;
-    return `${source.type.toUpperCase()} ${source.number} ch${source.channel + 1}`;
+    const inputLabel = source.inputId
+      ? $inputs.find((i) => i.id === source.inputId)?.name ?? source.inputId
+      : 'Any MIDI';
+
+    const controlLabel =
+      source.type === 'pitchbend'
+        ? `PitchBend ch${source.channel + 1}`
+        : `${source.type.toUpperCase()} ${source.number} ch${source.channel + 1}`;
+
+    return `${inputLabel}: ${controlLabel}`;
+  }
+
+  function describeTarget(target: MidiBinding['target']): string {
+    if (target.type === 'PARAM') return target.path;
+    if (target.type === 'CLIENT_RANGE') return 'Clients / Range';
+    return 'Clients / Object';
   }
 
   function formatValue(value?: number): string {
@@ -111,6 +220,12 @@
     <div class="monitor-display">
       {#if $lastMessage}
         <div class="monitor-row">
+          <span class="label">Input:</span>
+          <span class="value"
+            >{$inputs.find((i) => i.id === $lastMessage.inputId)?.name ?? $lastMessage.inputId}</span
+          >
+        </div>
+        <div class="monitor-row">
           <span class="label">Type:</span>
           <span class="value">{$lastMessage.type.toUpperCase()}</span>
         </div>
@@ -137,9 +252,9 @@
   </div>
 
   <!-- Learn Mode Indicator -->
-  {#if $learnMode.active}
+  {#if $learnMode.active && $learnMode.target}
     <div class="learn-indicator">
-      <span>🎹 Learning: Move a MIDI control for <strong>{$learnMode.targetPath}</strong></span>
+      <span>🎹 Learning: Move a MIDI control for <strong>{describeTarget($learnMode.target)}</strong></span>
       <Button variant="ghost" size="sm" on:click={cancelLearn}>Cancel</Button>
     </div>
   {/if}
@@ -148,20 +263,39 @@
   <div class="quick-add">
     <h3>Quick Add Binding</h3>
     <div class="quick-add-row">
-      <select bind:value={newTargetPath}>
-        {#each availableParams as param}
-          <option value={param.path}>{param.label} ({param.path})</option>
-        {/each}
+      <select bind:value={selectedGroupKey} aria-label="Parameter group">
+        {#if availableGroups.length === 0}
+          <option value="">No numeric parameters</option>
+        {:else}
+          {#each availableGroups as group (group.key)}
+            <option value={group.key}>{group.label}</option>
+          {/each}
+        {/if}
       </select>
+
+      <select bind:value={selectedTargetId} aria-label="Target">
+        {#if availableGroups.length === 0}
+          <option value="">No numeric parameters</option>
+        {:else}
+          {#each availableGroups.find((g) => g.key === selectedGroupKey)?.params ?? [] as item}
+            <option value={item.id}>{item.label}</option>
+          {/each}
+        {/if}
+      </select>
+
       <Button
         variant="primary"
         size="sm"
-        on:click={() => startLearn(newTargetPath)}
-        disabled={!newTargetPath}
+        on:click={() => selectedTarget && startLearn(selectedTarget)}
+        disabled={!selectedTarget}
       >
         Learn MIDI
       </Button>
     </div>
+
+    {#if selectedTarget?.type === 'PARAM'}
+      <div class="target-path-hint">{selectedTarget.path}</div>
+    {/if}
   </div>
 
   <!-- Bindings List -->
@@ -176,36 +310,40 @@
             <div class="binding-header">
               <div class="binding-source">{describeSource(binding.source)}</div>
               <div class="binding-arrow">→</div>
-              <div class="binding-target">{binding.targetPath}</div>
+              <div class="binding-target">{describeTarget(binding.target)}</div>
             </div>
 
             <div class="binding-controls">
-              <div class="control-group">
-                <span class="control-label">Mode:</span>
-                <button
-                  class="mode-toggle mode-{binding.mode.toLowerCase()}"
-                  on:click={() => toggleMode(binding.id)}
-                >
-                  {binding.mode}
-                </button>
-              </div>
+              {#if binding.target.type === 'PARAM'}
+                <div class="control-group">
+                  <span class="control-label">Mode:</span>
+                  <button
+                    class="mode-toggle mode-{binding.mode.toLowerCase()}"
+                    on:click={() => toggleMode(binding.id)}
+                  >
+                    {binding.mode}
+                  </button>
+                </div>
+              {/if}
 
-              <div class="control-group">
-                <span class="control-label">Range:</span>
-                <input
-                  type="number"
-                  class="range-input"
-                  value={binding.mapping.min}
-                  on:change={(e) => updateRange(binding.id, 'min', getInputValue(e))}
-                />
-                <span>–</span>
-                <input
-                  type="number"
-                  class="range-input"
-                  value={binding.mapping.max}
-                  on:change={(e) => updateRange(binding.id, 'max', getInputValue(e))}
-                />
-              </div>
+              {#if binding.target.type === 'PARAM'}
+                <div class="control-group">
+                  <span class="control-label">Range:</span>
+                  <input
+                    type="number"
+                    class="range-input"
+                    value={binding.mapping.min}
+                    on:change={(e) => updateRange(binding.id, 'min', getInputValue(e))}
+                  />
+                  <span>–</span>
+                  <input
+                    type="number"
+                    class="range-input"
+                    value={binding.mapping.max}
+                    on:change={(e) => updateRange(binding.id, 'max', getInputValue(e))}
+                  />
+                </div>
+              {/if}
 
               <div class="control-group">
                 <label class="control-label" for={`invert-${binding.id}`}>
@@ -337,6 +475,16 @@
     display: flex;
     gap: var(--space-sm, 8px);
     align-items: center;
+  }
+
+  .target-path-hint {
+    margin-top: var(--space-xs, 6px);
+    color: var(--text-muted, #666);
+    font-family: var(--font-mono, monospace);
+    font-size: var(--text-xs, 0.8rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .quick-add-row select {

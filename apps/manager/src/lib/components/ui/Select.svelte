@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+
   export let value: any;
   export let options: { value: any; label: string }[] = [];
   export let label = '';
@@ -6,6 +8,20 @@
 
   let className = '';
   export { className as class };
+
+  const dispatch = createEventDispatcher<{
+    change: Event;
+    input: Event;
+  }>();
+
+  function handleChange(e: Event) {
+    // Ensure `bind:value` updates before consumer sees the event.
+    queueMicrotask(() => dispatch('change', e));
+  }
+
+  function handleInput(e: Event) {
+    queueMicrotask(() => dispatch('input', e));
+  }
 </script>
 
 <div class="select-wrapper {className}">
@@ -13,7 +29,14 @@
     <label class="control-label" for="select-{label}">{label}</label>
   {/if}
 
-  <select class="select" bind:value {disabled} id={label ? `select-${label}` : undefined} on:change>
+  <select
+    class="select"
+    bind:value
+    {disabled}
+    id={label ? `select-${label}` : undefined}
+    on:change={handleChange}
+    on:input={handleInput}
+  >
     {#each options as option}
       <option value={option.value}>{option.label}</option>
     {/each}
