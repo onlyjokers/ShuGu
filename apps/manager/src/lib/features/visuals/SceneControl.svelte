@@ -10,7 +10,7 @@
   export let useSync = true;
   export let syncDelay = 500;
 
-  let selectedScene = 'box-scene';
+  // selectedScene managed by controlState
   let asciiOn = true;
   let asciiRes = 11;
 
@@ -20,7 +20,7 @@
   ];
 
   $: hasSelection = $state.selectedClientIds.length > 0;
-  $: selectedScene = $controlState.selectedScene;
+  // selectedScene derived directly from store in template
   $: asciiOn = $controlState.asciiOn;
   $: asciiRes = $controlState.asciiResolution;
 
@@ -28,7 +28,6 @@
     const raw = e.detail;
     const next = (raw.target as HTMLSelectElement | null)?.value;
     if (!next) return;
-    selectedScene = next;
     updateControlState({ selectedScene: next });
   }
 
@@ -38,8 +37,8 @@
   }
 
   function handleSwitchScene(toAll = false) {
-    switchScene(selectedScene, toAll, getExecuteAt());
-    updateControlState({ selectedScene });
+    switchScene($controlState.selectedScene, toAll, getExecuteAt());
+    // updateControlState({ selectedScene }); // No need to update store as it's already source of truth
   }
 
   function handleAsciiToggle(toAll = false) {
@@ -59,7 +58,7 @@
       <Select
         label="Visual Scene"
         options={scenes}
-        bind:value={selectedScene}
+        value={$controlState.selectedScene}
         on:change={handleSceneChange}
       />
       <div class="button-group">
