@@ -280,7 +280,7 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
         </div>
       </div>
 
-      <div class:hide={activePage !== 'nodes'}>
+      <div class="nodes-page" class:hide={activePage !== 'nodes'}>
         <div class="nodes-pane">
           <NodeCanvas />
         </div>
@@ -430,6 +430,18 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
 
   .auto-pane {
     margin-top: var(--space-sm);
+  }
+
+  .nodes-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .nodes-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
   }
 
   .hide {

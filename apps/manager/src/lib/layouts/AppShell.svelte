@@ -97,7 +97,11 @@
   .main-content {
     flex: 1;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: var(--space-xl);
+    padding-bottom: 0;
     position: relative;
     /* Dot pattern background */
     background-image: radial-gradient(var(--border-color) 1px, transparent 1px);

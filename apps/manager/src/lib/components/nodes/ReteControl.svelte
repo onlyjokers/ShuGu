@@ -6,10 +6,6 @@
   export let data: any;
   $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
 
-  function stopPointerDown(e: PointerEvent) {
-    e.stopPropagation();
-  }
-
   function changeInput(event: Event) {
     if (!(data instanceof ClassicPreset.InputControl)) return;
     const target = event.target as HTMLInputElement;
@@ -54,7 +50,7 @@
 </script>
 
 {#if data instanceof ClassicPreset.InputControl}
-  <div class="control-field" on:pointerdown={stopPointerDown}>
+  <div class="control-field">
     {#if inputControlLabel}
       <div class="control-label">{inputControlLabel}</div>
     {/if}
@@ -63,15 +59,22 @@
       type={data.type}
       value={data.value}
       readonly={data.readonly}
+      on:pointerdown|stopPropagation
       on:input={changeInput}
     />
   </div>
 {:else if data?.controlType === 'select'}
-  <div class="control-field" on:pointerdown={stopPointerDown}>
+  <div class="control-field">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
     {/if}
-    <select class="control-input" value={data.value} disabled={data.readonly} on:change={changeSelect}>
+    <select
+      class="control-input"
+      value={data.value}
+      disabled={data.readonly}
+      on:pointerdown|stopPropagation
+      on:change={changeSelect}
+    >
       {#if data.placeholder}
         <option value="">{data.placeholder}</option>
       {/if}
@@ -81,8 +84,8 @@
     </select>
   </div>
 {:else if data?.controlType === 'boolean'}
-  <div class="control-field boolean-field" on:pointerdown={stopPointerDown}>
-    <label class="toggle">
+  <div class="control-field boolean-field">
+    <label class="toggle" on:pointerdown|stopPropagation>
       <input type="checkbox" checked={Boolean(data.value)} disabled={data.readonly} on:change={changeBoolean} />
       <span class="toggle-track">
         <span class="toggle-thumb"></span>
@@ -93,7 +96,7 @@
     </label>
   </div>
 {:else if data?.controlType === 'client-picker'}
-  <div class="client-picker" on:pointerdown={stopPointerDown}>
+  <div class="client-picker">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
     {/if}
@@ -106,6 +109,7 @@
             type="button"
             class="client-item {c.clientId === data.value ? 'selected' : ''}"
             disabled={data.readonly}
+            on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}
           >
             <span class="client-dot"></span>
@@ -119,7 +123,7 @@
     {/if}
   </div>
 {:else}
-  <div class="control-unknown" on:pointerdown={stopPointerDown}>Unsupported control</div>
+  <div class="control-unknown">Unsupported control</div>
 {/if}
 
 <style>

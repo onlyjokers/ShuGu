@@ -10,9 +10,7 @@
   export let useSync = true;
   export let syncDelay = 500;
 
-  // selectedScene managed by controlState
-  let asciiOn = true;
-  let asciiRes = 11;
+  // selectedScene, asciiOn, asciiRes managed by controlState
 
   const scenes = [
     { value: 'box-scene', label: '3D Box' },
@@ -20,9 +18,16 @@
   ];
 
   $: hasSelection = $state.selectedClientIds.length > 0;
-  // selectedScene derived directly from store in template
-  $: asciiOn = $controlState.asciiOn;
-  $: asciiRes = $controlState.asciiResolution;
+
+  function handleAsciiChange(e: Event) {
+    const target = e.target as HTMLInputElement;
+    updateControlState({ asciiOn: target.checked });
+  }
+
+  function handleAsciiResInput(e: Event) {
+    const target = e.target as HTMLInputElement;
+    updateControlState({ asciiResolution: Number(target.value) });
+  }
 
   function handleSceneChange(e: CustomEvent<Event>) {
     const raw = e.detail;
@@ -42,13 +47,11 @@
   }
 
   function handleAsciiToggle(toAll = false) {
-    asciiMode(asciiOn, toAll, getExecuteAt());
-    updateControlState({ asciiOn });
+    asciiMode($controlState.asciiOn, toAll, getExecuteAt());
   }
 
   function handleAsciiResolution(toAll = false) {
-    asciiResolution(Number(asciiRes), toAll, getExecuteAt());
-    updateControlState({ asciiResolution: Number(asciiRes) });
+    asciiResolution(Number($controlState.asciiResolution), toAll, getExecuteAt());
   }
 </script>
 
@@ -79,9 +82,9 @@
     <div class="section">
       <Toggle
         label="ASCII Overlay"
-        bind:checked={asciiOn}
+        checked={$controlState.asciiOn}
         description="Retro text effect"
-        on:change={() => updateControlState({ asciiOn })}
+        on:change={handleAsciiChange}
       />
       <div class="button-group">
         <Button
@@ -102,9 +105,9 @@
         min={6}
         max={24}
         step={1}
-        bind:value={asciiRes}
+        value={$controlState.asciiResolution}
         suffix=" px"
-        on:input={() => updateControlState({ asciiResolution: Number(asciiRes) })}
+        on:input={handleAsciiResInput}
       />
       <div class="button-group">
         <Button

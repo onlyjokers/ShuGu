@@ -36,6 +36,7 @@
 
   const nodeMap = new Map<string, any>();
   const connectionMap = new Map<string, any>();
+  let isSyncingGraph = false;
 
   let addCategory = 'Objects';
   let addItem = '';
@@ -45,10 +46,10 @@
   let graphState = { nodes: [], connections: [] };
   let numberParamOptions: { path: string; label: string }[] = [];
   let selectedNode: NodeInstance | undefined = undefined;
-  let selectedDef: any = undefined;
-  let runtimeSnapshot: NodeInstance | null = null;
-  let snapshotTimer: ReturnType<typeof setInterval> | null = null;
+  let isNodeDragging = false;
   let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
+  let wheelHandler: ((event: WheelEvent) => void) | null = null;
+  let resizeObserver: ResizeObserver | null = null;
 
   // Store handles
   let graphStateStore = nodeEngine?.graphState;
@@ -88,29 +89,6 @@
     return nodeRegistry.get(node.type)?.label ?? node.type;
   }
 
-  function safeClone<T>(value: T): T {
-    try {
-      // @ts-ignore
-      if (typeof structuredClone === 'function') return structuredClone(value);
-    } catch {
-      // ignore
-    }
-    try {
-      return JSON.parse(JSON.stringify(value)) as T;
-    } catch {
-      return value;
-    }
-  }
-
-  function refreshRuntimeSnapshot() {
-    if (!selectedNodeId) {
-      runtimeSnapshot = null;
-      return;
-    }
-    const node = nodeEngine.getNode(selectedNodeId);
-    runtimeSnapshot = node ? safeClone(node) : null;
-  }
-
   function socketFor(type: string | undefined) {
     if (type && type in sockets) return sockets[type as keyof typeof sockets];
     return sockets.any;
@@ -118,6 +96,29 @@
 
   function generateId(): string {
     return `node-${crypto.randomUUID?.() ?? Date.now()}`;
+  }
+
+  function setSelectedNode(nextId: string) {
+    const prevId = selectedNodeId;
+    if (prevId === nextId) return;
+
+    selectedNodeId = nextId;
+
+    if (prevId) {
+      const prev = nodeMap.get(prevId);
+      if (prev && prev.selected) {
+        prev.selected = false;
+        areaPlugin?.update?.('node', prevId);
+      }
+    }
+
+    if (nextId) {
+      const next = nodeMap.get(nextId);
+      if (next && !next.selected) {
+        next.selected = true;
+        areaPlugin?.update?.('node', nextId);
+      }
+    }
   }
 
   function buildReteNode(instance: NodeInstance): any {
@@ -247,52 +248,79 @@
   async function syncGraph(state: { nodes: NodeInstance[]; connections: EngineConnection[] }) {
     if (!editor || !areaPlugin) return;
 
-    graphState = state;
-    nodeCount = state.nodes.length;
+    isSyncingGraph = true;
+    try {
+      graphState = state;
+      nodeCount = state.nodes.length;
 
-    // Add / update nodes
-    for (const n of state.nodes) {
-      let reteNode = nodeMap.get(n.id);
-      if (!reteNode) {
-        reteNode = buildReteNode(n);
-        await editor.addNode(reteNode);
-        nodeMap.set(n.id, reteNode);
-      } else {
-        const nextLabel = nodeLabel(n);
-        if (reteNode.label !== nextLabel) {
-          reteNode.label = nextLabel;
-          await areaPlugin.update('node', reteNode.id);
+      // Add / update nodes
+      for (const n of state.nodes) {
+        let reteNode = nodeMap.get(n.id);
+        if (!reteNode) {
+          reteNode = buildReteNode(n);
+          await editor.addNode(reteNode);
+          nodeMap.set(n.id, reteNode);
+          if (n.id === selectedNodeId) {
+            reteNode.selected = true;
+            await areaPlugin.update('node', n.id);
+          }
+        } else {
+          const nextLabel = nodeLabel(n);
+          if (reteNode.label !== nextLabel) {
+            reteNode.label = nextLabel;
+            await areaPlugin.update('node', reteNode.id);
+          }
+        }
+        await areaPlugin.translate(reteNode.id, { x: n.position.x, y: n.position.y });
+      }
+
+      // Add connections
+      for (const c of state.connections) {
+        if (connectionMap.has(c.id)) continue;
+        const src = nodeMap.get(c.sourceNodeId);
+        const tgt = nodeMap.get(c.targetNodeId);
+        if (!src || !tgt) continue;
+        const conn: any = new ClassicPreset.Connection(src, c.sourcePortId, tgt, c.targetPortId);
+        conn.id = c.id;
+        await editor.addConnection(conn);
+        connectionMap.set(c.id, conn);
+
+        const targetNode = nodeMap.get(c.targetNodeId);
+        const input = targetNode?.inputs?.[c.targetPortId];
+        if (input?.control) {
+          input.showControl = false;
+          await areaPlugin.update('node', c.targetNodeId);
         }
       }
-      await areaPlugin.translate(reteNode.id, { x: n.position.x, y: n.position.y });
-    }
 
-    // Remove stale nodes
-    for (const [id, reteNode] of Array.from(nodeMap.entries())) {
-      if (!state.nodes.find((n) => n.id === id)) {
-        editor.removeNode(reteNode);
+      // Remove stale connections
+      for (const [id, conn] of Array.from(connectionMap.entries())) {
+        if (state.connections.find((c) => c.id === id)) continue;
+        const targetId = String((conn as any).target ?? '');
+        const portId = String((conn as any).targetInput ?? '');
+
+        await editor.removeConnection(id);
+        connectionMap.delete(id);
+
+        const targetNode = nodeMap.get(targetId);
+        const input = targetNode?.inputs?.[portId];
+        if (input?.control) {
+          const stillConnected = Array.from(connectionMap.values()).some(
+            (c2: any) => String(c2.target) === targetId && String(c2.targetInput) === portId
+          );
+          input.showControl = !stillConnected;
+          await areaPlugin.update('node', targetId);
+        }
+      }
+
+      // Remove stale nodes
+      for (const [id] of Array.from(nodeMap.entries())) {
+        if (state.nodes.find((n) => n.id === id)) continue;
+        await editor.removeNode(id);
         nodeMap.delete(id);
       }
-    }
-
-    // Add connections
-    for (const c of state.connections) {
-      if (connectionMap.has(c.id)) continue;
-      const src = nodeMap.get(c.sourceNodeId);
-      const tgt = nodeMap.get(c.targetNodeId);
-      if (!src || !tgt) continue;
-      const conn: any = new ClassicPreset.Connection(src, c.sourcePortId, tgt, c.targetPortId);
-      conn.id = c.id;
-      await editor.addConnection(conn);
-      connectionMap.set(c.id, conn);
-    }
-
-    // Remove stale connections
-    for (const [id, conn] of Array.from(connectionMap.entries())) {
-      if (!state.connections.find((c) => c.id === id)) {
-        editor.removeConnection(conn);
-        connectionMap.delete(id);
-      }
+    } finally {
+      isSyncingGraph = false;
     }
   }
 
@@ -301,6 +329,7 @@
     if (!editor) return;
     editor.addPipe(async (ctx) => {
       if (!ctx || typeof ctx !== 'object') return ctx;
+      if (isSyncingGraph) return ctx;
 
       // Connection created by user drag
       if (ctx.type === 'connectioncreated') {
@@ -323,7 +352,7 @@
           }
         } else if (editor) {
           // Engine rejected; rollback UI to match source of truth.
-          await editor.removeConnection(c);
+          await editor.removeConnection(String(c.id));
         }
       }
 
@@ -360,12 +389,16 @@
     if (areaPlugin) {
       areaPlugin.addPipe((ctx: any) => {
         if (ctx?.type === 'nodepicked') {
-          selectedNodeId = String(ctx.data?.id ?? '');
+          isNodeDragging = true;
+          setSelectedNode(String(ctx.data?.id ?? ''));
+        }
+        if (ctx?.type === 'nodedragged') {
+          isNodeDragging = false;
         }
         if (ctx?.type === 'pointerdown') {
           const target = ctx.data?.event?.target as HTMLElement | undefined;
           const clickedNode = target?.closest?.('.node');
-          if (!clickedNode) selectedNodeId = '';
+          if (!clickedNode) setSelectedNode('');
         }
         if (ctx?.type === 'nodetranslated') {
           const { id, position } = ctx.data ?? {};
@@ -415,41 +448,11 @@
     }
   }
 
-  function updateSelectedConfig(fieldKey: string, value: unknown) {
-    if (!selectedNodeId) return;
-    nodeEngine.updateNodeConfig(selectedNodeId, { [fieldKey]: value });
-  }
-
-  function readTextValue(e: Event): string {
-    return String((e.target as HTMLInputElement | HTMLSelectElement).value);
-  }
-
-  function readNumberValue(e: Event): number {
-    const num = Number((e.target as HTMLInputElement).value);
-    return Number.isFinite(num) ? num : 0;
-  }
-
-  function readChecked(e: Event): boolean {
-    return Boolean((e.target as HTMLInputElement).checked);
-  }
-
   $: if (selectedNodeId && !graphState.nodes.some((n) => n.id === selectedNodeId)) {
-    selectedNodeId = '';
+    setSelectedNode('');
   }
 
   $: selectedNode = graphState.nodes.find((n) => n.id === selectedNodeId);
-  $: selectedDef = selectedNode ? nodeRegistry.get(selectedNode.type) : undefined;
-  $: refreshRuntimeSnapshot();
-
-  $: {
-    if (snapshotTimer) {
-      clearInterval(snapshotTimer);
-      snapshotTimer = null;
-    }
-    if (selectedNodeId && $isRunningStore) {
-      snapshotTimer = setInterval(refreshRuntimeSnapshot, 200);
-    }
-  }
 
   onMount(async () => {
     if (!container) return;
@@ -463,6 +466,10 @@
     const connection: any = new ConnectionPlugin();
     const render: any = new SveltePlugin();
     const history = new HistoryPlugin();
+
+    // We implement our own wheel/pinch zoom to avoid conflicts and ensure consistent behavior.
+    // Disable the built-in zoom handler (wheel/dblclick/touch) from rete-area-plugin.
+    areaPlugin?.area?.setZoomHandler?.(null);
 
     // IMPORTANT: AreaPlugin is used by editor, but render/connection/history plugins must be used by AreaPlugin
     // because they consume Area signals (render/pointer events).
@@ -485,10 +492,6 @@
       })
     );
 
-    const selector = AreaExtensions.selector();
-    const accumulating = AreaExtensions.accumulateOnCtrl();
-    AreaExtensions.selectableNodes(areaPlugin, selector, { accumulating });
-
     await syncGraph(get(graphStateStore));
     graphUnsub = graphStateStore?.subscribe((state) => syncGraph(state));
 
@@ -498,6 +501,46 @@
     }
 
     bindEditorPipes();
+
+    const onWheel = (event: WheelEvent) => {
+      // Always zoom the canvas on wheel/trackpad gestures (incl. pinch-as-wheel on macOS).
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const area = areaPlugin?.area;
+      if (!area) return;
+      if (isNodeDragging) return;
+
+      const current = Number(area.transform?.k ?? 1) || 1;
+      const raw = -event.deltaY;
+      const delta = Math.max(-0.3, Math.min(0.3, raw / 500));
+      if (delta === 0) return;
+
+      const minZoom = 0.2;
+      const maxZoom = 2.5;
+      const next = Math.max(minZoom, Math.min(maxZoom, current * (1 + delta)));
+      const ratio = next / current - 1;
+
+      const rectEl: HTMLElement | null = area?.content?.holder ?? container;
+      const rect = rectEl?.getBoundingClientRect?.();
+      if (!rect) return;
+
+      const ox = (rect.left - event.clientX) * ratio;
+      const oy = (rect.top - event.clientY) * ratio;
+      area.zoom(next, ox, oy, 'wheel');
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    wheelHandler = onWheel;
+
+    resizeObserver = new ResizeObserver(() => {
+      const area = areaPlugin?.area;
+      if (!area) return;
+      isNodeDragging = false;
+      // Re-apply current transform after layout changes (keeps drag math consistent after resizes).
+      void area.zoom(Number(area.transform?.k ?? 1) || 1, 0, 0);
+    });
+    resizeObserver.observe(container);
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key;
@@ -524,8 +567,9 @@
   onDestroy(() => {
     graphUnsub?.();
     paramsUnsub?.();
-    if (snapshotTimer) clearInterval(snapshotTimer);
+    if (wheelHandler) container?.removeEventListener('wheel', wheelHandler, { capture: true } as any);
     if (keydownHandler) window.removeEventListener('keydown', keydownHandler);
+    resizeObserver?.disconnect();
     areaPlugin?.destroy?.();
     editor?.clear();
     nodeMap.clear();
@@ -585,86 +629,6 @@
     </div>
   </div>
 
-  {#if selectedNodeId && selectedNode}
-    <div class="node-inspector">
-      <div class="inspector-title">{nodeLabel(selectedNode)}</div>
-
-      {#if selectedDef?.configSchema?.length}
-        <div class="inspector-fields">
-          {#each selectedDef.configSchema as field (field.key)}
-            <div class="inspector-field">
-              <label class="field-label" for={`cfg-${selectedNodeId}-${field.key}`}>{field.label}</label>
-
-              {#if field.type === 'number'}
-                <input
-                  id={`cfg-${selectedNodeId}-${field.key}`}
-                  type="number"
-                  class="field-input"
-                  value={selectedNode.config?.[field.key] ?? field.defaultValue ?? 0}
-                  on:change={(e) => updateSelectedConfig(field.key, readNumberValue(e))}
-                />
-              {:else if field.type === 'boolean'}
-                <input
-                  id={`cfg-${selectedNodeId}-${field.key}`}
-                  type="checkbox"
-                  checked={Boolean(selectedNode.config?.[field.key] ?? field.defaultValue)}
-                  on:change={(e) => updateSelectedConfig(field.key, readChecked(e))}
-                />
-              {:else if field.type === 'select'}
-                <select
-                  id={`cfg-${selectedNodeId}-${field.key}`}
-                  class="field-input"
-                  value={selectedNode.config?.[field.key] ?? field.defaultValue ?? ''}
-                  on:change={(e) => updateSelectedConfig(field.key, readTextValue(e))}
-                >
-                  {#each field.options ?? [] as opt (opt.value)}
-                    <option value={opt.value}>{opt.label}</option>
-                  {/each}
-                </select>
-              {:else if field.type === 'param-path'}
-                <select
-                  id={`cfg-${selectedNodeId}-${field.key}`}
-                  class="field-input"
-                  value={selectedNode.config?.[field.key] ?? field.defaultValue ?? ''}
-                  on:change={(e) => updateSelectedConfig(field.key, readTextValue(e))}
-                >
-                  <option value="">Select parameter...</option>
-                  {#each numberParamOptions as p (p.path)}
-                    <option value={p.path}>{p.label} ({p.path})</option>
-                  {/each}
-                </select>
-              {:else}
-                <input
-                  id={`cfg-${selectedNodeId}-${field.key}`}
-                  type="text"
-                  class="field-input"
-                  value={selectedNode.config?.[field.key] ?? field.defaultValue ?? ''}
-                  on:change={(e) => updateSelectedConfig(field.key, readTextValue(e))}
-                />
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
-
-      {#if runtimeSnapshot}
-        <details class="inspector-debug" open>
-          <summary class="debug-summary">Runtime</summary>
-          <div class="debug-grid">
-            <div class="debug-block">
-              <div class="debug-title">Inputs</div>
-              <pre class="debug-json">{JSON.stringify(runtimeSnapshot.inputValues ?? {}, null, 2)}</pre>
-            </div>
-            <div class="debug-block">
-              <div class="debug-title">Outputs</div>
-              <pre class="debug-json">{JSON.stringify(runtimeSnapshot.outputValues ?? {}, null, 2)}</pre>
-            </div>
-          </div>
-        </details>
-      {/if}
-    </div>
-  {/if}
-
   <div
     class="canvas-wrapper"
     bind:this={container}
@@ -677,8 +641,11 @@
   .node-canvas-container {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
     height: 100%;
-    min-height: 680px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
     background: radial-gradient(circle at 20% 0%, rgba(99, 102, 241, 0.18), transparent 45%),
       radial-gradient(circle at 80% 10%, rgba(168, 85, 247, 0.16), transparent 50%),
       linear-gradient(180deg, #0b0c14 0%, #070811 100%);
@@ -753,47 +720,13 @@
     padding: 6px 10px;
   }
 
-  .node-inspector {
-    padding: var(--space-md, 16px);
-    background: rgba(17, 24, 39, 0.6);
-    border-bottom: 1px solid var(--border-color, #444);
-    backdrop-filter: blur(8px);
-  }
-
-  .inspector-title {
-    color: var(--text-primary, #fff);
-    font-weight: 600;
-    margin-bottom: var(--space-sm, 8px);
-  }
-
-  .inspector-fields {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: var(--space-sm, 8px) var(--space-md, 16px);
-    align-items: center;
-  }
-
-  .inspector-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .field-label {
-    color: var(--text-secondary, #a0a0a0);
-    font-size: var(--text-xs, 0.8rem);
-  }
-
-  .field-input {
-    background: var(--bg-tertiary, #2a2a2a);
-    color: var(--text-primary, #fff);
-    border: 1px solid var(--border-color, #444);
-    border-radius: var(--radius-sm, 6px);
-    padding: 6px 10px;
-  }
-
   .canvas-wrapper {
     flex: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
     background-image:
       linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px),
@@ -802,52 +735,6 @@
       linear-gradient(180deg, rgba(10, 11, 20, 0.85) 0%, rgba(7, 8, 17, 0.95) 100%);
     background-size: 32px 32px, 32px 32px, auto, auto, auto;
     background-position: center, center, center, center, center;
-  }
-
-  .inspector-debug {
-    margin-top: var(--space-md, 16px);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding-top: var(--space-sm, 10px);
-  }
-
-  .debug-summary {
-    color: var(--text-secondary, #a0a0a0);
-    cursor: pointer;
-    font-weight: 600;
-    user-select: none;
-  }
-
-  .debug-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-md, 16px);
-    margin-top: var(--space-sm, 8px);
-  }
-
-  .debug-block {
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: var(--radius-md, 8px);
-    padding: var(--space-sm, 10px);
-    min-width: 0;
-  }
-
-  .debug-title {
-    font-size: var(--text-xs, 0.8rem);
-    color: var(--text-secondary, #a0a0a0);
-    margin-bottom: 6px;
-  }
-
-  .debug-json {
-    margin: 0;
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
-    font-size: 12px;
-    line-height: 1.4;
-    color: rgba(255, 255, 255, 0.85);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 220px;
-    overflow: auto;
   }
 
   /* --- Rete Classic preset overrides --- */
