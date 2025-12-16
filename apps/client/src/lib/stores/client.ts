@@ -12,7 +12,8 @@ import {
     ModulatedSoundPlayer,
     WakeLockController,
     type ClientState,
-    type ClientSDKConfig
+    type ClientSDKConfig,
+    type ClientIdentity
 } from '@shugu/sdk-client';
 import type {
     ControlMessage,
@@ -111,6 +112,46 @@ export const imageState = writable<{
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clientId = derived(state, ($state) => $state.clientId);
 
+const DEVICE_ID_STORAGE_KEY = 'shugu-device-id';
+const INSTANCE_ID_STORAGE_KEY = 'shugu-client-instance-id';
+const CLIENT_ID_STORAGE_KEY = 'shugu-client-id';
+
+function createRandomId(prefix: string): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `${prefix}${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    }
+    return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+function getOrCreateStorageId(storage: Storage, key: string, prefix: string): string {
+    const existing = storage.getItem(key);
+    if (existing && existing.trim()) return existing;
+    const id = createRandomId(prefix);
+    storage.setItem(key, id);
+    return id;
+}
+
+function getOrCreateClientIdentity(): ClientIdentity | null {
+    if (typeof window === 'undefined') return null;
+
+    const deviceId = getOrCreateStorageId(window.localStorage, DEVICE_ID_STORAGE_KEY, 'c_');
+    const instanceId = getOrCreateStorageId(window.sessionStorage, INSTANCE_ID_STORAGE_KEY, 'i_');
+
+    const storedClientId = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    const clientId = storedClientId && storedClientId.trim() ? storedClientId : deviceId;
+    window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+
+    return { deviceId, instanceId, clientId };
+}
+
+function persistAssignedClientId(assignedClientId: string): void {
+    if (typeof window === 'undefined') return;
+    if (!assignedClientId) return;
+    const current = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (current === assignedClientId) return;
+    window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, assignedClientId);
+}
+
 /**
  * Initialize and connect to server
  */
@@ -118,12 +159,20 @@ export function initialize(
     config: ClientSDKConfig,
     options?: { autoConnect?: boolean }
 ): void {
+    const identity = getOrCreateClientIdentity();
+
     // Initialize SDK
-    sdk = new ClientSDK(config);
+    sdk = new ClientSDK({
+        ...config,
+        identity: config.identity ?? identity ?? undefined,
+    });
 
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
         state.set(newState);
+        if (newState.clientId) {
+            persistAssignedClientId(newState.clientId);
+        }
     });
 
     // Subscribe to control messages

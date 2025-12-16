@@ -35,6 +35,23 @@ export interface ClientState {
 
 export type MessageHandler<T = Message> = (message: T) => void;
 
+export interface ClientIdentity {
+    /**
+     * Stable ID for a physical device (persist this in localStorage on the client app).
+     * Used by the server as the base when generating a unique clientId (e.g. `c_xxx`, `c_xxx_1`).
+     */
+    deviceId: string;
+    /**
+     * Stable ID for a browser tab/session (persist this in sessionStorage on the client app).
+     * Used to "take over" the same clientId on refresh/reconnect without creating duplicates.
+     */
+    instanceId: string;
+    /**
+     * Optional preferred clientId (persist per-tab, e.g. sessionStorage). Server may override to avoid collisions.
+     */
+    clientId?: string;
+}
+
 /**
  * Configuration for ClientSDK
  */
@@ -44,14 +61,24 @@ export interface ClientSDKConfig {
     reconnectionAttempts?: number;
     reconnectionDelay?: number;
     timeSyncInterval?: number;
+    identity?: ClientIdentity;
 }
+
+type ClientSDKInternalConfig = {
+    serverUrl: string;
+    autoReconnect: boolean;
+    reconnectionAttempts: number;
+    reconnectionDelay: number;
+    timeSyncInterval: number;
+    identity?: ClientIdentity;
+};
 
 /**
  * Client SDK for managing Socket.io connection and real-time communication
  */
 export class ClientSDK {
     private socket: Socket | null = null;
-    private config: Required<ClientSDKConfig>;
+    private config: ClientSDKInternalConfig;
     private state: ClientState;
     private stateListeners: Set<(state: ClientState) => void> = new Set();
     private messageHandlers: Map<string, Set<MessageHandler>> = new Map();
@@ -65,6 +92,7 @@ export class ClientSDK {
             reconnectionAttempts: config.reconnectionAttempts ?? Number.POSITIVE_INFINITY,
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
+            identity: config.identity,
         };
 
         this.state = {
@@ -88,8 +116,11 @@ export class ClientSDK {
 
         this.updateState({ status: 'connecting', error: null });
 
+        const auth = this.config.identity ?? undefined;
+
         this.socket = io(this.config.serverUrl, {
             query: { role: 'client' },
+            auth,
             // Use polling first for better mobile compatibility, then upgrade to websocket
             transports: ['polling', 'websocket'],
             // Increase timeouts for mobile networks
@@ -293,8 +324,16 @@ export class ClientSDK {
         switch (message.action) {
             case 'clientRegistered':
                 if (message.payload.clientId) {
-                    this.updateState({ clientId: message.payload.clientId });
-                    console.log('[SDK Client] Registered as:', message.payload.clientId);
+                    const assignedClientId = message.payload.clientId;
+                    this.updateState({ clientId: assignedClientId });
+                    console.log('[SDK Client] Registered as:', assignedClientId);
+
+                    // Persist the server-assigned clientId into auth so reconnects keep the same ID.
+                    if (this.socket && this.config.identity) {
+                        this.config.identity = { ...this.config.identity, clientId: assignedClientId };
+                        const existingAuth = (this.socket.auth ?? {}) as Record<string, unknown>;
+                        this.socket.auth = { ...existingAuth, clientId: assignedClientId };
+                    }
                 }
                 break;
         }
