@@ -5,12 +5,22 @@
 import type { NodeDefinition } from '../types';
 import { nodeRegistry } from '../registry';
 
+const WAVEFORM_OPTIONS = [
+  { value: 'sine', label: 'Sine' },
+  { value: 'square', label: 'Square' },
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'sawtooth', label: 'Sawtooth' },
+] as const satisfies { value: string; label: string }[];
+
 const ScreenColorProcessorNode: NodeDefinition = {
   type: 'proc-screen-color',
   label: 'Screen Color',
   category: 'Processors',
   inputs: [
     { id: 'client', label: 'Client', type: 'client' },
+    { id: 'primary', label: 'Primary', type: 'color' },
+    { id: 'secondary', label: 'Secondary', type: 'color' },
+    { id: 'waveform', label: 'Wave', type: 'fuzzy' },
     { id: 'frequencyHz', label: 'Freq', type: 'number' },
     { id: 'maxOpacity', label: 'Max', type: 'number' },
     { id: 'minOpacity', label: 'Min', type: 'number' },
@@ -26,12 +36,7 @@ const ScreenColorProcessorNode: NodeDefinition = {
       label: 'Waveform',
       type: 'select',
       defaultValue: 'sine',
-      options: [
-        { value: 'sine', label: 'Sine' },
-        { value: 'square', label: 'Square' },
-        { value: 'triangle', label: 'Triangle' },
-        { value: 'sawtooth', label: 'Sawtooth' },
-      ],
+      options: WAVEFORM_OPTIONS,
     },
     { key: 'frequencyHz', label: 'Frequency (Hz)', type: 'number', defaultValue: 1.5 },
   ],
@@ -39,8 +44,14 @@ const ScreenColorProcessorNode: NodeDefinition = {
     const client = inputs.client as any;
     if (!client?.clientId) return { cmd: null };
 
-    const primary = String(config.primary ?? '#6366f1');
-    const secondary = String(config.secondary ?? '#ffffff');
+    const primary =
+      typeof inputs.primary === 'string' && inputs.primary
+        ? String(inputs.primary)
+        : String(config.primary ?? '#6366f1');
+    const secondary =
+      typeof inputs.secondary === 'string' && inputs.secondary
+        ? String(inputs.secondary)
+        : String(config.secondary ?? '#ffffff');
     const maxOpacity =
       typeof inputs.maxOpacity === 'number'
         ? (inputs.maxOpacity as number)
@@ -49,7 +60,15 @@ const ScreenColorProcessorNode: NodeDefinition = {
       typeof inputs.minOpacity === 'number'
         ? (inputs.minOpacity as number)
         : Number(config.minOpacity ?? 0);
-    const waveform = String(config.waveform ?? 'sine');
+    const fallbackWaveform = String(config.waveform ?? 'sine');
+    const waveform = (() => {
+      const v = inputs.waveform;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
+      const options = WAVEFORM_OPTIONS.map((o) => o.value);
+      const clamped = Math.max(0, Math.min(1, v));
+      const idx = Math.min(options.length - 1, Math.floor(clamped * options.length));
+      return options[idx] ?? fallbackWaveform;
+    })();
     const frequencyHz =
       typeof inputs.frequencyHz === 'number'
         ? (inputs.frequencyHz as number)

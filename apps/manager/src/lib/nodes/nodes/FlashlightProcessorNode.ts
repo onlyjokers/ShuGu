@@ -5,12 +5,19 @@
 import type { NodeDefinition } from '../types';
 import { nodeRegistry } from '../registry';
 
+const MODE_OPTIONS = [
+  { value: 'off', label: 'Off' },
+  { value: 'on', label: 'On' },
+  { value: 'blink', label: 'Blink' },
+] as const satisfies { value: string; label: string }[];
+
 const FlashlightProcessorNode: NodeDefinition = {
   type: 'proc-flashlight',
   label: 'Flashlight',
   category: 'Processors',
   inputs: [
     { id: 'client', label: 'Client', type: 'client' },
+    { id: 'mode', label: 'Mode', type: 'fuzzy' },
     { id: 'frequencyHz', label: 'Freq', type: 'number' },
     { id: 'dutyCycle', label: 'Duty', type: 'number' },
   ],
@@ -21,11 +28,7 @@ const FlashlightProcessorNode: NodeDefinition = {
       label: 'Mode',
       type: 'select',
       defaultValue: 'blink',
-      options: [
-        { value: 'off', label: 'Off' },
-        { value: 'on', label: 'On' },
-        { value: 'blink', label: 'Blink' },
-      ],
+      options: MODE_OPTIONS,
     },
     { key: 'frequencyHz', label: 'Frequency (Hz)', type: 'number', defaultValue: 2 },
     { key: 'dutyCycle', label: 'Duty Cycle', type: 'number', defaultValue: 0.5 },
@@ -34,7 +37,15 @@ const FlashlightProcessorNode: NodeDefinition = {
     const client = inputs.client as any;
     if (!client?.clientId) return { cmd: null };
 
-    const mode = String(config.mode ?? 'blink');
+    const fallbackMode = String(config.mode ?? 'blink');
+    const mode = (() => {
+      const v = inputs.mode;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackMode;
+      const options = MODE_OPTIONS.map((o) => o.value);
+      const clamped = Math.max(0, Math.min(1, v));
+      const idx = Math.min(options.length - 1, Math.floor(clamped * options.length));
+      return options[idx] ?? fallbackMode;
+    })();
     if (mode === 'blink') {
       const freq =
         typeof inputs.frequencyHz === 'number'

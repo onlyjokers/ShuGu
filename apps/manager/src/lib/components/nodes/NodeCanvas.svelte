@@ -14,8 +14,16 @@
   import ReteControl from '$lib/components/nodes/ReteControl.svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
+  import { midiService } from '$lib/features/midi/midi-service';
+  import { midiNodeBridge } from '$lib/features/midi/midi-node-bridge';
   import type { NodeInstance, NodePort, PortType, Connection as EngineConnection } from '$lib/nodes/types';
-  import { BooleanControl, ClientPickerControl, ClientSensorValueControl, SelectControl } from './rete-controls';
+  import {
+    BooleanControl,
+    ClientPickerControl,
+    ClientSensorValueControl,
+    MidiLearnControl,
+    SelectControl,
+  } from './rete-controls';
 
   // Rete core handles the view; nodeEngine remains the source of truth for execution
 
@@ -31,8 +39,10 @@
     number: new ClassicPreset.Socket('number'),
     boolean: new ClassicPreset.Socket('boolean'),
     string: new ClassicPreset.Socket('string'),
+    color: new ClassicPreset.Socket('color'),
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
+    fuzzy: new ClassicPreset.Socket('fuzzy'),
     any: new ClassicPreset.Socket('any'),
   } as const;
 
@@ -272,6 +282,10 @@
   function buildReteNode(instance: NodeInstance): any {
     const def = nodeRegistry.get(instance.type);
     const node: any = new ClassicPreset.Node(nodeLabel(instance));
+    const configFields = def?.configSchema ?? [];
+    const configFieldByKey = new Map<string, any>();
+    for (const field of configFields) configFieldByKey.set(field.key, field);
+    const inputControlKeys = new Set<string>();
     // Ensure Rete IDs match engine IDs so editor events map back cleanly.
     node.id = instance.id;
 
@@ -283,14 +297,23 @@
         multipleConnections
       );
 
-      // ComfyUI-like default widgets for primitive inputs with defaultValue
+      // ComfyUI-like default widgets for primitive inputs with config/default fallbacks
       const hasDefault = input.defaultValue !== undefined;
       const isPrimitive = input.type === 'number' || input.type === 'string' || input.type === 'boolean';
       const isSink = input.kind === 'sink';
-      if (hasDefault && isPrimitive && !isSink) {
-        const current = instance.inputValues?.[input.id];
+      const configField = configFieldByKey.get(input.id);
+      const configValue = instance.config?.[input.id];
+      const current = instance.inputValues?.[input.id];
+      const derivedDefault = hasDefault ? input.defaultValue : configField?.defaultValue;
+      const hasInitial = current !== undefined || configValue !== undefined || derivedDefault !== undefined;
+      if (hasInitial && isPrimitive && !isSink) {
         if (input.type === 'number') {
-          const initial = typeof current === 'number' ? current : Number(input.defaultValue ?? 0);
+          const initial =
+            typeof current === 'number'
+              ? current
+              : typeof configValue === 'number'
+                ? configValue
+                : Number(derivedDefault ?? 0);
           inp.addControl(
             new ClassicPreset.InputControl('number', {
               initial,
@@ -298,7 +321,12 @@
             })
           );
         } else if (input.type === 'string') {
-          const initial = typeof current === 'string' ? current : String(input.defaultValue ?? '');
+          const initial =
+            typeof current === 'string'
+              ? current
+              : typeof configValue === 'string'
+                ? configValue
+                : String(derivedDefault ?? '');
           inp.addControl(
             new ClassicPreset.InputControl('text', {
               initial,
@@ -306,7 +334,12 @@
             })
           );
         } else if (input.type === 'boolean') {
-          const initial = typeof current === 'boolean' ? current : Boolean(input.defaultValue);
+          const initial =
+            typeof current === 'boolean'
+              ? current
+              : typeof configValue === 'boolean'
+                ? configValue
+                : Boolean(derivedDefault);
           inp.addControl(
             new BooleanControl({
               initial,
@@ -315,6 +348,38 @@
           );
         }
         inp.showControl = true;
+        inputControlKeys.add(input.id);
+      }
+
+      // Color controls can appear inline on the input row (config-backed).
+      // Use config when present so "override ports" behave like other processor options.
+      if (!isSink && input.type === 'color') {
+        const initial =
+          typeof instance.config?.[input.id] === 'string'
+            ? String(instance.config[input.id])
+            : typeof current === 'string'
+              ? String(current)
+              : String(derivedDefault ?? '#ffffff');
+        inp.addControl(
+          new ClassicPreset.InputControl('color', {
+            initial,
+            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [input.id]: value }),
+          })
+        );
+        inp.showControl = true;
+        inputControlKeys.add(input.id);
+      }
+
+      // Select controls can also appear inline on the input row (use config as fallback).
+      if (!isSink && configField?.type === 'select') {
+        inp.addControl(
+          new SelectControl({
+            initial: String(instance.config?.[input.id] ?? configField.defaultValue ?? ''),
+            options: configField.options ?? [],
+            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [input.id]: value }),
+          })
+        );
+        inputControlKeys.add(input.id);
       }
 
       node.addInput(input.id, inp);
@@ -341,6 +406,7 @@
     }
 
     for (const field of def?.configSchema ?? []) {
+      if (inputControlKeys.has(field.key)) continue;
       const key = field.key;
       const current = instance.config?.[key] ?? field.defaultValue;
       if (field.type === 'select') {
@@ -380,6 +446,8 @@
             change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
           })
         );
+      } else if (field.type === 'midi-source') {
+        node.addControl(key, new MidiLearnControl({ nodeId: instance.id, label: field.label }));
       } else {
         const control: any = new ClassicPreset.InputControl('text', {
           initial: String(current ?? ''),
@@ -659,13 +727,6 @@
         conn.id = c.id;
         await editor.addConnection(conn);
         connectionMap.set(c.id, conn);
-
-        const targetNode = nodeMap.get(c.targetNodeId);
-        const input = targetNode?.inputs?.[c.targetPortId];
-        if (input?.control) {
-          input.showControl = false;
-          await areaPlugin.update('node', c.targetNodeId);
-        }
       }
 
       // Remove stale connections (from editor to match engine)
@@ -681,15 +742,6 @@
         }
         connectionMap.delete(id);
 
-        const targetNode = nodeMap.get(targetId);
-        const input = targetNode?.inputs?.[portId];
-        if (input?.control) {
-          const stillConnected = editor
-            .getConnections()
-            .some((c2: any) => String(c2.target) === targetId && String(c2.targetInput) === portId);
-          input.showControl = !stillConnected;
-          await areaPlugin.update('node', targetId);
-        }
       }
 
       // Remove stale nodes (from editor to match engine)
@@ -702,6 +754,28 @@
           console.warn('[NodeCanvas] removeNode failed', id, err);
         }
         nodeMap.delete(id);
+      }
+
+      // Disable inline input controls when their inputs are connected (ComfyUI-like behavior).
+      const connectedInputs = new Set<string>();
+      for (const c of state.connections) connectedInputs.add(`${c.targetNodeId}:${c.targetPortId}`);
+
+      for (const n of state.nodes) {
+        const reteNode = nodeMap.get(n.id);
+        if (!reteNode) continue;
+        const def = nodeRegistry.get(n.type);
+        let updated = false;
+        for (const port of def?.inputs ?? []) {
+          const input = reteNode?.inputs?.[port.id];
+          const control = input?.control as any;
+          if (!control) continue;
+          const nextReadonly = connectedInputs.has(`${n.id}:${port.id}`);
+          if (Boolean(control.readonly) !== nextReadonly) {
+            control.readonly = nextReadonly;
+            updated = true;
+          }
+        }
+        if (updated) await areaPlugin.update('node', n.id);
       }
     } finally {
       isSyncingGraph = false;
@@ -867,8 +941,9 @@
           connectionMap.set(engineConn.id, c);
           const targetNode = nodeMap.get(engineConn.targetNodeId);
           const input = targetNode?.inputs?.[engineConn.targetPortId];
-          if (input?.control) {
-            input.showControl = false;
+          const control = input?.control as any;
+          if (control && Boolean(control.readonly) !== true) {
+            control.readonly = true;
             await areaPlugin?.update?.('node', engineConn.targetNodeId);
           }
         } else if (editor) {
@@ -893,12 +968,15 @@
         nodeEngine.removeConnection(id);
         const targetNode = nodeMap.get(targetId);
         const input = targetNode?.inputs?.[portId];
-        if (input?.control) {
+        const control = input?.control as any;
+        if (control) {
           const stillConnected = Array.from(connectionMap.values()).some(
             (conn: any) => String(conn.target) === targetId && String(conn.targetInput) === portId
           );
-          input.showControl = !stillConnected;
-          await areaPlugin?.update?.('node', targetId);
+          if (Boolean(control.readonly) !== stillConnected) {
+            control.readonly = stillConnected;
+            await areaPlugin?.update?.('node', targetId);
+          }
         }
       }
 
@@ -1020,6 +1098,10 @@
   onMount(async () => {
     if (!container) return;
 
+    // MIDI nodes rely on the shared MIDI singleton. Keep the bridge alive;
+    // request MIDI access lazily when MIDI nodes are present or user presses Learn.
+    midiNodeBridge.init();
+
     refreshNumberParams();
     paramsUnsub = parameterRegistry.subscribe(() => refreshNumberParams());
 
@@ -1106,6 +1188,9 @@
 
     await scheduleGraphSync(get(graphStateStore));
     graphUnsub = graphStateStore?.subscribe((state) => {
+      if ((state.nodes ?? []).some((n) => String(n.type).startsWith('midi-'))) {
+        void midiService.init();
+      }
       void scheduleGraphSync(state);
     });
 
@@ -1672,12 +1757,20 @@
     background: rgba(59, 130, 246, 0.95) !important;
   }
 
+  :global(.node-canvas-container .socket[title='color']) {
+    background: rgba(236, 72, 153, 0.95) !important;
+  }
+
   :global(.node-canvas-container .socket[title='client']) {
     background: rgba(168, 85, 247, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='command']) {
     background: rgba(239, 68, 68, 0.92) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='fuzzy']) {
+    background: rgba(20, 184, 166, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='any']) {

@@ -3,10 +3,16 @@
   import { sensorData, state as managerState } from '$lib/stores/manager';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
+  import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
+  import { midiNodeBridge, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
 
   export let data: any;
   $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
   const graphStateStore = nodeEngine.graphState;
+  const midiLearnModeStore = midiNodeBridge.learnMode;
+  const midiLastMessageStore = midiService.lastMessage;
+  const midiSelectedInputStore = midiService.selectedInputId;
+  const midiSupportedStore = midiService.isSupported;
 
   function changeInput(event: Event) {
     if (!(data instanceof ClassicPreset.InputControl)) return;
@@ -99,6 +105,39 @@
     sensorsPayload = sensorsData?.payload ?? {};
     sensorValueText = computeSensorValue(portId, sensorsData, sensorsPayload);
   }
+
+  let midiNodeId = '';
+  let midiSource: any = null;
+  let midiIsLearning = false;
+
+  function formatMidiEvent(event: MidiEvent | null): string {
+    if (!event) return '—';
+    const channel = `ch${event.channel + 1}`;
+    if (event.type === 'pitchbend') return `pitchbend • ${channel} • ${event.normalized.toFixed(3)}`;
+    const num = event.number ?? 0;
+    const suffix = event.type === 'note' ? (event.isPress ? 'on' : 'off') : `${event.rawValue}`;
+    return `${event.type} ${num} • ${channel} • ${suffix}`;
+  }
+
+  $: if (data?.controlType === 'midi-learn') {
+    midiNodeId = String(data?.nodeId ?? '');
+    const node = ($graphStateStore.nodes ?? []).find((n: any) => String(n.id) === midiNodeId);
+    midiSource = node?.config?.source ?? null;
+    midiIsLearning = Boolean($midiLearnModeStore.active && $midiLearnModeStore.nodeId === midiNodeId);
+  }
+
+  function toggleMidiLearn(nodeId: string) {
+    void midiService.init();
+    if (midiIsLearning) {
+      midiNodeBridge.cancelLearn();
+    } else {
+      midiNodeBridge.startLearn(nodeId);
+    }
+  }
+
+  function clearMidiBinding(nodeId: string) {
+    nodeEngine.updateNodeConfig(nodeId, { source: null });
+  }
 </script>
 
 {#if data instanceof ClassicPreset.InputControl}
@@ -111,6 +150,7 @@
       type={data.type}
       value={data.value}
       readonly={data.readonly}
+      disabled={data.readonly}
       on:pointerdown|stopPropagation
       on:input={changeInput}
     />
@@ -176,6 +216,40 @@
   </div>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
+{:else if data?.controlType === 'midi-learn'}
+  <div class="midi-learn">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+    <div class="midi-row">
+      <div class="midi-binding">{formatMidiSource(midiSource)}</div>
+      <button
+        type="button"
+        class="midi-btn {midiIsLearning ? 'active' : ''}"
+        disabled={!$midiSupportedStore}
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={() => toggleMidiLearn(midiNodeId)}
+      >
+        {midiIsLearning ? 'Listening…' : 'Learn'}
+      </button>
+    </div>
+    {#if midiIsLearning}
+      <div class="midi-hint">
+        Move a MIDI control… (input: {$midiSelectedInputStore || 'auto'})
+      </div>
+      <div class="midi-last">{formatMidiEvent($midiLastMessageStore)}</div>
+    {/if}
+    {#if midiSource}
+      <button
+        type="button"
+        class="midi-clear"
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={() => clearMidiBinding(midiNodeId)}
+      >
+        Clear binding
+      </button>
+    {/if}
+  </div>
 {:else}
   <div class="control-unknown">Unsupported control</div>
 {/if}
@@ -209,6 +283,20 @@
   .control-input:focus {
     border-color: rgba(99, 102, 241, 0.7);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  }
+
+  .control-input:disabled,
+  .control-input[readonly] {
+    background: rgba(2, 6, 23, 0.22);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.58);
+    cursor: not-allowed;
+  }
+
+  .control-input:disabled:focus,
+  .control-input[readonly]:focus {
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: none;
   }
 
   .boolean-field {
@@ -260,6 +348,15 @@
   .toggle input:checked + .toggle-track .toggle-thumb {
     transform: translateX(16px);
     background: rgba(255, 255, 255, 0.9);
+  }
+
+  .toggle input:disabled + .toggle-track {
+    opacity: 0.45;
+  }
+
+  .toggle input:disabled ~ .toggle-label {
+    opacity: 0.65;
+    cursor: not-allowed;
   }
 
   .toggle-label {
@@ -356,5 +453,85 @@
     text-align: right;
     min-width: 56px;
     white-space: nowrap;
+  }
+
+  .midi-learn {
+    padding: 6px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .midi-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .midi-binding {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.76);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(2, 6, 23, 0.32);
+    border-radius: 10px;
+    padding: 6px 10px;
+  }
+
+  .midi-btn {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(2, 6, 23, 0.38);
+    color: rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .midi-btn:hover {
+    border-color: rgba(99, 102, 241, 0.45);
+    background: rgba(2, 6, 23, 0.5);
+  }
+
+  .midi-btn.active {
+    border-color: rgba(99, 102, 241, 0.75);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  }
+
+  .midi-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .midi-hint {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  .midi-last {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(20, 184, 166, 0.92);
+  }
+
+  .midi-clear {
+    align-self: flex-start;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.84);
+    border-radius: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .midi-clear:hover {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(2, 6, 23, 0.5);
   }
 </style>

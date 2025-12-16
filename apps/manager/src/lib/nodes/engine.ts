@@ -250,8 +250,10 @@ class NodeEngineClass {
         } else {
           // Use default or stored input value
           inputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
+          // Preserve manual values even if this input becomes connected later.
+          // (ComfyUI-style: connecting disables the widget but doesn't overwrite its value.)
+          node.inputValues[port.id] = inputs[port.id];
         }
-        node.inputValues[port.id] = inputs[port.id];
       }
 
       // Execute node

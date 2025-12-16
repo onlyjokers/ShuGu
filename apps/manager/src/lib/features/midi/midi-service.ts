@@ -28,6 +28,7 @@ class MidiServiceClass {
   private activeInputId: string | null = null;
   private boundInputIds: Set<string> = new Set();
   private handlers: Set<MidiMessageHandler> = new Set();
+  private initPromise: Promise<boolean> | null = null;
   
   // Stores for UI
   public inputs: Writable<MidiInput[]> = writable([]);
@@ -37,24 +38,37 @@ class MidiServiceClass {
   public error: Writable<string | null> = writable(null);
 
   async init(): Promise<boolean> {
+    if (this.access) {
+      this.isSupported.set(true);
+      this.refreshInputs();
+      return true;
+    }
+    if (this.initPromise) return this.initPromise;
+
     if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
       this.error.set('WebMIDI not supported in this browser');
       this.isSupported.set(false);
       return false;
     }
 
-    try {
-      this.access = await navigator.requestMIDIAccess();
-      this.isSupported.set(true);
-      this.refreshInputs();
-      
-      this.access.onstatechange = () => this.refreshInputs();
-      return true;
-    } catch (err) {
-      this.error.set('Failed to get MIDI access permission');
-      this.isSupported.set(false);
-      return false;
-    }
+    this.initPromise = (async () => {
+      try {
+        this.access = await navigator.requestMIDIAccess();
+        this.isSupported.set(true);
+        this.refreshInputs();
+
+        this.access.onstatechange = () => this.refreshInputs();
+        return true;
+      } catch (err) {
+        this.error.set('Failed to get MIDI access permission');
+        this.isSupported.set(false);
+        return false;
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   private refreshInputs(): void {

@@ -77,7 +77,7 @@
             />
             <div class="port-body">
               <div class="port-label" data-testid="input-title">{input.label || ''}</div>
-              {#if input.control && input.showControl}
+              {#if input.control}
                 <Ref
                   class="port-control"
                   data-testid="input-control"

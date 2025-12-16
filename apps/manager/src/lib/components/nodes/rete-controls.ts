@@ -94,3 +94,15 @@ export class ClientSensorValueControl extends ClassicPreset.Control {
     this.portId = opts.portId;
   }
 }
+
+export class MidiLearnControl extends ClassicPreset.Control {
+  controlType = 'midi-learn' as const;
+  nodeId: string;
+  label?: string;
+
+  constructor(opts: { nodeId: string; label?: string }) {
+    super();
+    this.nodeId = opts.nodeId;
+    this.label = opts.label;
+  }
+}

@@ -7,12 +7,20 @@
 import type { NodeDefinition } from '../types';
 import { nodeRegistry } from '../registry';
 
+const WAVEFORM_OPTIONS = [
+  { value: 'square', label: 'Square' },
+  { value: 'sine', label: 'Sine' },
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'sawtooth', label: 'Sawtooth' },
+] as const satisfies { value: string; label: string }[];
+
 const SynthUpdateProcessorNode: NodeDefinition = {
   type: 'proc-synth-update',
   label: 'Synth (Update)',
   category: 'Processors',
   inputs: [
     { id: 'client', label: 'Client', type: 'client' },
+    { id: 'waveform', label: 'Wave', type: 'fuzzy' },
     { id: 'frequency', label: 'Freq', type: 'number' },
     { id: 'volume', label: 'Vol', type: 'number' },
     { id: 'modDepth', label: 'Depth', type: 'number' },
@@ -28,12 +36,7 @@ const SynthUpdateProcessorNode: NodeDefinition = {
       label: 'Waveform',
       type: 'select',
       defaultValue: 'square',
-      options: [
-        { value: 'square', label: 'Square' },
-        { value: 'sine', label: 'Sine' },
-        { value: 'triangle', label: 'Triangle' },
-        { value: 'sawtooth', label: 'Sawtooth' },
-      ],
+      options: WAVEFORM_OPTIONS,
     },
     { key: 'modDepth', label: 'Wobble Depth', type: 'number', defaultValue: 0 },
     { key: 'modFrequency', label: 'Wobble Rate (Hz)', type: 'number', defaultValue: 12 },
@@ -61,13 +64,23 @@ const SynthUpdateProcessorNode: NodeDefinition = {
         ? (inputs.durationMs as number)
         : Number(config.durationMs ?? 200);
 
+    const fallbackWaveform = String(config.waveform ?? 'square');
+    const waveform = (() => {
+      const v = inputs.waveform;
+      if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
+      const options = WAVEFORM_OPTIONS.map((o) => o.value);
+      const clamped = Math.max(0, Math.min(1, v));
+      const idx = Math.min(options.length - 1, Math.floor(clamped * options.length));
+      return options[idx] ?? fallbackWaveform;
+    })();
+
     return {
       cmd: {
         action: 'modulateSoundUpdate',
         payload: {
           frequency,
           volume: Math.max(0, Math.min(1, volume)),
-          waveform: String(config.waveform ?? 'square'),
+          waveform,
           modDepth: depth > 0 ? depth : undefined,
           modFrequency: depth > 0 ? modFrequency : undefined,
           durationMs,

@@ -2,7 +2,7 @@
  * Node Graph Type Definitions
  */
 
-export type PortType = 'number' | 'boolean' | 'string' | 'client' | 'command' | 'any';
+export type PortType = 'number' | 'boolean' | 'string' | 'color' | 'client' | 'command' | 'fuzzy' | 'any';
 export type NodeMode = 'REMOTE' | 'MODULATION';
 export type PortKind = 'data' | 'sink';
 
@@ -44,7 +44,7 @@ export interface NodeDefinition {
 export interface ConfigField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path';
+  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
 }
