@@ -7,6 +7,7 @@
   import { ConnectionPlugin, Presets as ConnectionPresets } from 'rete-connection-plugin';
   import { HistoryPlugin } from 'rete-history-plugin';
   import { SveltePlugin, Presets as SveltePresets } from 'rete-svelte-plugin';
+  import { DOMSocketPosition } from 'rete-render-utils';
 
   import Button from '$lib/components/ui/Button.svelte';
   import ReteNode from '$lib/components/nodes/ReteNode.svelte';
@@ -54,9 +55,114 @@
   let pointerMoveHandler: ((event: PointerEvent) => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let lastPointerClient = { x: 0, y: 0 };
+  let socketPositionWatcher: LiveDOMSocketPosition | null = null;
 
   let queuedGraphState: { nodes: NodeInstance[]; connections: EngineConnection[] } | null = null;
   let syncLoop: Promise<void> | null = null;
+
+  class LiveDOMSocketPosition extends DOMSocketPosition<any, any> {
+    private ro: ResizeObserver | null = null;
+    private observed = new WeakSet<HTMLElement>();
+    private elementToNodeId = new WeakMap<HTMLElement, string>();
+    private pending = new Set<string>();
+    private raf = 0;
+
+    override attach(scope: any) {
+      super.attach(scope);
+      if (typeof ResizeObserver === 'undefined') return;
+      if (this.ro) return;
+
+      this.ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const nodeId = this.elementToNodeId.get(entry.target as HTMLElement);
+          if (nodeId) this.queue(nodeId);
+        }
+      });
+
+      const area = (this as any).area;
+      if (!area) return;
+
+      const observeAll = () => {
+        if (!this.ro) return;
+        for (const [id, view] of area.nodeViews?.entries?.() ?? []) {
+          const el = view?.element as HTMLElement | undefined;
+          if (!el) continue;
+          if (this.observed.has(el)) continue;
+          this.observed.add(el);
+          this.elementToNodeId.set(el, String(id));
+          try {
+            this.ro.observe(el);
+          } catch {
+            // ignore
+          }
+        }
+      };
+
+      observeAll();
+      area.addPipe((ctx: any) => {
+        if (ctx?.type === 'rendered' && ctx.data?.type === 'node') {
+          observeAll();
+        }
+        return ctx;
+      });
+    }
+
+    destroy() {
+      if (this.raf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      this.pending.clear();
+      this.ro?.disconnect();
+      this.ro = null;
+    }
+
+    private queue(nodeId: string) {
+      this.pending.add(nodeId);
+      if (typeof requestAnimationFrame === 'undefined') return;
+      if (this.raf) return;
+      this.raf = requestAnimationFrame(() => {
+        this.raf = 0;
+        void this.flush();
+      });
+    }
+
+    private async flush() {
+      const area = (this as any).area;
+      if (!area) return;
+      const ids = Array.from(this.pending);
+      this.pending.clear();
+
+      for (const nodeId of ids) {
+        const items = (this as any).sockets
+          ?.snapshot?.()
+          ?.filter((item: any) => String(item.nodeId) === String(nodeId));
+        if (!items || items.length === 0) continue;
+
+        await Promise.all(
+          items.map(async (item: any) => {
+            const position = await (this as any).calculatePosition(
+              String(nodeId),
+              item.side,
+              String(item.key),
+              item.element
+            );
+            if (position) item.position = position;
+          })
+        );
+
+        (this as any).emitter?.emit?.({ nodeId: String(nodeId) });
+      }
+    }
+  }
+
+  function normalizeAreaTransform(area: any) {
+    const k = Number(area?.transform?.k);
+    const x = Number(area?.transform?.x);
+    const y = Number(area?.transform?.y);
+
+    if (!Number.isFinite(k) || k <= 0) area.transform.k = 1;
+    if (!Number.isFinite(x)) area.transform.x = 0;
+    if (!Number.isFinite(y)) area.transform.y = 0;
+  }
 
   type MiniNode = { id: string; x: number; y: number; width: number; height: number; selected: boolean };
   type MinimapState = {
@@ -731,6 +837,7 @@
     const graphY = minimap.bounds.minY + (my - minimap.offsetY) / minimap.scale;
 
     const area = areaPlugin.area;
+    normalizeAreaTransform(area);
     const k = Number(area.transform?.k ?? 1) || 1;
     const cx = container.clientWidth / 2;
     const cy = container.clientHeight / 2;
@@ -989,6 +1096,7 @@
     render.addPreset(
       // @ts-expect-error preset type mismatch
       SveltePresets.classic.setup({
+        socketPositionWatcher: socketPositionWatcher ?? (socketPositionWatcher = new LiveDOMSocketPosition()),
         customize: {
           node: () => ReteNode,
           control: () => ReteControl,
@@ -1013,12 +1121,26 @@
       const target = event.target as HTMLElement | null;
       if (!container) return;
       const bounds = container.getBoundingClientRect();
+      const hasBounds = bounds.width > 0 && bounds.height > 0;
       const within =
+        hasBounds &&
         event.clientX >= bounds.left &&
         event.clientX <= bounds.right &&
         event.clientY >= bounds.top &&
         event.clientY <= bounds.bottom;
-      if (!within) return;
+
+      // Prevent browser page zoom (trackpad pinch / ctrl+wheel) globally in Manager while NodeCanvas is mounted.
+      // If the cursor is slightly outside the canvas, still treat it as a canvas zoom by clamping the origin.
+      if (event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        // If the canvas isn't visible/measurable, we only want to block page zoom.
+        if (!hasBounds) return;
+      } else if (!within) {
+        return;
+      }
+
+      // Don't zoom while interacting with overlays/minimap (but still block page zoom above).
       if (target?.closest?.('.node-picker')) return;
       if (target?.closest?.('.minimap')) return;
       const tag = target?.tagName?.toLowerCase?.() ?? '';
@@ -1026,6 +1148,7 @@
 
       const area = areaPlugin?.area;
       if (!area) return;
+      normalizeAreaTransform(area);
 
       const current = Number(area.transform?.k ?? 1) || 1;
       let deltaY = event.deltaY;
@@ -1049,12 +1172,19 @@
       const rect = rectEl?.getBoundingClientRect?.();
       if (!rect) return;
 
-      // Always zoom the canvas on wheel/trackpad gestures (incl. pinch-as-wheel on macOS).
-      event.preventDefault();
-      event.stopPropagation();
+      // Always zoom the canvas on wheel/trackpad gestures.
+      // Note: ctrl+wheel is already prevented above (to disable page zoom globally).
+      if (!event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
 
-      const ox = (rect.left - event.clientX) * ratio;
-      const oy = (rect.top - event.clientY) * ratio;
+      const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+      const clientX = within ? event.clientX : clamp(event.clientX, bounds.left, bounds.right);
+      const clientY = within ? event.clientY : clamp(event.clientY, bounds.top, bounds.bottom);
+
+      const ox = (rect.left - clientX) * ratio;
+      const oy = (rect.top - clientY) * ratio;
       void area.zoom(next, ox, oy, 'wheel');
       requestMinimapUpdate();
     };
@@ -1092,8 +1222,9 @@
       const area = areaPlugin?.area;
       if (!area) return;
       isNodeDragging = false;
-      // Re-apply current transform after layout changes (keeps drag math consistent after resizes).
-      void area.zoom(Number(area.transform?.k ?? 1) || 1, 0, 0);
+      // Re-apply current transform after layout changes (keeps pointer math consistent after resizes).
+      normalizeAreaTransform(area);
+      area.update?.();
       requestMinimapUpdate();
     });
     resizeObserver.observe(container);
@@ -1136,6 +1267,7 @@
     if (keydownHandler) window.removeEventListener('keydown', keydownHandler);
     resizeObserver?.disconnect();
     if (minimapRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(minimapRaf);
+    socketPositionWatcher?.destroy();
     areaPlugin?.destroy?.();
     editor?.clear();
     nodeMap.clear();
