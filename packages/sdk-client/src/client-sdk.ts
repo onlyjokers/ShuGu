@@ -4,7 +4,6 @@ import {
     ControlMessage,
     PluginControlMessage,
     SystemMessage,
-    SensorDataMessage,
     MediaMetaMessage,
     SOCKET_EVENTS,
     isControlMessage,
@@ -62,7 +61,8 @@ export class ClientSDK {
         this.config = {
             serverUrl: config.serverUrl,
             autoReconnect: config.autoReconnect ?? true,
-            reconnectionAttempts: config.reconnectionAttempts ?? 10,
+            // Default to unlimited retries; the experience client should survive flaky networks.
+            reconnectionAttempts: config.reconnectionAttempts ?? Number.POSITIVE_INFINITY,
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
         };
@@ -79,7 +79,12 @@ export class ClientSDK {
      * Connect to the server
      */
     connect(): void {
-        if (this.socket?.connected) return;
+        if (this.socket) {
+            if (this.socket.connected) return;
+            this.updateState({ status: 'connecting', error: null });
+            this.socket.connect();
+            return;
+        }
 
         this.updateState({ status: 'connecting', error: null });
 
@@ -93,7 +98,9 @@ export class ClientSDK {
             reconnection: this.config.autoReconnect,
             reconnectionAttempts: this.config.reconnectionAttempts,
             reconnectionDelay: this.config.reconnectionDelay,
-            reconnectionDelayMax: 5000,
+            // Keep retries steady at reconnectionDelay (no exponential backoff / jitter).
+            reconnectionDelayMax: this.config.reconnectionDelay,
+            randomizationFactor: 0,
             // Force new connection
             forceNew: true,
         });
@@ -220,7 +227,18 @@ export class ClientSDK {
         this.socket.on('disconnect', (reason) => {
             console.log('[SDK Client] Disconnected:', reason);
             this.stopTimeSync();
-            this.updateState({ status: 'disconnected' });
+
+            // socket.io does not auto-reconnect if the server explicitly disconnected us.
+            if (this.config.autoReconnect && reason !== 'io client disconnect') {
+                this.updateState({ status: 'reconnecting', clientId: null });
+
+                if (reason === 'io server disconnect') {
+                    this.socket?.connect();
+                }
+                return;
+            }
+
+            this.updateState({ status: 'disconnected', clientId: null });
         });
 
         this.socket.on('connect_error', (error) => {

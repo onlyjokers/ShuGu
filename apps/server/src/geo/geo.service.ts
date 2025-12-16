@@ -35,12 +35,43 @@ type NominatimReverseResponse = {
   address?: Record<string, string | undefined>;
 };
 
+export type GeoFenceConfig = {
+  center: {
+    lat: number;
+    lng: number;
+  };
+  rangeM: number;
+  address?: string | null;
+  updatedAt: number;
+};
+
 @Injectable()
 export class GeoService {
   // Nominatim is rate-limited; cache + inflight de-dupe avoids hammering it.
   private readonly cache = new Map<string, { expiresAt: number; value: ReverseGeocodeResponse }>();
   private readonly inflight = new Map<string, Promise<ReverseGeocodeResponse>>();
   private lastRequestAt = 0;
+
+  private geoFence: GeoFenceConfig | null = null;
+
+  getGeoFence(): GeoFenceConfig | null {
+    return this.geoFence;
+  }
+
+  setGeoFence(input: Omit<GeoFenceConfig, 'updatedAt'>): GeoFenceConfig {
+    const next: GeoFenceConfig = {
+      center: input.center,
+      rangeM: input.rangeM,
+      address: input.address ?? null,
+      updatedAt: Date.now(),
+    };
+    this.geoFence = next;
+    return next;
+  }
+
+  clearGeoFence(): void {
+    this.geoFence = null;
+  }
 
   async reverseGeocode(params: ReverseGeocodeParams): Promise<ReverseGeocodeResponse> {
     const key = this.buildCacheKey(params);

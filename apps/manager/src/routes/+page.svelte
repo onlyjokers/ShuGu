@@ -264,7 +264,7 @@
             <VibrationControl {useSync} />
           </div>
           <div class="grid-item">
-            <SceneControl {useSync} />
+            <SceneControl {useSync} {serverUrl} />
           </div>
           <div class="grid-item">
             <GeoControl {serverUrl} />

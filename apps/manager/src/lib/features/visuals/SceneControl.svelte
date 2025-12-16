@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { state, switchScene, asciiMode, asciiResolution } from '$lib/stores/manager';
   import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
@@ -9,6 +10,7 @@
 
   export let useSync = true;
   export let syncDelay = 500;
+  export let serverUrl: string;
 
   // selectedScene, asciiOn, asciiRes managed by controlState
 
@@ -18,6 +20,69 @@
   ];
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: scheduleBootstrapSync(serverUrl, $controlState.selectedScene, $controlState.asciiOn, $controlState.asciiResolution);
+
+  let isSyncingBootstrap = false;
+  let bootstrapSyncError: string | null = null;
+  let bootstrapSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let bootstrapAbort: AbortController | null = null;
+  let lastBootstrapKey = '';
+
+  function scheduleBootstrapSync(
+    nextServerUrl: string,
+    sceneId: string,
+    asciiEnabled: boolean,
+    asciiRes: number
+  ): void {
+    bootstrapSyncError = null;
+    if (!nextServerUrl) return;
+    if (!sceneId) return;
+
+    const key = `${nextServerUrl}|${sceneId}|${asciiEnabled ? '1' : '0'}|${Math.round(asciiRes)}`;
+    if (key === lastBootstrapKey) return;
+
+    if (bootstrapSyncTimer) clearTimeout(bootstrapSyncTimer);
+    bootstrapSyncTimer = setTimeout(() => {
+      void syncBootstrapToServer(nextServerUrl, { sceneId, asciiEnabled, asciiResolution: asciiRes }, key);
+    }, 300);
+  }
+
+  async function syncBootstrapToServer(
+    nextServerUrl: string,
+    visual: { sceneId: string; asciiEnabled: boolean; asciiResolution: number },
+    key: string
+  ): Promise<void> {
+    bootstrapAbort?.abort();
+    bootstrapAbort = new AbortController();
+    isSyncingBootstrap = true;
+    bootstrapSyncError = null;
+
+    try {
+      const origin = new URL(nextServerUrl).origin;
+      const url = new URL('/bootstrap/visual', origin);
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        signal: bootstrapAbort.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(visual),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(body || response.statusText);
+      }
+      lastBootstrapKey = key;
+    } catch (error) {
+      if ((error as any)?.name === 'AbortError') return;
+      bootstrapSyncError = (error as any)?.message ?? String(error);
+    } finally {
+      isSyncingBootstrap = false;
+    }
+  }
+
+  onDestroy(() => {
+    if (bootstrapSyncTimer) clearTimeout(bootstrapSyncTimer);
+    bootstrapAbort?.abort();
+  });
 
   function handleAsciiChange(e: Event) {
     const target = e.target as HTMLInputElement;
@@ -121,6 +186,13 @@
         >
       </div>
     </div>
+
+    {#if isSyncingBootstrap}
+      <p class="meta">正在同步启动配置…</p>
+    {/if}
+    {#if bootstrapSyncError}
+      <p class="error">启动配置同步失败：{bootstrapSyncError}</p>
+    {/if}
   </div>
 </Card>
 
@@ -146,5 +218,17 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-sm);
+  }
+
+  .meta {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+
+  .error {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-error);
   }
 </style>

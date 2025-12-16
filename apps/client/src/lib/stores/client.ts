@@ -29,7 +29,6 @@ import type {
 
 // SDK and controller instances
 let sdk: ClientSDK | null = null;
-let serverOrigin: string | null = null;
 let sensorManager: SensorManager | null = null;
 let flashlightController: FlashlightController | null = null;
 let screenController: ScreenController | null = null;
@@ -115,10 +114,12 @@ export const clientId = derived(state, ($state) => $state.clientId);
 /**
  * Initialize and connect to server
  */
-export async function initialize(config: ClientSDKConfig): Promise<void> {
+export function initialize(
+    config: ClientSDKConfig,
+    options?: { autoConnect?: boolean }
+): void {
     // Initialize SDK
     sdk = new ClientSDK(config);
-    serverOrigin = normalizeServerOrigin(config.serverUrl);
 
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
@@ -138,8 +139,13 @@ export async function initialize(config: ClientSDKConfig): Promise<void> {
     wakeLockController = new WakeLockController();
     sensorManager = new SensorManager({ throttleMs: 100 });
 
-    // Connect to server
-    sdk.connect();
+    if (options?.autoConnect !== false) {
+        sdk.connect();
+    }
+}
+
+export function connectToServer(): void {
+    sdk?.connect();
 }
 
 /**
@@ -207,159 +213,6 @@ export async function requestPermissions(): Promise<void> {
         permissions.update(p => ({ ...p, camera: success ? 'granted' : 'denied' }));
     }
 
-    // Request geolocation last to avoid overlapping permission prompts on iOS/Safari.
-    void acquireGeolocation();
-}
-
-type GeolocationPermissionStatus = 'granted' | 'denied' | 'unavailable' | 'unsupported';
-
-async function acquireGeolocation(): Promise<void> {
-    permissions.update(p => ({ ...p, geolocation: 'pending' }));
-    try {
-        const result = await requestGeolocationBestEffort();
-
-        if (result.status === 'granted') {
-            permissions.update(p => ({ ...p, geolocation: 'granted' }));
-            const { latitude, longitude, accuracy } = result.position.coords;
-            const address = await reverseGeocodeViaServer(latitude, longitude).catch((error) => {
-                console.warn('[Client] Reverse geocode failed', {
-                    error: formatGeolocationError(error),
-                });
-                return null;
-            });
-            console.info('[Client] Geolocation acquired', {
-                latitude,
-                longitude,
-                accuracy,
-                address,
-                timestamp: result.position.timestamp,
-            });
-            return;
-        }
-
-        permissions.update(p => ({ ...p, geolocation: result.status }));
-        console.warn('[Client] Geolocation not available', {
-            status: result.status,
-            error: formatGeolocationError(result.error),
-            origin: typeof location !== 'undefined' ? location.origin : undefined,
-            isSecureContext: typeof isSecureContext === 'boolean' ? isSecureContext : undefined,
-        });
-    } catch (error) {
-        permissions.update(p => ({ ...p, geolocation: 'unavailable' }));
-        console.warn('[Client] Geolocation request failed', {
-            error: formatGeolocationError(error),
-        });
-    }
-}
-
-async function requestGeolocationBestEffort(): Promise<
-    | { status: 'granted'; position: GeolocationPosition }
-    | { status: Exclude<GeolocationPermissionStatus, 'granted'>; error: unknown }
-> {
-    if (!('geolocation' in navigator) || !navigator.geolocation) {
-        return { status: 'unsupported', error: new Error('Geolocation API is not supported') };
-    }
-
-    if (typeof isSecureContext === 'boolean' && !isSecureContext) {
-        return {
-            status: 'unsupported',
-            error: new Error('Geolocation requires a secure context (HTTPS)'),
-        };
-    }
-
-    try {
-        const position = await requestGeolocationOnce({
-            enableHighAccuracy: true,
-            timeout: 25_000,
-            maximumAge: 5_000,
-        });
-        return { status: 'granted', position };
-    } catch (error) {
-        const status = classifyGeolocationError(error);
-        if (status === 'denied') return { status, error };
-
-        // Fallback: allow lower accuracy and longer timeout.
-        try {
-            const position = await requestGeolocationOnce({
-                enableHighAccuracy: false,
-                timeout: 35_000,
-                maximumAge: 30_000,
-            });
-            return { status: 'granted', position };
-        } catch (fallbackError) {
-            const fallbackStatus = classifyGeolocationError(fallbackError);
-            return { status: fallbackStatus, error: fallbackError };
-        }
-    }
-}
-
-function requestGeolocationOnce(options: PositionOptions): Promise<GeolocationPosition> {
-    if (!('geolocation' in navigator) || !navigator.geolocation) {
-        return Promise.reject(new Error('Geolocation API is not supported'));
-    }
-    return new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, options);
-    });
-}
-
-function isGeolocationPositionError(error: unknown): error is GeolocationPositionError {
-    return (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        typeof (error as any).code === 'number'
-    );
-}
-
-function classifyGeolocationError(error: unknown): Exclude<GeolocationPermissionStatus, 'granted' | 'unsupported'> {
-    if (isGeolocationPositionError(error)) {
-        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT
-        return error.code === 1 ? 'denied' : 'unavailable';
-    }
-    return 'unavailable';
-}
-
-function formatGeolocationError(error: unknown): string {
-    if (isGeolocationPositionError(error)) {
-        const codeLabel =
-            error.code === 1 ? 'PERMISSION_DENIED' : error.code === 2 ? 'POSITION_UNAVAILABLE' : 'TIMEOUT';
-        return `${codeLabel}: ${error.message || '(no message)'}`;
-    }
-    if (error instanceof Error) return error.message;
-    return String(error);
-}
-
-function normalizeServerOrigin(raw: string): string | null {
-    try {
-        return new URL(raw).origin;
-    } catch (error) {
-        console.warn('[Client] Invalid serverUrl; cannot derive origin for reverse geocode', {
-            serverUrl: raw,
-            error: formatGeolocationError(error),
-        });
-        return null;
-    }
-}
-
-async function reverseGeocodeViaServer(lat: number, lng: number): Promise<string | null> {
-    if (!serverOrigin) return null;
-    const url = new URL('/geo/reverse', serverOrigin);
-    url.searchParams.set('lat', String(lat));
-    url.searchParams.set('lng', String(lng));
-    url.searchParams.set('lang', 'zh-CN');
-    url.searchParams.set('zoom', '18');
-
-    const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(body || response.statusText);
-    }
-    const json = (await response.json()) as { formattedAddress?: string; displayName?: string };
-    const address = (json.formattedAddress || json.displayName || '').trim();
-    return address || null;
 }
 
 /**
@@ -564,6 +417,7 @@ function handlePluginControlMessage(message: PluginControlMessage): void {
 export function disconnect(): void {
     sdk?.disconnect();
     sdk = null;
+    // geolocation is handled by the start gate (page); keep permission state as-is.
 
     sensorManager?.stop();
     sensorManager = null;

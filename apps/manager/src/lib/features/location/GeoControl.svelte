@@ -35,6 +35,12 @@
   let lastReverseKey = '';
   let reverseAbort: AbortController | null = null;
 
+  let isSyncingFence = false;
+  let fenceSyncError: string | null = null;
+  let fenceSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let fenceAbort: AbortController | null = null;
+  let lastFenceSyncKey = '';
+
   const geolocationOptions: PositionOptions = {
     enableHighAccuracy: true,
     timeout: 10_000,
@@ -98,6 +104,10 @@
     addressError = null;
     reverseAbort?.abort();
     reverseAbort = null;
+  }
+
+  $: if (restored) {
+    scheduleFenceSync(serverUrl, selectedLocation, rangeM, selectedAddress);
   }
 
   function formatLocationLabel(location: SelectedGeoLocation | null): string {
@@ -202,6 +212,71 @@
     }
   }
 
+  function scheduleFenceSync(
+    nextServerUrl: string,
+    location: SelectedGeoLocation | null,
+    nextRangeM: number,
+    address: string | null
+  ): void {
+    fenceSyncError = null;
+    if (!nextServerUrl) return;
+    if (!location) return;
+
+    const key = `${nextServerUrl}|${location.lat.toFixed(6)},${location.lng.toFixed(6)}|${Math.round(
+      nextRangeM
+    )}|${address ?? ''}`;
+    if (key === lastFenceSyncKey) return;
+
+    if (fenceSyncTimer) clearTimeout(fenceSyncTimer);
+    fenceSyncTimer = setTimeout(() => {
+      void syncFenceToServer(nextServerUrl, location, nextRangeM, address, key);
+    }, 300);
+  }
+
+  async function syncFenceToServer(
+    nextServerUrl: string,
+    location: SelectedGeoLocation,
+    nextRangeM: number,
+    address: string | null,
+    key: string
+  ): Promise<void> {
+    if (!nextServerUrl) return;
+
+    fenceAbort?.abort();
+    fenceAbort = new AbortController();
+
+    isSyncingFence = true;
+    fenceSyncError = null;
+
+    try {
+      const origin = new URL(nextServerUrl).origin;
+      const url = new URL('/geo/fence', origin);
+      const payload = {
+        center: { lat: location.lat, lng: location.lng },
+        rangeM: nextRangeM,
+        address,
+      };
+
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        signal: fenceAbort.signal,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(body || response.statusText);
+      }
+
+      lastFenceSyncKey = key;
+    } catch (error) {
+      if ((error as any)?.name === 'AbortError') return;
+      fenceSyncError = (error as any)?.message ?? String(error);
+    } finally {
+      isSyncingFence = false;
+    }
+  }
+
   async function handleGetCurrentLocation(): Promise<void> {
     errorMessage = null;
     isLocating = true;
@@ -250,6 +325,12 @@
     {/if}
     {#if selectedAddress}
       <p class="address-full">{selectedAddress}</p>
+    {/if}
+    {#if selectedLocation && isSyncingFence}
+      <p class="meta">正在同步演出位置到服务器…</p>
+    {/if}
+    {#if fenceSyncError}
+      <p class="error">同步到服务器失败：{fenceSyncError}</p>
     {/if}
     {#if selectedLocation && isResolvingAddress}
       <p class="meta">正在解析地址…</p>
