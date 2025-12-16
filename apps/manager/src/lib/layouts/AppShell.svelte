@@ -2,9 +2,7 @@
   import ConnectionBar from '$lib/components/ConnectionBar.svelte';
 
   // Slots
-  // - sidebar: Client list, etc.
   // - main: Main content
-  // - right-sidebar: Sensor data (optional)
   // - footer: Session actions
 </script>
 
@@ -19,17 +17,9 @@
   </header>
 
   <div class="body">
-    <aside class="sidebar-left">
-      <slot name="sidebar" />
-    </aside>
-
     <main class="main-content">
       <slot />
     </main>
-
-    <aside class="sidebar-right">
-      <slot name="right-sidebar" />
-    </aside>
   </div>
 
   <footer class="footer">
@@ -64,38 +54,22 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    white-space: nowrap;
+  }
+
+  .connection-status {
+    display: flex;
+    align-items: center;
+    min-width: 0;
   }
 
   .body {
     flex: 1;
-    display: flex;
     overflow: hidden;
   }
 
-  .sidebar-left {
-    width: 320px;
-    border-right: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-md);
-    gap: var(--space-md);
-    overflow-y: auto;
-  }
-
-  .sidebar-right {
-    width: 320px;
-    border-left: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-md);
-    gap: var(--space-md);
-    overflow-y: auto;
-  }
-
   .main-content {
-    flex: 1;
+    height: 100%;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -120,9 +94,4 @@
     flex-shrink: 0;
   }
 
-  @media (max-width: 1200px) {
-    .sidebar-right {
-      display: none; /* Hide sensor sidebar on smaller screens or make it collapsible */
-    }
-  }
 </style>

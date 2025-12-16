@@ -2,6 +2,7 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { parameterRegistry } from '$lib/parameters/registry';
   import type { Parameter } from '$lib/parameters/parameter';
+  import ClientSelector from '$lib/components/ClientSelector.svelte';
   import ParamWidgetFactory from './parameters/ParamWidgetFactory.svelte';
   import MidiLearnPopup from './MidiLearnPopup.svelte';
 
@@ -112,6 +113,11 @@
     <button class="refresh-btn" on:click={refreshParams} title="Refresh"> 🔄 </button>
   </div>
 
+  <!-- Client selection param (same behavior as sidebar client-list-container) -->
+  <div class="client-selection-param">
+    <ClientSelector height={240} />
+  </div>
+
   {#if groups.length === 0}
     <div class="empty-state">
       <p>No parameters registered.</p>
@@ -188,6 +194,13 @@
 
   .refresh-btn:hover {
     opacity: 1;
+  }
+
+  .client-selection-param {
+    background: var(--bg-secondary, #252525);
+    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--border-color, #333);
+    overflow: hidden;
   }
 
   .empty-state {

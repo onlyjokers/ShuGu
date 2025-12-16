@@ -29,6 +29,7 @@ import type {
 
 // SDK and controller instances
 let sdk: ClientSDK | null = null;
+let serverOrigin: string | null = null;
 let sensorManager: SensorManager | null = null;
 let flashlightController: FlashlightController | null = null;
 let screenController: ScreenController | null = null;
@@ -57,11 +58,13 @@ export const permissions = writable<{
     motion: 'pending' | 'granted' | 'denied';
     camera: 'pending' | 'granted' | 'denied';
     wakeLock: 'pending' | 'granted' | 'denied';
+    geolocation: 'pending' | 'granted' | 'denied' | 'unavailable' | 'unsupported';
 }>({
     microphone: 'pending',
     motion: 'pending',
     camera: 'pending',
     wakeLock: 'pending',
+    geolocation: 'pending',
 });
 
 // Latency in ms (smooth average)
@@ -115,6 +118,7 @@ export const clientId = derived(state, ($state) => $state.clientId);
 export async function initialize(config: ClientSDKConfig): Promise<void> {
     // Initialize SDK
     sdk = new ClientSDK(config);
+    serverOrigin = normalizeServerOrigin(config.serverUrl);
 
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
@@ -142,28 +146,54 @@ export async function initialize(config: ClientSDKConfig): Promise<void> {
  * Request all permissions
  */
 export async function requestPermissions(): Promise<void> {
-    // Request microphone
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStream.set(stream);
-        permissions.update(p => ({ ...p, microphone: 'granted' }));
+    // Kick off permission prompts synchronously (before the first await) so iOS can show them.
+    // Some browser APIs require being triggered within the same user gesture stack.
+    const motionPermissionPromise = sensorManager
+        ? sensorManager.requestPermissions()
+        : Promise.resolve({ granted: false, error: 'Sensor manager not initialized' });
 
-        // Initialize sound player with user gesture
-        await soundPlayer?.init();
-    } catch (error) {
-        console.warn('[Permissions] Microphone denied:', error);
+    let microphonePromise: Promise<MediaStream>;
+    if (navigator.mediaDevices?.getUserMedia) {
+        microphonePromise = navigator.mediaDevices.getUserMedia({ audio: true });
+    } else {
+        microphonePromise = Promise.reject(new Error('mediaDevices.getUserMedia is not supported'));
+    }
+
+    const soundInitPromise = soundPlayer
+        ? soundPlayer.init().catch((error) => {
+            console.warn('[Permissions] Sound player init failed:', error);
+        })
+        : Promise.resolve();
+
+    const [motionResult, microphoneResult] = await Promise.allSettled([
+        motionPermissionPromise,
+        microphonePromise,
+    ]);
+
+    // Handle motion sensors
+    if (motionResult.status === 'fulfilled') {
+        permissions.update(p => ({ ...p, motion: motionResult.value.granted ? 'granted' : 'denied' }));
+        if (motionResult.value.granted && sensorManager) {
+            sensorManager.start();
+            setupSensorReporting();
+        } else if (!motionResult.value.granted) {
+            console.warn('[Permissions] Motion/orientation denied:', motionResult.value.error);
+        }
+    } else {
+        console.warn('[Permissions] Motion/orientation permission request failed:', motionResult.reason);
+        permissions.update(p => ({ ...p, motion: 'denied' }));
+    }
+
+    // Handle microphone
+    if (microphoneResult.status === 'fulfilled') {
+        audioStream.set(microphoneResult.value);
+        permissions.update(p => ({ ...p, microphone: 'granted' }));
+    } else {
+        console.warn('[Permissions] Microphone denied:', microphoneResult.reason);
         permissions.update(p => ({ ...p, microphone: 'denied' }));
     }
 
-    // Request motion sensors
-    if (sensorManager) {
-        const result = await sensorManager.requestPermissions();
-        permissions.update(p => ({ ...p, motion: result.granted ? 'granted' : 'denied' }));
-        if (result.granted) {
-            sensorManager.start();
-            setupSensorReporting();
-        }
-    }
+    await soundInitPromise;
 
     // Request wake lock
     if (wakeLockController) {
@@ -176,6 +206,160 @@ export async function requestPermissions(): Promise<void> {
         const success = await flashlightController.init();
         permissions.update(p => ({ ...p, camera: success ? 'granted' : 'denied' }));
     }
+
+    // Request geolocation last to avoid overlapping permission prompts on iOS/Safari.
+    void acquireGeolocation();
+}
+
+type GeolocationPermissionStatus = 'granted' | 'denied' | 'unavailable' | 'unsupported';
+
+async function acquireGeolocation(): Promise<void> {
+    permissions.update(p => ({ ...p, geolocation: 'pending' }));
+    try {
+        const result = await requestGeolocationBestEffort();
+
+        if (result.status === 'granted') {
+            permissions.update(p => ({ ...p, geolocation: 'granted' }));
+            const { latitude, longitude, accuracy } = result.position.coords;
+            const address = await reverseGeocodeViaServer(latitude, longitude).catch((error) => {
+                console.warn('[Client] Reverse geocode failed', {
+                    error: formatGeolocationError(error),
+                });
+                return null;
+            });
+            console.info('[Client] Geolocation acquired', {
+                latitude,
+                longitude,
+                accuracy,
+                address,
+                timestamp: result.position.timestamp,
+            });
+            return;
+        }
+
+        permissions.update(p => ({ ...p, geolocation: result.status }));
+        console.warn('[Client] Geolocation not available', {
+            status: result.status,
+            error: formatGeolocationError(result.error),
+            origin: typeof location !== 'undefined' ? location.origin : undefined,
+            isSecureContext: typeof isSecureContext === 'boolean' ? isSecureContext : undefined,
+        });
+    } catch (error) {
+        permissions.update(p => ({ ...p, geolocation: 'unavailable' }));
+        console.warn('[Client] Geolocation request failed', {
+            error: formatGeolocationError(error),
+        });
+    }
+}
+
+async function requestGeolocationBestEffort(): Promise<
+    | { status: 'granted'; position: GeolocationPosition }
+    | { status: Exclude<GeolocationPermissionStatus, 'granted'>; error: unknown }
+> {
+    if (!('geolocation' in navigator) || !navigator.geolocation) {
+        return { status: 'unsupported', error: new Error('Geolocation API is not supported') };
+    }
+
+    if (typeof isSecureContext === 'boolean' && !isSecureContext) {
+        return {
+            status: 'unsupported',
+            error: new Error('Geolocation requires a secure context (HTTPS)'),
+        };
+    }
+
+    try {
+        const position = await requestGeolocationOnce({
+            enableHighAccuracy: true,
+            timeout: 25_000,
+            maximumAge: 5_000,
+        });
+        return { status: 'granted', position };
+    } catch (error) {
+        const status = classifyGeolocationError(error);
+        if (status === 'denied') return { status, error };
+
+        // Fallback: allow lower accuracy and longer timeout.
+        try {
+            const position = await requestGeolocationOnce({
+                enableHighAccuracy: false,
+                timeout: 35_000,
+                maximumAge: 30_000,
+            });
+            return { status: 'granted', position };
+        } catch (fallbackError) {
+            const fallbackStatus = classifyGeolocationError(fallbackError);
+            return { status: fallbackStatus, error: fallbackError };
+        }
+    }
+}
+
+function requestGeolocationOnce(options: PositionOptions): Promise<GeolocationPosition> {
+    if (!('geolocation' in navigator) || !navigator.geolocation) {
+        return Promise.reject(new Error('Geolocation API is not supported'));
+    }
+    return new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+    });
+}
+
+function isGeolocationPositionError(error: unknown): error is GeolocationPositionError {
+    return (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        typeof (error as any).code === 'number'
+    );
+}
+
+function classifyGeolocationError(error: unknown): Exclude<GeolocationPermissionStatus, 'granted' | 'unsupported'> {
+    if (isGeolocationPositionError(error)) {
+        // 1 = PERMISSION_DENIED, 2 = POSITION_UNAVAILABLE, 3 = TIMEOUT
+        return error.code === 1 ? 'denied' : 'unavailable';
+    }
+    return 'unavailable';
+}
+
+function formatGeolocationError(error: unknown): string {
+    if (isGeolocationPositionError(error)) {
+        const codeLabel =
+            error.code === 1 ? 'PERMISSION_DENIED' : error.code === 2 ? 'POSITION_UNAVAILABLE' : 'TIMEOUT';
+        return `${codeLabel}: ${error.message || '(no message)'}`;
+    }
+    if (error instanceof Error) return error.message;
+    return String(error);
+}
+
+function normalizeServerOrigin(raw: string): string | null {
+    try {
+        return new URL(raw).origin;
+    } catch (error) {
+        console.warn('[Client] Invalid serverUrl; cannot derive origin for reverse geocode', {
+            serverUrl: raw,
+            error: formatGeolocationError(error),
+        });
+        return null;
+    }
+}
+
+async function reverseGeocodeViaServer(lat: number, lng: number): Promise<string | null> {
+    if (!serverOrigin) return null;
+    const url = new URL('/geo/reverse', serverOrigin);
+    url.searchParams.set('lat', String(lat));
+    url.searchParams.set('lng', String(lng));
+    url.searchParams.set('lang', 'zh-CN');
+    url.searchParams.set('zoom', '18');
+
+    const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(body || response.statusText);
+    }
+    const json = (await response.json()) as { formattedAddress?: string; displayName?: string };
+    const address = (json.formattedAddress || json.displayName || '').trim();
+    return address || null;
 }
 
 /**

@@ -83,3 +83,14 @@ export class ClientPickerControl extends ClassicPreset.Control {
   }
 }
 
+export class ClientSensorValueControl extends ClassicPreset.Control {
+  controlType = 'client-sensor-value' as const;
+  nodeId: string;
+  portId: string;
+
+  constructor(opts: { nodeId: string; portId: string }) {
+    super();
+    this.nodeId = opts.nodeId;
+    this.portId = opts.portId;
+  }
+}

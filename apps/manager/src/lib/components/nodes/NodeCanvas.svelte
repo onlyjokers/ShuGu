@@ -1,6 +1,6 @@
 <script lang="ts">
   // @ts-nocheck
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { ClassicPreset, NodeEditor } from 'rete';
   import { AreaPlugin, AreaExtensions } from 'rete-area-plugin';
@@ -13,14 +13,15 @@
   import ReteControl from '$lib/components/nodes/ReteControl.svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import type { NodeInstance, Connection as EngineConnection } from '$lib/nodes/types';
-  import { BooleanControl, ClientPickerControl, SelectControl } from './rete-controls';
+  import type { NodeInstance, NodePort, PortType, Connection as EngineConnection } from '$lib/nodes/types';
+  import { BooleanControl, ClientPickerControl, ClientSensorValueControl, SelectControl } from './rete-controls';
 
   // Rete core handles the view; nodeEngine remains the source of truth for execution
 
   let container: HTMLDivElement | null = null;
   let editor: NodeEditor<any> | null = null;
   let areaPlugin: any = null;
+  let connectionPlugin: any = null;
   let graphUnsub: (() => void) | null = null;
   let paramsUnsub: (() => void) | null = null;
 
@@ -49,7 +50,48 @@
   let isNodeDragging = false;
   let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   let wheelHandler: ((event: WheelEvent) => void) | null = null;
+  let contextMenuHandler: ((event: MouseEvent) => void) | null = null;
+  let pointerMoveHandler: ((event: PointerEvent) => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let lastPointerClient = { x: 0, y: 0 };
+
+  let queuedGraphState: { nodes: NodeInstance[]; connections: EngineConnection[] } | null = null;
+  let syncLoop: Promise<void> | null = null;
+
+  type MiniNode = { id: string; x: number; y: number; width: number; height: number; selected: boolean };
+  type MinimapState = {
+    size: number;
+    nodes: MiniNode[];
+    viewport: { x: number; y: number; width: number; height: number };
+    bounds: { minX: number; minY: number; width: number; height: number };
+    scale: number;
+    offsetX: number;
+    offsetY: number;
+  };
+
+  const minimapSize = 190;
+  let minimap: MinimapState = {
+    size: minimapSize,
+    nodes: [],
+    viewport: { x: 0, y: 0, width: 1, height: 1 },
+    bounds: { minX: 0, minY: 0, width: 1, height: 1 },
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+  };
+  let minimapRaf = 0;
+
+  type PickerMode = 'add' | 'connect';
+  type SocketData = { nodeId: string; side: 'input' | 'output'; key: string };
+
+  let isPickerOpen = false;
+  let pickerMode: PickerMode = 'add';
+  let pickerAnchor = { x: 0, y: 0 }; // px within container
+  let pickerGraphPos = { x: 0, y: 0 }; // graph coords
+  let pickerSelectedCategory = 'Objects';
+  let pickerQuery = '';
+  let pickerInitialSocket: SocketData | null = null;
+  let pickerElement: HTMLDivElement | null = null;
 
   // Store handles
   let graphStateStore = nodeEngine?.graphState;
@@ -173,10 +215,11 @@
     }
 
     for (const output of def?.outputs ?? []) {
-      node.addOutput(
-        output.id,
-        new ClassicPreset.Output(socketFor(output.type), output.label ?? output.id)
-      );
+      const out: any = new ClassicPreset.Output(socketFor(output.type), output.label ?? output.id);
+      if (instance.type === 'proc-client-sensors') {
+        out.control = new ClientSensorValueControl({ nodeId: instance.id, portId: output.id });
+      }
+      node.addOutput(output.id, out);
     }
 
     // ComfyUI-like node widgets: render configSchema as inline controls
@@ -245,6 +288,218 @@
     return node;
   }
 
+  function isCompatible(sourceType: PortType, targetType: PortType) {
+    return sourceType === 'any' || targetType === 'any' || sourceType === targetType;
+  }
+
+  function getPortDefForSocket(socket: SocketData): NodePort | null {
+    const instance = nodeEngine.getNode(socket.nodeId);
+    if (!instance) return null;
+    const def = nodeRegistry.get(instance.type);
+    if (!def) return null;
+    if (socket.side === 'output') return (def.outputs ?? []).find((p) => p.id === socket.key) ?? null;
+    return (def.inputs ?? []).find((p) => p.id === socket.key) ?? null;
+  }
+
+  function bestMatchingPort(ports: NodePort[], requiredType: PortType, portSide: 'input' | 'output') {
+    let best: NodePort | null = null;
+    let bestScore = -1;
+
+    for (const port of ports) {
+      const portType = (port.type ?? 'any') as PortType;
+      const ok =
+        portSide === 'input'
+          ? isCompatible(requiredType, portType)
+          : isCompatible(portType, requiredType);
+      if (!ok) continue;
+      const exact = portType === requiredType ? 2 : 1;
+      if (exact > bestScore) {
+        bestScore = exact;
+        best = port;
+      }
+    }
+
+    return best;
+  }
+
+  function computeGraphPosition(clientX: number, clientY: number) {
+    const area = areaPlugin?.area;
+    const holder: HTMLElement | null = area?.content?.holder ?? null;
+    if (!area || !holder) return { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
+
+    const rect = holder.getBoundingClientRect();
+    const k = Number(area.transform?.k ?? 1) || 1;
+    return { x: (clientX - rect.left) / k, y: (clientY - rect.top) / k };
+  }
+
+  function findPortRowSocketAt(clientX: number, clientY: number, desiredSide: 'input' | 'output'): SocketData | null {
+    if (!container) return null;
+    if (typeof document === 'undefined') return null;
+    const elements = document.elementsFromPoint(clientX, clientY) as Element[];
+    for (const el of elements) {
+      const row = (el as HTMLElement | null)?.closest?.(
+        '[data-rete-port-side][data-rete-port-key][data-rete-node-id]'
+      ) as HTMLElement | null;
+      if (!row) continue;
+      if (!container.contains(row)) continue;
+      const side = (row.dataset.retePortSide as 'input' | 'output' | undefined) ?? undefined;
+      if (!side || side !== desiredSide) continue;
+      const nodeId = row.dataset.reteNodeId;
+      const key = row.dataset.retePortKey;
+      if (!nodeId || !key) continue;
+      return { nodeId, side, key };
+    }
+    return null;
+  }
+
+  function inputAllowsMultiple(nodeId: string, inputKey: string): boolean {
+    const instance = nodeEngine.getNode(nodeId);
+    if (!instance) return false;
+    const def = nodeRegistry.get(instance.type);
+    const port = def?.inputs?.find((p) => p.id === inputKey);
+    return port?.kind === 'sink';
+  }
+
+  function replaceSingleInputConnection(targetNodeId: string, targetPortId: string) {
+    if (inputAllowsMultiple(targetNodeId, targetPortId)) return;
+    const state = get(graphStateStore);
+    for (const c of state.connections ?? []) {
+      if (c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) {
+        nodeEngine.removeConnection(c.id);
+      }
+    }
+  }
+
+  async function clampPickerToBounds() {
+    await tick();
+    if (!container || !pickerElement) return;
+    const bounds = container.getBoundingClientRect();
+    const w = pickerElement.offsetWidth;
+    const h = pickerElement.offsetHeight;
+    const pad = 10;
+
+    let x = pickerAnchor.x;
+    let y = pickerAnchor.y;
+
+    if (x + w + pad > bounds.width) x = bounds.width - w - pad;
+    if (y + h + pad > bounds.height) y = bounds.height - h - pad;
+    if (x < pad) x = pad;
+    if (y < pad) y = pad;
+
+    pickerAnchor = { x, y };
+  }
+
+  function openPicker(opts: {
+    clientX: number;
+    clientY: number;
+    mode: PickerMode;
+    initialSocket?: SocketData | null;
+  }) {
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    pickerAnchor = { x: opts.clientX - rect.left, y: opts.clientY - rect.top };
+    pickerGraphPos = computeGraphPosition(opts.clientX, opts.clientY);
+    pickerMode = opts.mode;
+    pickerInitialSocket = opts.initialSocket ?? null;
+    pickerQuery = '';
+    pickerSelectedCategory = addCategory || 'Objects';
+    isPickerOpen = true;
+    void tick().then(() => {
+      const input = pickerElement?.querySelector?.('input.picker-search') as HTMLInputElement | null;
+      input?.focus?.();
+      input?.select?.();
+    });
+    void clampPickerToBounds();
+  }
+
+  let lastConnectPickerOpenedAt = 0;
+  function openConnectPicker(initialSocket: SocketData) {
+    const now = Date.now();
+    if (now - lastConnectPickerOpenedAt < 80) return;
+    lastConnectPickerOpenedAt = now;
+    openPicker({
+      clientX: lastPointerClient.x,
+      clientY: lastPointerClient.y,
+      mode: 'connect',
+      initialSocket,
+    });
+  }
+
+  function closePicker() {
+    isPickerOpen = false;
+    pickerInitialSocket = null;
+  }
+
+  type PickerItem = {
+    type: string;
+    label: string;
+    category: string;
+    matchPort?: { id: string; label: string; side: 'input' | 'output'; type: PortType };
+  };
+
+  $: pickerItemsByCategory = (() => {
+    const map = new Map<string, PickerItem[]>();
+    const query = pickerQuery.trim().toLowerCase();
+
+    const addItem = (item: PickerItem) => {
+      if (query) {
+        const hay = `${item.label} ${item.type} ${item.category}`.toLowerCase();
+        if (!hay.includes(query)) return;
+      }
+      const list = map.get(item.category) ?? [];
+      list.push(item);
+      map.set(item.category, list);
+    };
+
+    if (pickerMode === 'connect' && pickerInitialSocket) {
+      const initial = pickerInitialSocket;
+      const initialPort = getPortDefForSocket(initial);
+      const requiredType = (initialPort?.type ?? 'any') as PortType;
+      const neededSide: 'input' | 'output' = initial.side === 'output' ? 'input' : 'output';
+
+      for (const def of nodeRegistry.list()) {
+        const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
+        const match = bestMatchingPort(ports, requiredType, neededSide);
+        if (!match) continue;
+
+        addItem({
+          type: def.type,
+          label: def.label,
+          category: def.category,
+          matchPort: {
+            id: match.id,
+            label: match.label ?? match.id,
+            side: neededSide,
+            type: (match.type ?? 'any') as PortType,
+          },
+        });
+      }
+    } else {
+      for (const def of nodeRegistry.list()) {
+        addItem({ type: def.type, label: def.label, category: def.category });
+      }
+    }
+
+    for (const [cat, list] of map) {
+      list.sort((a, b) => a.label.localeCompare(b.label));
+      map.set(cat, list);
+    }
+
+    return map;
+  })();
+
+  $: pickerCategories = (() => {
+    const cats = Array.from(pickerItemsByCategory.keys());
+    const rest = cats.filter((c) => c !== 'Objects').sort((a, b) => a.localeCompare(b));
+    return cats.includes('Objects') ? ['Objects', ...rest] : rest;
+  })();
+
+  $: if (isPickerOpen && pickerCategories.length > 0 && !pickerCategories.includes(pickerSelectedCategory)) {
+    pickerSelectedCategory = pickerCategories[0] ?? '';
+  }
+
+  $: pickerItems = pickerItemsByCategory.get(pickerSelectedCategory) ?? [];
+
   async function syncGraph(state: { nodes: NodeInstance[]; connections: EngineConnection[] }) {
     if (!editor || !areaPlugin) return;
 
@@ -253,16 +508,25 @@
       graphState = state;
       nodeCount = state.nodes.length;
 
+      const engineNodeIds = new Set(state.nodes.map((n) => n.id));
+      const engineConnIds = new Set(state.connections.map((c) => c.id));
+
       // Add / update nodes
       for (const n of state.nodes) {
         let reteNode = nodeMap.get(n.id);
         if (!reteNode) {
-          reteNode = buildReteNode(n);
-          await editor.addNode(reteNode);
-          nodeMap.set(n.id, reteNode);
-          if (n.id === selectedNodeId) {
-            reteNode.selected = true;
-            await areaPlugin.update('node', n.id);
+          const existing = editor.getNode(n.id);
+          if (existing) {
+            reteNode = existing;
+            nodeMap.set(n.id, reteNode);
+          } else {
+            reteNode = buildReteNode(n);
+            await editor.addNode(reteNode);
+            nodeMap.set(n.id, reteNode);
+            if (n.id === selectedNodeId) {
+              reteNode.selected = true;
+              await areaPlugin.update('node', n.id);
+            }
           }
         } else {
           const nextLabel = nodeLabel(n);
@@ -277,6 +541,11 @@
       // Add connections
       for (const c of state.connections) {
         if (connectionMap.has(c.id)) continue;
+        const existing = editor.getConnection(c.id);
+        if (existing) {
+          connectionMap.set(c.id, existing);
+          continue;
+        }
         const src = nodeMap.get(c.sourceNodeId);
         const tgt = nodeMap.get(c.targetNodeId);
         if (!src || !tgt) continue;
@@ -293,35 +562,180 @@
         }
       }
 
-      // Remove stale connections
-      for (const [id, conn] of Array.from(connectionMap.entries())) {
-        if (state.connections.find((c) => c.id === id)) continue;
+      // Remove stale connections (from editor to match engine)
+      for (const conn of editor.getConnections()) {
+        const id = String((conn as any).id);
+        if (engineConnIds.has(id)) continue;
         const targetId = String((conn as any).target ?? '');
         const portId = String((conn as any).targetInput ?? '');
-
-        await editor.removeConnection(id);
+        try {
+          await editor.removeConnection(id);
+        } catch (err) {
+          console.warn('[NodeCanvas] removeConnection failed', id, err);
+        }
         connectionMap.delete(id);
 
         const targetNode = nodeMap.get(targetId);
         const input = targetNode?.inputs?.[portId];
         if (input?.control) {
-          const stillConnected = Array.from(connectionMap.values()).some(
-            (c2: any) => String(c2.target) === targetId && String(c2.targetInput) === portId
-          );
+          const stillConnected = editor
+            .getConnections()
+            .some((c2: any) => String(c2.target) === targetId && String(c2.targetInput) === portId);
           input.showControl = !stillConnected;
           await areaPlugin.update('node', targetId);
         }
       }
 
-      // Remove stale nodes
-      for (const [id] of Array.from(nodeMap.entries())) {
-        if (state.nodes.find((n) => n.id === id)) continue;
-        await editor.removeNode(id);
+      // Remove stale nodes (from editor to match engine)
+      for (const node of editor.getNodes()) {
+        const id = String((node as any).id);
+        if (engineNodeIds.has(id)) continue;
+        try {
+          await editor.removeNode(id);
+        } catch (err) {
+          console.warn('[NodeCanvas] removeNode failed', id, err);
+        }
         nodeMap.delete(id);
       }
     } finally {
       isSyncingGraph = false;
+      requestMinimapUpdate();
     }
+  }
+
+  function scheduleGraphSync(state: { nodes: NodeInstance[]; connections: EngineConnection[] }) {
+    queuedGraphState = state;
+    if (syncLoop) return syncLoop;
+    syncLoop = (async () => {
+      while (queuedGraphState) {
+        const next = queuedGraphState;
+        queuedGraphState = null;
+        try {
+          await syncGraph(next);
+        } catch (err) {
+          console.error('[NodeCanvas] syncGraph failed', err);
+        }
+      }
+    })().finally(() => {
+      syncLoop = null;
+    });
+    return syncLoop;
+  }
+
+  function computeMinimap() {
+    if (!container || !areaPlugin?.area) return;
+    const area = areaPlugin.area;
+    const k = Number(area.transform?.k ?? 1) || 1;
+    const tx = Number(area.transform?.x ?? 0) || 0;
+    const ty = Number(area.transform?.y ?? 0) || 0;
+
+    const viewport = {
+      x: -tx / k,
+      y: -ty / k,
+      width: container.clientWidth / k,
+      height: container.clientHeight / k,
+    };
+
+    const nodes: MiniNode[] = [];
+    for (const [id, view] of areaPlugin.nodeViews?.entries?.() ?? []) {
+      const el = view?.element as HTMLElement | undefined;
+      const width = el?.clientWidth ?? 230;
+      const height = el?.clientHeight ?? 100;
+      const pos = view?.position ?? { x: 0, y: 0 };
+      nodes.push({
+        id: String(id),
+        x: Number(pos.x) || 0,
+        y: Number(pos.y) || 0,
+        width,
+        height,
+        selected: String(id) === selectedNodeId,
+      });
+    }
+
+    const hasNodes = nodes.length > 0;
+    let minX = hasNodes ? nodes[0]?.x ?? 0 : viewport.x;
+    let minY = hasNodes ? nodes[0]?.y ?? 0 : viewport.y;
+    let maxX = hasNodes ? (nodes[0]?.x ?? 0) + (nodes[0]?.width ?? 0) : viewport.x + viewport.width;
+    let maxY = hasNodes ? (nodes[0]?.y ?? 0) + (nodes[0]?.height ?? 0) : viewport.y + viewport.height;
+
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.width);
+      maxY = Math.max(maxY, n.y + n.height);
+    }
+
+    // Ensure the current viewport is always visible in the minimap bounds.
+    minX = Math.min(minX, viewport.x);
+    minY = Math.min(minY, viewport.y);
+    maxX = Math.max(maxX, viewport.x + viewport.width);
+    maxY = Math.max(maxY, viewport.y + viewport.height);
+
+    // Add padding so the viewport outline remains visible even when it matches the bounds closely.
+    const padding = 120;
+    minX -= padding;
+    minY -= padding;
+    maxX += padding;
+    maxY += padding;
+
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+
+    const size = minimapSize;
+    const margin = 10;
+    const extent = Math.max(width, height, 1);
+    const scale = (size - margin * 2) / extent;
+    const offsetX = (size - width * scale) / 2;
+    const offsetY = (size - height * scale) / 2;
+
+    minimap = {
+      size,
+      nodes,
+      viewport,
+      bounds: { minX, minY, width, height },
+      scale,
+      offsetX,
+      offsetY,
+    };
+  }
+
+  function requestMinimapUpdate() {
+    if (typeof requestAnimationFrame === 'undefined') return;
+    if (minimapRaf) return;
+    minimapRaf = requestAnimationFrame(() => {
+      minimapRaf = 0;
+      computeMinimap();
+    });
+  }
+
+  function toMiniX(x: number) {
+    return minimap.offsetX + (x - minimap.bounds.minX) * minimap.scale;
+  }
+
+  function toMiniY(y: number) {
+    return minimap.offsetY + (y - minimap.bounds.minY) * minimap.scale;
+  }
+
+  function handleMinimapPointerDown(event: PointerEvent) {
+    if (!container || !areaPlugin?.area) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const el = event.currentTarget as HTMLElement | null;
+    const rect = el?.getBoundingClientRect?.();
+    if (!rect) return;
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
+
+    const graphX = minimap.bounds.minX + (mx - minimap.offsetX) / minimap.scale;
+    const graphY = minimap.bounds.minY + (my - minimap.offsetY) / minimap.scale;
+
+    const area = areaPlugin.area;
+    const k = Number(area.transform?.k ?? 1) || 1;
+    const cx = container.clientWidth / 2;
+    const cy = container.clientHeight / 2;
+    void area.translate(cx - graphX * k, cy - graphY * k);
+    requestMinimapUpdate();
   }
 
   // Mirror Rete interactions back into nodeEngine
@@ -352,7 +766,13 @@
           }
         } else if (editor) {
           // Engine rejected; rollback UI to match source of truth.
-          await editor.removeConnection(String(c.id));
+          try {
+            if (editor.getConnection(String(c.id))) {
+              await editor.removeConnection(String(c.id));
+            }
+          } catch (err) {
+            console.warn('[NodeCanvas] rollback removeConnection failed', String(c.id), err);
+          }
         }
       }
 
@@ -389,11 +809,16 @@
     if (areaPlugin) {
       areaPlugin.addPipe((ctx: any) => {
         if (ctx?.type === 'nodepicked') {
-          isNodeDragging = true;
           setSelectedNode(String(ctx.data?.id ?? ''));
+        }
+        if (ctx?.type === 'nodetranslate') {
+          isNodeDragging = true;
         }
         if (ctx?.type === 'nodedragged') {
           isNodeDragging = false;
+        }
+        if (ctx?.type === 'translated' || ctx?.type === 'zoomed' || ctx?.type === 'nodetranslated') {
+          requestMinimapUpdate();
         }
         if (ctx?.type === 'pointerdown') {
           const target = ctx.data?.event?.target as HTMLElement | undefined;
@@ -411,22 +836,24 @@
     }
   }
 
-  function addNode(type: string) {
+  function addNode(type: string, position?: { x: number; y: number }) {
     const def = nodeRegistry.get(type);
     if (!def) return;
     const config: Record<string, unknown> = {};
     for (const field of def.configSchema) {
       config[field.key] = field.defaultValue;
     }
+    const fallback = { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
     const newNode: NodeInstance = {
       id: generateId(),
       type,
-      position: { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 },
+      position: position ?? fallback,
       config,
       inputValues: {},
       outputValues: {},
     };
     nodeEngine.addNode(newNode);
+    return newNode.id;
   }
 
   function handleAddNode() {
@@ -448,6 +875,35 @@
     }
   }
 
+  function handlePickerPick(item: PickerItem) {
+    const nodeId = addNode(item.type, pickerGraphPos);
+    if (!nodeId) return;
+
+    if (pickerMode === 'connect' && pickerInitialSocket && item.matchPort) {
+      const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+      const initial = pickerInitialSocket;
+      const engineConn: EngineConnection =
+        initial.side === 'output'
+          ? {
+              id: connId,
+              sourceNodeId: initial.nodeId,
+              sourcePortId: initial.key,
+              targetNodeId: nodeId,
+              targetPortId: item.matchPort.id,
+            }
+          : {
+              id: connId,
+              sourceNodeId: nodeId,
+              sourcePortId: item.matchPort.id,
+              targetNodeId: initial.nodeId,
+              targetPortId: initial.key,
+            };
+      nodeEngine.addConnection(engineConn);
+    }
+
+    closePicker();
+  }
+
   $: if (selectedNodeId && !graphState.nodes.some((n) => n.id === selectedNodeId)) {
     setSelectedNode('');
   }
@@ -464,6 +920,7 @@
     // @ts-expect-error runtime constructor expects container element
     areaPlugin = new AreaPlugin(container);
     const connection: any = new ConnectionPlugin();
+    connectionPlugin = connection;
     const render: any = new SveltePlugin();
     const history = new HistoryPlugin();
 
@@ -481,6 +938,53 @@
     // Types in presets are strict to ClassicScheme; runtime is fine for our usage
     // @ts-expect-error loose preset application
     connection.addPreset(ConnectionPresets.classic.setup());
+    connection.addPipe((ctx: any) => {
+      if (ctx?.type === 'connectiondrop') {
+        const data = ctx.data as any;
+        const initial = data?.initial as any;
+        const socket = data?.socket as any;
+        const created = Boolean(data?.created);
+        if (initial && !socket && !created) {
+          const initialSocket: SocketData = {
+            nodeId: String(initial.nodeId),
+            side: initial.side,
+            key: String(initial.key),
+          };
+          const desiredSide = initialSocket.side === 'output' ? 'input' : 'output';
+          const snapped = findPortRowSocketAt(lastPointerClient.x, lastPointerClient.y, desiredSide);
+          if (snapped) {
+            // Mimic classic flow: non-multiple inputs get replaced.
+            if (desiredSide === 'input') {
+              replaceSingleInputConnection(snapped.nodeId, snapped.key);
+            } else {
+              replaceSingleInputConnection(initialSocket.nodeId, initialSocket.key);
+            }
+
+            const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+            const engineConn: EngineConnection =
+              initialSocket.side === 'output'
+                ? {
+                    id: connId,
+                    sourceNodeId: initialSocket.nodeId,
+                    sourcePortId: initialSocket.key,
+                    targetNodeId: snapped.nodeId,
+                    targetPortId: snapped.key,
+                  }
+                : {
+                    id: connId,
+                    sourceNodeId: snapped.nodeId,
+                    sourcePortId: snapped.key,
+                    targetNodeId: initialSocket.nodeId,
+                    targetPortId: initialSocket.key,
+                  };
+            nodeEngine.addConnection(engineConn);
+          } else {
+            openConnectPicker(initialSocket);
+          }
+        }
+      }
+      return ctx;
+    });
     // @ts-expect-error preset type mismatch
     render.addPreset(
       // @ts-expect-error preset type mismatch
@@ -492,46 +996,97 @@
       })
     );
 
-    await syncGraph(get(graphStateStore));
-    graphUnsub = graphStateStore?.subscribe((state) => syncGraph(state));
-
-    // Fit view on first render
-    if (areaPlugin) {
-      AreaExtensions.zoomAt(areaPlugin, Array.from(nodeMap.values()));
-    }
+    await scheduleGraphSync(get(graphStateStore));
+    graphUnsub = graphStateStore?.subscribe((state) => {
+      void scheduleGraphSync(state);
+    });
 
     bindEditorPipes();
 
+    // Fit view on first render
+    if (areaPlugin) {
+      await AreaExtensions.zoomAt(areaPlugin, Array.from(nodeMap.values()));
+      requestMinimapUpdate();
+    }
+
     const onWheel = (event: WheelEvent) => {
-      // Always zoom the canvas on wheel/trackpad gestures (incl. pinch-as-wheel on macOS).
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      const target = event.target as HTMLElement | null;
+      if (!container) return;
+      const bounds = container.getBoundingClientRect();
+      const within =
+        event.clientX >= bounds.left &&
+        event.clientX <= bounds.right &&
+        event.clientY >= bounds.top &&
+        event.clientY <= bounds.bottom;
+      if (!within) return;
+      if (target?.closest?.('.node-picker')) return;
+      if (target?.closest?.('.minimap')) return;
+      const tag = target?.tagName?.toLowerCase?.() ?? '';
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
       const area = areaPlugin?.area;
       if (!area) return;
-      if (isNodeDragging) return;
 
       const current = Number(area.transform?.k ?? 1) || 1;
-      const raw = -event.deltaY;
-      const delta = Math.max(-0.3, Math.min(0.3, raw / 500));
-      if (delta === 0) return;
+      let deltaY = event.deltaY;
+      if (event.deltaMode === 1) deltaY *= 16;
+      if (event.deltaMode === 2) deltaY *= container.clientHeight || 1;
+      if (!deltaY) return;
+
+      // Use a smooth exponential zoom so both mouse wheels (large deltas) and trackpads (small deltas) feel good.
+      const abs = Math.abs(deltaY);
+      const isFine = abs < 10;
+      const speed = event.ctrlKey ? 0.02 : isFine ? 0.012 : 0.0022;
+      const zoomFactor = Math.exp(-deltaY * speed);
 
       const minZoom = 0.2;
       const maxZoom = 2.5;
-      const next = Math.max(minZoom, Math.min(maxZoom, current * (1 + delta)));
+      const next = Math.max(minZoom, Math.min(maxZoom, current * zoomFactor));
       const ratio = next / current - 1;
+      if (ratio === 0) return;
 
       const rectEl: HTMLElement | null = area?.content?.holder ?? container;
       const rect = rectEl?.getBoundingClientRect?.();
       if (!rect) return;
 
+      // Always zoom the canvas on wheel/trackpad gestures (incl. pinch-as-wheel on macOS).
+      event.preventDefault();
+      event.stopPropagation();
+
       const ox = (rect.left - event.clientX) * ratio;
       const oy = (rect.top - event.clientY) * ratio;
-      area.zoom(next, ox, oy, 'wheel');
+      void area.zoom(next, ox, oy, 'wheel');
+      requestMinimapUpdate();
     };
 
-    container.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    window.addEventListener('wheel', onWheel, { passive: false, capture: true });
     wheelHandler = onWheel;
+
+    const onContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.node-picker')) return;
+      if (target?.closest?.('.minimap')) return;
+
+      const tag = target?.tagName?.toLowerCase?.() ?? '';
+      const isEditing =
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        Boolean((target as any)?.isContentEditable);
+      if (isEditing) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openPicker({ clientX: event.clientX, clientY: event.clientY, mode: 'add' });
+    };
+    container.addEventListener('contextmenu', onContextMenu, { capture: true });
+    contextMenuHandler = onContextMenu;
+
+    const onPointerMove = (event: PointerEvent) => {
+      lastPointerClient = { x: event.clientX, y: event.clientY };
+    };
+    container.addEventListener('pointermove', onPointerMove, { capture: true });
+    pointerMoveHandler = onPointerMove;
 
     resizeObserver = new ResizeObserver(() => {
       const area = areaPlugin?.area;
@@ -539,11 +1094,17 @@
       isNodeDragging = false;
       // Re-apply current transform after layout changes (keeps drag math consistent after resizes).
       void area.zoom(Number(area.transform?.k ?? 1) || 1, 0, 0);
+      requestMinimapUpdate();
     });
     resizeObserver.observe(container);
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key;
+      if (key === 'Escape' && isPickerOpen) {
+        event.preventDefault();
+        closePicker();
+        return;
+      }
       if (key !== 'Backspace' && key !== 'Delete') return;
 
       const el = (event.target as HTMLElement | null) ?? document.activeElement;
@@ -567,9 +1128,14 @@
   onDestroy(() => {
     graphUnsub?.();
     paramsUnsub?.();
-    if (wheelHandler) container?.removeEventListener('wheel', wheelHandler, { capture: true } as any);
+    if (wheelHandler) window.removeEventListener('wheel', wheelHandler, { capture: true } as any);
+    if (contextMenuHandler)
+      container?.removeEventListener('contextmenu', contextMenuHandler, { capture: true } as any);
+    if (pointerMoveHandler)
+      container?.removeEventListener('pointermove', pointerMoveHandler, { capture: true } as any);
     if (keydownHandler) window.removeEventListener('keydown', keydownHandler);
     resizeObserver?.disconnect();
+    if (minimapRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(minimapRaf);
     areaPlugin?.destroy?.();
     editor?.clear();
     nodeMap.clear();
@@ -597,44 +1163,114 @@
     </div>
   </div>
 
-  <div class="canvas-actions">
-    <select bind:value={addCategory} aria-label="Node category">
-      {#each addCategoryOptions as cat}
-        <option value={cat}>{cat}</option>
-      {/each}
-    </select>
-
-    <select bind:value={addItem} aria-label="Node type" disabled={addItems.length === 0}>
-      {#if addItems.length === 0}
-        <option value="">
-          {addCategory === 'Objects' ? 'No clients connected' : 'No nodes'}
-        </option>
-      {:else}
-        {#each addItems as item (item.value)}
-          <option value={item.value}>{item.label}</option>
-        {/each}
-      {/if}
-    </select>
-
-    <Button variant="secondary" size="sm" on:click={handleAddNode} disabled={!addItem}>Add</Button>
-
-    <div class="actions-spacer"></div>
-    <div class="selection-info" aria-live="polite">
-      {#if selectedNodeId && selectedNode}
-        <span class="selected-node">Selected: {nodeLabel(selectedNode)}</span>
-        <Button variant="danger" size="sm" on:click={() => nodeEngine.removeNode(selectedNodeId)}>Delete</Button>
-      {:else}
-        <span class="selected-node hint">Click a node · Del/Backspace to delete</span>
-      {/if}
-    </div>
-  </div>
-
   <div
     class="canvas-wrapper"
     bind:this={container}
     role="application"
     aria-label="Node graph editor"
-  ></div>
+  >
+    {#if isPickerOpen}
+      <div class="picker-overlay" on:pointerdown={closePicker}>
+        <div
+          class="node-picker"
+          bind:this={pickerElement}
+          style="left: {pickerAnchor.x}px; top: {pickerAnchor.y}px;"
+          on:pointerdown|stopPropagation
+          on:wheel|stopPropagation
+        >
+          <div class="picker-header">
+            <div class="picker-title">
+              {#if pickerMode === 'connect' && pickerInitialSocket}
+                Connect: {getPortDefForSocket(pickerInitialSocket)?.type ?? 'any'}
+              {:else}
+                Add node
+              {/if}
+            </div>
+            <input
+              class="picker-search"
+              placeholder="Search…"
+              bind:value={pickerQuery}
+              on:pointerdown|stopPropagation
+            />
+          </div>
+          <div class="picker-body">
+            <div class="picker-categories">
+              {#each pickerCategories as cat (cat)}
+                <button
+                  type="button"
+                  class="picker-category {cat === pickerSelectedCategory ? 'active' : ''}"
+                  on:click={() => (pickerSelectedCategory = cat)}
+                >
+                  {cat}
+                </button>
+              {/each}
+            </div>
+            <div class="picker-items">
+              {#if pickerItems.length === 0}
+                <div class="picker-empty">No matches</div>
+              {:else}
+                {#each pickerItems as item (item.type)}
+                  <button type="button" class="picker-item" on:click={() => handlePickerPick(item)}>
+                    <div class="picker-item-title">{item.label}</div>
+                    <div class="picker-item-subtitle">
+                      {#if pickerMode === 'connect' && item.matchPort}
+                        {item.matchPort.side}: {item.matchPort.label}
+                      {:else}
+                        {item.type}
+                      {/if}
+                    </div>
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <div class="minimap" on:pointerdown={handleMinimapPointerDown}>
+      <svg
+        width={minimap.size}
+        height={minimap.size}
+        viewBox={`0 0 ${minimap.size} ${minimap.size}`}
+        aria-label="Minimap"
+      >
+        <rect
+          x="0"
+          y="0"
+          width={minimap.size}
+          height={minimap.size}
+          rx="12"
+          fill="rgba(2, 6, 23, 0.62)"
+          stroke="rgba(255, 255, 255, 0.12)"
+        />
+
+        {#each minimap.nodes as n (n.id)}
+          <rect
+            x={toMiniX(n.x)}
+            y={toMiniY(n.y)}
+            width={Math.max(2, n.width * minimap.scale)}
+            height={Math.max(2, n.height * minimap.scale)}
+            rx="3"
+            fill={n.selected ? 'rgba(99, 102, 241, 0.65)' : 'rgba(148, 163, 184, 0.38)'}
+            stroke={n.selected ? 'rgba(99, 102, 241, 0.95)' : 'rgba(255, 255, 255, 0.18)'}
+          />
+        {/each}
+
+        <rect
+          x={toMiniX(minimap.viewport.x)}
+          y={toMiniY(minimap.viewport.y)}
+          width={Math.max(4, minimap.viewport.width * minimap.scale)}
+          height={Math.max(4, minimap.viewport.height * minimap.scale)}
+          rx="4"
+          fill="transparent"
+          stroke="rgba(255, 255, 255, 0.82)"
+          stroke-width="2"
+          stroke-dasharray="6 4"
+        />
+      </svg>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -679,47 +1315,6 @@
     font-size: var(--text-sm, 0.875rem);
   }
 
-  .canvas-actions {
-    display: flex;
-    gap: var(--space-sm, 8px);
-    align-items: center;
-    padding: var(--space-sm, 8px) var(--space-md, 16px);
-    background: var(--bg-tertiary, #2a2a2a);
-    border-bottom: 1px solid var(--border-color, #444);
-  }
-
-  .actions-spacer {
-    flex: 1;
-  }
-
-  .selection-info {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm, 8px);
-    min-width: 0;
-  }
-
-  .selected-node {
-    color: rgba(255, 255, 255, 0.82);
-    font-size: var(--text-sm, 0.875rem);
-    max-width: 360px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .selected-node.hint {
-    color: rgba(255, 255, 255, 0.6);
-  }
-
-  .canvas-actions select {
-    background: var(--bg-secondary, #252525);
-    color: var(--text-primary, #fff);
-    border: 1px solid var(--border-color, #444);
-    border-radius: var(--radius-sm, 6px);
-    padding: 6px 10px;
-  }
-
   .canvas-wrapper {
     flex: 1;
     width: 100%;
@@ -735,6 +1330,158 @@
       linear-gradient(180deg, rgba(10, 11, 20, 0.85) 0%, rgba(7, 8, 17, 0.95) 100%);
     background-size: 32px 32px, 32px 32px, auto, auto, auto;
     background-position: center, center, center, center, center;
+  }
+
+  .picker-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+  }
+
+  .node-picker {
+    position: absolute;
+    width: 420px;
+    max-height: min(520px, calc(100% - 20px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(16px);
+  }
+
+  .picker-header {
+    padding: 12px 12px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .picker-title {
+    font-size: 12px;
+    letter-spacing: 0.2px;
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .picker-search {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 12px;
+    padding: 8px 10px;
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.92);
+    outline: none;
+    font-size: 12px;
+  }
+
+  .picker-search:focus {
+    border-color: rgba(99, 102, 241, 0.7);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  }
+
+  .picker-body {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .picker-categories {
+    width: 132px;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 6px;
+    overflow: auto;
+  }
+
+  .picker-category {
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.74);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .picker-category:hover {
+    background: rgba(99, 102, 241, 0.12);
+  }
+
+  .picker-category.active {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .picker-items {
+    flex: 1;
+    min-width: 0;
+    padding: 8px;
+    overflow: auto;
+  }
+
+  .picker-item {
+    width: 100%;
+    text-align: left;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: rgba(2, 6, 23, 0.22);
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .picker-item:hover {
+    border-color: rgba(99, 102, 241, 0.45);
+    background: rgba(2, 6, 23, 0.3);
+  }
+
+  .picker-item-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+  }
+
+  .picker-item-subtitle {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.66);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .picker-empty {
+    padding: 10px 12px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+  }
+
+  .minimap {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 20;
+    width: 190px;
+    height: 190px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .minimap svg {
+    display: block;
   }
 
   /* --- Rete Classic preset overrides --- */

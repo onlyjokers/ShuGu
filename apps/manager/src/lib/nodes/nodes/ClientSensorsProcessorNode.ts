@@ -53,6 +53,7 @@ const ClientSensorsProcessorNode: NodeDefinition = {
         out.accelZ = Number(payload.z ?? 0);
         break;
       case 'gyro':
+      case 'orientation':
         out.gyroA = Number(payload.alpha ?? 0);
         out.gyroB = Number(payload.beta ?? 0);
         out.gyroG = Number(payload.gamma ?? 0);
@@ -72,4 +73,3 @@ const ClientSensorsProcessorNode: NodeDefinition = {
 nodeRegistry.register(ClientSensorsProcessorNode);
 
 export default ClientSensorsProcessorNode;
-

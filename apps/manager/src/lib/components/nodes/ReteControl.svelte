@@ -1,10 +1,12 @@
 <script lang="ts">
   import { ClassicPreset } from 'rete';
-  import { state as managerState } from '$lib/stores/manager';
+  import { sensorData, state as managerState } from '$lib/stores/manager';
+  import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
 
   export let data: any;
   $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
+  const graphStateStore = nodeEngine.graphState;
 
   function changeInput(event: Event) {
     if (!(data instanceof ClassicPreset.InputControl)) return;
@@ -47,6 +49,56 @@
   }
 
   $: hasLabel = Boolean(data?.label);
+
+  function formatValue(val: number | null | undefined): string {
+    if (val === null || val === undefined) return '--';
+    return Number(val).toFixed(2);
+  }
+
+  let sensorsClientId = '';
+  let sensorsData: any = null;
+  let sensorsPayload: any = {};
+  let sensorValueText = '--';
+
+  function formatBpm(val: unknown): string {
+    if (val === null || val === undefined) return '--';
+    const num = Number(val);
+    if (!Number.isFinite(num)) return '--';
+    return String(Math.round(num));
+  }
+
+  function computeSensorValue(portId: string, msg: any, payload: any): string {
+    if (!msg || typeof msg !== 'object') return '--';
+
+    if (portId === 'accelX') return msg.sensorType === 'accel' ? formatValue(payload.x) : '--';
+    if (portId === 'accelY') return msg.sensorType === 'accel' ? formatValue(payload.y) : '--';
+    if (portId === 'accelZ') return msg.sensorType === 'accel' ? formatValue(payload.z) : '--';
+
+    const isAngle = msg.sensorType === 'gyro' || msg.sensorType === 'orientation';
+    if (portId === 'gyroA') return isAngle ? formatValue(payload.alpha) : '--';
+    if (portId === 'gyroB') return isAngle ? formatValue(payload.beta) : '--';
+    if (portId === 'gyroG') return isAngle ? formatValue(payload.gamma) : '--';
+
+    if (portId === 'micVol') return msg.sensorType === 'mic' ? formatValue(payload.volume) : '--';
+    if (portId === 'micLow') return msg.sensorType === 'mic' ? formatValue(payload.lowEnergy) : '--';
+    if (portId === 'micHigh') return msg.sensorType === 'mic' ? formatValue(payload.highEnergy) : '--';
+    if (portId === 'micBpm') return msg.sensorType === 'mic' ? formatBpm(payload.bpm) : '--';
+
+    return '--';
+  }
+
+  $: if (data?.controlType === 'client-sensor-value') {
+    const nodeId = String(data?.nodeId ?? '');
+    const portId = String(data?.portId ?? '');
+    const conn = ($graphStateStore.connections ?? []).find(
+      (c: any) => c.targetNodeId === nodeId && c.targetPortId === 'client'
+    );
+    const srcNode = conn ? ($graphStateStore.nodes ?? []).find((n: any) => n.id === conn.sourceNodeId) : null;
+    sensorsClientId = srcNode?.config?.clientId ? String(srcNode.config.clientId) : '';
+    sensorsData = sensorsClientId ? $sensorData.get(sensorsClientId) : null;
+    sensorsPayload = sensorsData?.payload ?? {};
+    sensorValueText = computeSensorValue(portId, sensorsData, sensorsPayload);
+  }
 </script>
 
 {#if data instanceof ClassicPreset.InputControl}
@@ -122,6 +174,8 @@
       </div>
     {/if}
   </div>
+{:else if data?.controlType === 'client-sensor-value'}
+  <div class="sensor-inline-value">{sensorValueText}</div>
 {:else}
   <div class="control-unknown">Unsupported control</div>
 {/if}
@@ -292,5 +346,15 @@
     padding: 10px 12px;
     color: rgba(255, 255, 255, 0.65);
     font-size: 12px;
+  }
+
+  .sensor-inline-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(99, 102, 241, 0.95);
+    text-align: right;
+    min-width: 56px;
+    white-space: nowrap;
   }
 </style>

@@ -51,7 +51,13 @@
     {#if inputs.length}
       <div class="inputs">
         {#each inputs as [key, input]}
-          <div class="port-row input" data-testid={"input-" + key}>
+          <div
+            class="port-row input"
+            data-testid={"input-" + key}
+            data-rete-node-id={data.id}
+            data-rete-port-side="input"
+            data-rete-port-key={key}
+          >
             <Ref
               class="input-socket"
               data-testid="input-socket"
@@ -96,9 +102,33 @@
     {#if outputs.length}
       <div class="outputs">
         {#each outputs as [key, output]}
-          <div class="port-row output" data-testid={"output-" + key}>
+          <div
+            class="port-row output"
+            data-testid={"output-" + key}
+            data-rete-node-id={data.id}
+            data-rete-port-side="output"
+            data-rete-port-key={key}
+          >
             <div class="port-body">
-              <div class="port-label" data-testid="output-title">{output.label || ''}</div>
+              <div class="output-line">
+                <div class="port-label" data-testid="output-title">{output.label || ''}</div>
+                {#if any(output).control}
+                  <Ref
+                    class="port-control port-inline-value"
+                    data-testid="output-control"
+                    init={(element) =>
+                      emit({
+                        type: 'render',
+                        data: {
+                          type: 'control',
+                          element,
+                          payload: any(output).control,
+                        },
+                      })}
+                    unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+                  />
+                {/if}
+              </div>
             </div>
             <Ref
               class="output-socket"
@@ -194,6 +224,15 @@
     align-items: flex-end;
   }
 
+  .output-line {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+  }
+
   .port-label {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.82);
@@ -205,5 +244,9 @@
   :global(.port-control) {
     width: 100%;
   }
-</style>
 
+  :global(.port-inline-value) {
+    width: auto;
+    flex: 0 0 auto;
+  }
+</style>

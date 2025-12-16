@@ -4,6 +4,11 @@ node_modules
 
 # Build outputs
 dist
+dist2
+dist-user
+dist-local
+dist-writable
+dist-out
 .svelte-kit
 .next
 build

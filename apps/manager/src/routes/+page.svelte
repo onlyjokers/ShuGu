@@ -4,14 +4,18 @@
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
-  import { loadLocalProject, saveLocalProject, startAutoSave, stopAutoSave } from '$lib/project/projectManager';
+  import {
+    loadLocalProject,
+    saveLocalProject,
+    startAutoSave,
+    stopAutoSave,
+  } from '$lib/project/projectManager';
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
-  import ClientList from '$lib/components/ClientList.svelte';
-  import SensorDisplay from '$lib/components/SensorDisplay.svelte';
-  import PluginControl from '$lib/components/PluginControl.svelte';
+  import ClientSelector from '$lib/components/ClientSelector.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
 
   // Feature Controls
   import FlashlightControl from '$lib/features/lighting/FlashlightControl.svelte';
@@ -20,6 +24,7 @@
   import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
+  import GeoControl from '$lib/features/location/GeoControl.svelte';
   import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
   import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
@@ -30,7 +35,7 @@
   let password = '';
   let rememberLogin = false;
 
-let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
+  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
 
   let projectRestored = false;
   let autoSaveStarted = false;
@@ -214,16 +219,6 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
     </div>
   {:else}
     <AppShell>
-      <div slot="sidebar" class="sidebar-content">
-        <ClientList />
-        <div class="sidebar-divider"></div>
-        <PluginControl />
-      </div>
-
-      <div slot="right-sidebar">
-        <SensorDisplay />
-      </div>
-
       <div class="page-tabs">
         <button
           class:active={activePage === 'dashboard'}
@@ -248,6 +243,12 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
       <div class:hide={activePage !== 'dashboard'}>
         <div class="dashboard-grid">
           <div class="grid-item">
+            <!-- Client selection card (same behavior as sidebar client-list-container) -->
+            <Card>
+              <ClientSelector height={280} />
+            </Card>
+          </div>
+          <div class="grid-item">
             <FlashlightControl {useSync} />
           </div>
           <div class="grid-item">
@@ -264,6 +265,9 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
           </div>
           <div class="grid-item">
             <SceneControl {useSync} />
+          </div>
+          <div class="grid-item">
+            <GeoControl {serverUrl} />
           </div>
         </div>
       </div>
@@ -446,18 +450,6 @@ let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
 
   .hide {
     display: none;
-  }
-
-  .sidebar-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-lg);
-    height: 100%;
-  }
-
-  .sidebar-divider {
-    height: 1px;
-    background: var(--border-color);
   }
 
   .footer-actions {

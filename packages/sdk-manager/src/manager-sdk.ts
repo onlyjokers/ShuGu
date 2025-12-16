@@ -545,7 +545,7 @@ export class ManagerSDK {
             case 'clientJoined':
                 console.log('[SDK Manager] Client joined:', message.payload.clientId);
                 break;
-            case 'clientLeft':
+            case 'clientLeft': {
                 console.log('[SDK Manager] Client left:', message.payload.clientId);
                 // Remove from selection if selected
                 const remaining = this.state.selectedClientIds.filter(
@@ -555,6 +555,7 @@ export class ManagerSDK {
                     this.updateState({ selectedClientIds: remaining });
                 }
                 break;
+            }
         }
     }
 
