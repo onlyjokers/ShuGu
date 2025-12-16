@@ -6,6 +6,7 @@
     requestPermissions,
     disconnect,
     connectToServer,
+    disconnectFromServer,
     permissions,
     currentScene,
     asciiEnabled,
@@ -124,12 +125,40 @@
 
     // Preload bootstrap config early (HTTP only; no websocket connection).
     void refreshBootstrapConfig();
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    handleVisibilityChange();
   });
 
   onDestroy(() => {
     disconnect();
     if (retryCooldownTimer) clearInterval(retryCooldownTimer);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    }
   });
+
+  function handlePageHide(): void {
+    disconnectFromServer();
+  }
+
+  function handleVisibilityChange(): void {
+    if (typeof document === 'undefined') return;
+
+    const visible = document.visibilityState === 'visible';
+    if (!visible) {
+      // Treat background/lock-screen as offline so managers see the client as disconnected.
+      disconnectFromServer();
+      return;
+    }
+
+    // Reconnect when visible again (only after Start gate passed).
+    if (hasStarted) {
+      connectToServer();
+    }
+  }
 
   function startRetryCooldown(seconds = 3): void {
     if (retryCooldownTimer) clearInterval(retryCooldownTimer);
@@ -316,7 +345,7 @@
       // If no fence is configured, allow start (no gating).
       gateState = 'idle';
       hasStarted = true;
-      connectToServer();
+      if (document.visibilityState === 'visible') connectToServer();
       return;
     }
 
@@ -376,7 +405,7 @@
 
       gateState = 'idle';
       hasStarted = true;
-      connectToServer();
+      if (document.visibilityState === 'visible') connectToServer();
       void addressPromise;
     } catch (error) {
       const status = classifyGeolocationError(error);

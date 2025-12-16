@@ -198,6 +198,14 @@ export function connectToServer(): void {
 }
 
 /**
+ * Disconnect socket only (keep SDK + controllers alive).
+ * Useful for treating "background/lock screen" as offline without losing app state.
+ */
+export function disconnectFromServer(): void {
+    sdk?.disconnect();
+}
+
+/**
  * Request all permissions
  */
 export async function requestPermissions(): Promise<void> {
@@ -298,8 +306,10 @@ function handleControlMessage(message: ControlMessage): void {
                 break;
 
             case 'screenBrightness':
-                const brightness = (message.payload as { brightness: number }).brightness;
-                screenController?.setBrightness(brightness);
+                {
+                    const brightness = (message.payload as { brightness: number }).brightness;
+                    screenController?.setBrightness(brightness);
+                }
                 break;
 
             case 'vibrate':
@@ -389,24 +399,30 @@ function handleControlMessage(message: ControlMessage): void {
                 break;
 
             case 'visualSceneSwitch':
-                const scenePayload = message.payload as VisualSceneSwitchPayload;
-                currentScene.set(scenePayload.sceneId);
+                {
+                    const scenePayload = message.payload as VisualSceneSwitchPayload;
+                    currentScene.set(scenePayload.sceneId);
+                }
                 break;
 
             case 'setDataReportingRate':
-                const ratePayload = message.payload as { sensorHz?: number };
-                if (sensorManager && ratePayload.sensorHz) {
-                    sensorManager.setThrottleMs(1000 / ratePayload.sensorHz);
+                {
+                    const ratePayload = message.payload as { sensorHz?: number };
+                    if (sensorManager && ratePayload.sensorHz) {
+                        sensorManager.setThrottleMs(1000 / ratePayload.sensorHz);
+                    }
                 }
                 break;
 
             case 'setSensorState':
-                const sensorStatePayload = message.payload as { active: boolean };
-                if (sensorManager) {
-                    if (sensorStatePayload.active) {
-                        sensorManager.start();
-                    } else {
-                        sensorManager.stop();
+                {
+                    const sensorStatePayload = message.payload as { active: boolean };
+                    if (sensorManager) {
+                        if (sensorStatePayload.active) {
+                            sensorManager.start();
+                        } else {
+                            sensorManager.stop();
+                        }
                     }
                 }
                 break;
@@ -418,12 +434,6 @@ function handleControlMessage(message: ControlMessage): void {
             case 'asciiResolution':
                 asciiResolution.set((message.payload as { cellSize: number }).cellSize);
                 break;
-            
-            case 'ping':
-                 if (sdk && message.id) {
-                    // Logic handled in ping() method usually 
-                 }
-                 break;
 
             default:
                 console.log('[Client] Unknown action:', message.action);
@@ -441,7 +451,7 @@ function handleControlMessage(message: ControlMessage): void {
             executeAction(delaySeconds);
         } else {
             // Standard scheduling for visual effects (setTimeout is fine)
-            const { cancel, delay } = sdk.scheduleAt(message.executeAt, () => executeAction(0));
+            const { delay } = sdk.scheduleAt(message.executeAt, () => executeAction(0));
             if (delay < 0) {
                 // Already past
                 executeAction(0);
