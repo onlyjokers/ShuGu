@@ -1,12 +1,10 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
-  import {
-    midiParamBridge,
-    type MidiBindingMode,
-    type MidiTarget,
-  } from '$lib/features/midi/midi-param-bridge';
+  import { midiNodeBridge } from '$lib/features/midi/midi-node-bridge';
+  import { nodeEngine } from '$lib/nodes';
   import Button from '$lib/components/ui/Button.svelte';
+  import { instantiateMidiBinding, templateForParam, type MidiBindingMode } from '$lib/features/midi/midi-templates';
 
   export let targetPath: string;
   export let targetLabel: string = '';
@@ -20,38 +18,75 @@
   }>();
 
   let lastMessage = midiService.lastMessage;
-  let learnMode = midiParamBridge.learnMode;
+  let learnMode = midiNodeBridge.learnMode;
+
+  let createdNodeIds: string[] = [];
+  let midiNodeId = '';
   let started = false;
   let closed = false;
-
-  onMount(() => {
-    const target: MidiTarget = { type: 'PARAM', path: targetPath };
-    midiParamBridge.startLearn(target, defaultMode);
-    started = true;
-  });
-
-  onDestroy(() => {
-    if ($learnMode.active) {
-      midiParamBridge.cancelLearn();
-    }
-  });
-
-  // Watch for successful binding
-  $: if (started && !closed && !$learnMode.active && $learnMode.target === null) {
-    dispatch('bound', { targetPath });
-    dispatch('close');
-    closed = true;
-  }
-
-  function handleCancel() {
-    closed = true;
-    midiParamBridge.cancelLearn();
-    dispatch('close');
-  }
 
   function describeEvent(event: MidiEvent): string {
     if (event.type === 'pitchbend') return `Pitch Bend ch${event.channel + 1}`;
     return `${event.type.toUpperCase()} ${event.number} ch${event.channel + 1}`;
+  }
+
+  function cleanupCreatedNodes() {
+    for (const id of createdNodeIds) {
+      try {
+        nodeEngine.removeNode(id);
+      } catch {
+        // ignore
+      }
+    }
+    createdNodeIds = [];
+  }
+
+  function handleCancel() {
+    closed = true;
+    midiNodeBridge.cancelLearn();
+    cleanupCreatedNodes();
+    dispatch('close');
+  }
+
+  onMount(async () => {
+    await midiService.init();
+    midiNodeBridge.init();
+
+    const template = templateForParam(targetPath, defaultMode);
+    if (!template) {
+      alert('Parameter not found for MIDI learn.');
+      dispatch('close');
+      return;
+    }
+
+    const created = instantiateMidiBinding(template);
+    if (!created) {
+      alert('Failed to create Node Graph binding.');
+      dispatch('close');
+      return;
+    }
+
+    createdNodeIds = [created.targetNodeId, created.mapNodeId, created.midiNodeId];
+    midiNodeId = created.midiNodeId;
+    midiNodeBridge.startLearn(midiNodeId);
+    started = true;
+  });
+
+  onDestroy(() => {
+    if (!started) return;
+    if (closed) return;
+    // If user navigates away mid-learn, treat as cancel to avoid leaving junk nodes.
+    if ($learnMode.active && $learnMode.nodeId === midiNodeId) {
+      midiNodeBridge.cancelLearn();
+      cleanupCreatedNodes();
+    }
+  });
+
+  // Watch for successful binding: learn mode ends after midiNodeBridge captures the next event.
+  $: if (started && !closed && midiNodeId && !$learnMode.active && $learnMode.nodeId === null) {
+    dispatch('bound', { targetPath });
+    dispatch('close');
+    closed = true;
   }
 </script>
 
@@ -70,7 +105,7 @@
         <span class="value">{targetLabel || targetPath}</span>
       </div>
 
-      <div class="instruction">🎹 Move a MIDI control to bind...</div>
+      <div class="instruction">🎹 Move a MIDI control to bind…</div>
 
       {#if $lastMessage}
         <div class="last-signal">
@@ -198,3 +233,4 @@
     justify-content: flex-end;
   }
 </style>
+

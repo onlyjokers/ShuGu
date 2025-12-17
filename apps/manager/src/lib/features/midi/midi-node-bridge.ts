@@ -15,6 +15,25 @@ export interface MidiSource {
 
 export type MidiNodeLearnMode = { active: boolean; nodeId: string | null };
 
+export function midiSourceMatchesEvent(
+  source: MidiSource | null | undefined,
+  event: MidiEvent,
+  selectedInputId: string | null | undefined = null
+): boolean {
+  if (!source) return false;
+  // Exact device binding takes priority; otherwise fall back to the UI-selected device (legacy behavior).
+  if (source.inputId) {
+    if (source.inputId !== event.inputId) return false;
+  } else if (selectedInputId) {
+    if (event.inputId !== selectedInputId) return false;
+  }
+
+  if (source.type !== event.type) return false;
+  if (source.channel !== event.channel) return false;
+  if (source.type !== 'pitchbend' && source.number !== event.number) return false;
+  return true;
+}
+
 function sourceKey(source: MidiSource): string {
   const input = source.inputId ? `in:${source.inputId}` : 'in:*';
   const number = source.type === 'pitchbend' ? 'pb' : String(source.number ?? 0);
@@ -94,4 +113,3 @@ export function formatMidiSource(source: MidiSource | null | undefined): string 
   const number = source.number ?? 0;
   return `${input} • ${source.type} ${number} • ${channel}`;
 }
-

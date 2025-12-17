@@ -18,7 +18,7 @@ import {
 import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
-import { getSDK, sensorData } from '$lib/stores/manager';
+import { getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
 
@@ -87,6 +87,8 @@ type NodeRuntime =
   | { kind: 'midi-boolean' }
   | { kind: 'midi-map' }
   | { kind: 'midi-color-map' }
+  | { kind: 'manager-select-clients-range' }
+  | { kind: 'manager-select-clients-object' }
   | CommandRuntime;
 
 export type NodeSpec = {
@@ -562,6 +564,62 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
 
           const out: Rgb = { r: lerp(from.r, to.r, t), g: lerp(from.g, to.g, t), b: lerp(from.b, to.b, t) };
           return { out: toHex(out) };
+        },
+      };
+    }
+    case 'manager-select-clients-range': {
+      const selectionEqual = (a: string[], b: string[]) =>
+        a.length === b.length && a.every((id, idx) => id === b[idx]);
+
+      const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+
+      return {
+        ...base,
+        process: () => ({}),
+        onSink: (inputs) => {
+          const raw = (inputs as any).in;
+          const value = Array.isArray(raw) ? raw[0] : raw;
+          const n = Number(value);
+          if (!Number.isFinite(n)) return;
+
+          const clients = get(state).clients.map((c: any) => String(c.clientId ?? ''));
+          const list = clients.filter(Boolean);
+          if (list.length === 0) return;
+
+          const t = clamp01(n);
+          const count = Math.min(list.length, Math.floor(t * (list.length + 1)));
+          const next = list.slice(0, count);
+          const current = get(state).selectedClientIds.map(String);
+          if (selectionEqual(current, next)) return;
+          selectClients(next);
+        },
+      };
+    }
+    case 'manager-select-clients-object': {
+      const selectionEqual = (a: string[], b: string[]) =>
+        a.length === b.length && a.every((id, idx) => id === b[idx]);
+
+      const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+
+      return {
+        ...base,
+        process: () => ({}),
+        onSink: (inputs) => {
+          const raw = (inputs as any).in;
+          const value = Array.isArray(raw) ? raw[0] : raw;
+          const n = Number(value);
+          if (!Number.isFinite(n)) return;
+
+          const clients = get(state).clients.map((c: any) => String(c.clientId ?? ''));
+          const list = clients.filter(Boolean);
+          if (list.length === 0) return;
+
+          const t = clamp01(n);
+          const idx = Math.min(list.length - 1, Math.floor(t * list.length));
+          const next = [list[idx]!];
+          const current = get(state).selectedClientIds.map(String);
+          if (selectionEqual(current, next)) return;
+          selectClients(next);
         },
       };
     }

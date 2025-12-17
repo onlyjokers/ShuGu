@@ -7,6 +7,7 @@
   import { midiNodeBridge, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
 
   export let data: any;
+  $: isInline = Boolean((data as any)?.inline);
   $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
   $: numberInputMin =
     data instanceof ClassicPreset.InputControl && data.type === 'number' ? (data as any).min : undefined;
@@ -68,7 +69,8 @@
     }
   }
 
-  $: hasLabel = Boolean(data?.label);
+  $: hasLabel = Boolean(data?.label) && !isInline;
+  $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
 
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '--';
@@ -155,12 +157,12 @@
 </script>
 
 {#if data instanceof ClassicPreset.InputControl}
-  <div class="control-field">
-    {#if inputControlLabel}
+  <div class="control-field {isInline ? 'inline' : ''}">
+    {#if showInputControlLabel}
       <div class="control-label">{inputControlLabel}</div>
     {/if}
     <input
-      class="control-input"
+      class="control-input {isInline ? 'inline' : ''}"
       type={data.type}
       value={data.value}
       min={numberInputMin}
@@ -173,12 +175,12 @@
     />
   </div>
 {:else if data?.controlType === 'select'}
-  <div class="control-field">
+  <div class="control-field {isInline ? 'inline' : ''}">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
     {/if}
     <select
-      class="control-input"
+      class="control-input {isInline ? 'inline' : ''}"
       value={data.value}
       disabled={data.readonly}
       on:pointerdown|stopPropagation
@@ -193,8 +195,8 @@
     </select>
   </div>
 {:else if data?.controlType === 'boolean'}
-  <div class="control-field boolean-field">
-    <label class="toggle" on:pointerdown|stopPropagation>
+  <div class="control-field boolean-field {isInline ? 'inline' : ''}">
+    <label class="toggle {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
       <input type="checkbox" checked={Boolean(data.value)} disabled={data.readonly} on:change={changeBoolean} />
       <span class="toggle-track">
         <span class="toggle-thumb"></span>
@@ -279,6 +281,14 @@
     padding: 6px 10px;
   }
 
+  .control-field.inline {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0;
+    padding: 0;
+  }
+
   .control-label {
     font-size: 11px;
     letter-spacing: 0.2px;
@@ -295,6 +305,11 @@
     color: rgba(255, 255, 255, 0.92);
     outline: none;
     font-size: 12px;
+  }
+
+  .control-input.inline {
+    width: 110px;
+    padding: 5px 8px;
   }
 
   .control-input:focus {
@@ -321,12 +336,21 @@
     padding-bottom: 8px;
   }
 
+  .boolean-field.inline {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
   .toggle {
     display: flex;
     align-items: center;
     gap: 10px;
     cursor: pointer;
     user-select: none;
+  }
+
+  .toggle.inline {
+    gap: 0;
   }
 
   .toggle input {

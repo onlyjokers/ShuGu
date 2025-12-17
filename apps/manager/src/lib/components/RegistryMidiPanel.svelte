@@ -1,19 +1,41 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { midiService } from '$lib/features/midi/midi-service';
-  import {
-    midiParamBridge,
-    type MidiBinding,
-    type MidiTarget,
-  } from '$lib/features/midi/midi-param-bridge';
-  import { parameterRegistry } from '$lib/parameters/registry';
   import Button from '$lib/components/ui/Button.svelte';
+  import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
+  import { midiNodeBridge, type MidiSource, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
+  import { nodeEngine } from '$lib/nodes';
+  import { parameterRegistry } from '$lib/parameters/registry';
+  import type { Parameter } from '$lib/parameters/parameter';
+  import {
+    detectMidiBindings,
+    exportMidiTemplateFile,
+    instantiateMidiBindings,
+    migrateLegacyMidiParamBindings,
+    parseMidiTemplateFile,
+    removeMidiBinding,
+    templateForClientSelection,
+    templateForNodeInput,
+    templateForParam,
+    type DetectedMidiBinding,
+    type MidiBindingMode,
+    type MidiBindingTemplateV1,
+  } from '$lib/features/midi/midi-templates';
 
   let inputs = midiService.inputs;
   let selectedInputId = midiService.selectedInputId;
   let lastMessage = midiService.lastMessage;
-  let bindings = midiParamBridge.bindings;
-  let learnMode = midiParamBridge.learnMode;
+
+  const graphStateStore = nodeEngine.graphState;
+  const tickTimeStore = nodeEngine.tickTime;
+
+  let bindings: DetectedMidiBinding[] = [];
+  let graphUnsub: (() => void) | null = null;
+  let unsubscribeRegistry: (() => void) | null = null;
+
+  type MidiTarget =
+    | { type: 'PARAM'; path: string }
+    | { type: 'CLIENT_RANGE' }
+    | { type: 'CLIENT_OBJECT' };
 
   type TargetOption = { id: string; label: string; target: MidiTarget };
   type ParamGroup = { key: string; label: string; params: TargetOption[] };
@@ -22,27 +44,31 @@
   let selectedGroupKey = '';
   let selectedTargetId = '';
   let selectedTarget: MidiTarget | null = null;
-  let unsubscribeRegistry: (() => void) | null = null;
+  let selectedMode: MidiBindingMode = 'REMOTE';
   let refreshQueued = false;
 
-  onMount(async () => {
-    await midiService.init();
-    midiParamBridge.init();
-    refreshParams();
-    unsubscribeRegistry = parameterRegistry.subscribe(() => scheduleRefresh());
-  });
+  let importInputEl: HTMLInputElement | null = null;
 
-  onDestroy(() => {
-    midiParamBridge.destroy();
-    unsubscribeRegistry?.();
-  });
+  // Map legacy control-surface params to a practical Node Graph target (matches the user's Synth/Flashlight example).
+  const paramToNodeInput = new Map<string, { nodeType: string; inputId: string }>([
+    ['controls/synth/frequency', { nodeType: 'proc-synth-update', inputId: 'frequency' }],
+    ['controls/synth/duration', { nodeType: 'proc-synth-update', inputId: 'durationMs' }],
+    ['controls/synth/volume', { nodeType: 'proc-synth-update', inputId: 'volume' }],
+    ['controls/synth/modDepth', { nodeType: 'proc-synth-update', inputId: 'modDepth' }],
+    ['controls/synth/modLfo', { nodeType: 'proc-synth-update', inputId: 'modFrequency' }],
+    ['controls/flashlight/frequencyHz', { nodeType: 'proc-flashlight', inputId: 'frequencyHz' }],
+    ['controls/flashlight/dutyCycle', { nodeType: 'proc-flashlight', inputId: 'dutyCycle' }],
+    ['controls/screenColor/maxOpacity', { nodeType: 'proc-screen-color', inputId: 'maxOpacity' }],
+    ['controls/screenColor/minOpacity', { nodeType: 'proc-screen-color', inputId: 'minOpacity' }],
+    ['controls/screenColor/frequencyHz', { nodeType: 'proc-screen-color', inputId: 'frequencyHz' }],
+  ]);
 
   function scheduleRefresh() {
     if (refreshQueued) return;
     refreshQueued = true;
     queueMicrotask(() => {
       refreshQueued = false;
-      refreshParams();
+      refreshTargets();
     });
   }
 
@@ -50,7 +76,6 @@
     if (metadataGroup) return { key: metadataGroup, label: metadataGroup };
 
     const parts = path.split('/');
-    // Strip prefix for more human grouping
     if (parts[0] === 'controls') {
       const key = parts[1] ?? 'Controls';
       return { key, label: key };
@@ -63,8 +88,7 @@
     return { key: fallback, label: fallback };
   }
 
-  function refreshParams() {
-    // MIDI mapper currently supports numeric targets (range mapping) plus special targets.
+  function refreshTargets() {
     const params = parameterRegistry
       .list('controls')
       .filter((p) => p.type === 'number')
@@ -105,7 +129,6 @@
 
     availableGroups = [clientGroup, ...nextGroups];
 
-    // Keep selection stable where possible
     if (!availableGroups.some((g) => g.key === selectedGroupKey)) {
       selectedGroupKey = availableGroups[0]?.key ?? '';
     }
@@ -134,87 +157,220 @@
     midiService.selectInput(select.value);
   }
 
-  function startLearn(target: MidiTarget) {
-    midiParamBridge.startLearn(target, 'REMOTE');
+  function formatEvent(event: MidiEvent): string {
+    if (event.type === 'pitchbend') return `Pitch Bend ch${event.channel + 1}`;
+    return `${event.type.toUpperCase()} ${event.number} ch${event.channel + 1}`;
   }
 
-  function cancelLearn() {
-    midiParamBridge.cancelLearn();
+  function describeSource(source: MidiSource | null | undefined, inputList: { id: string; name: string }[]): string {
+    if (!source) return 'Unbound';
+    if (!source.inputId) return formatMidiSource(source);
+    const name = inputList.find((i) => i.id === source.inputId)?.name ?? source.inputId;
+    return formatMidiSource({ ...source, inputId: name } as any).replace(/^in:/, '');
   }
 
-  function toggleMode(id: string) {
-    midiParamBridge.toggleMode(id);
+  function clampNumber(value: number, min?: number, max?: number): number {
+    let next = value;
+    if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
+    if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
+    return next;
   }
 
-  function removeBinding(id: string) {
-    midiParamBridge.removeBinding(id);
+  function numberFromEvent(event: Event): number {
+    const input = event.target as HTMLInputElement | null;
+    return parseFloat(input?.value ?? '');
   }
 
-  function updateRange(id: string, field: 'min' | 'max', value: number) {
-    const binding = $bindings.find((b) => b.id === id);
-    if (!binding) return;
-    if (binding.target.type !== 'PARAM') return;
-    midiParamBridge.updateBinding(id, {
-      mapping: { ...binding.mapping, [field]: value },
+  function createTemplateForTarget(target: MidiTarget): MidiBindingTemplateV1 | null {
+    if (target.type === 'CLIENT_RANGE') return templateForClientSelection('range');
+    if (target.type === 'CLIENT_OBJECT') return templateForClientSelection('object');
+
+    const param = parameterRegistry.get<number>(target.path) as Parameter<number> | undefined;
+    if (!param) return null;
+
+    const mapping = {
+      min: typeof param.min === 'number' ? param.min : 0,
+      max: typeof param.max === 'number' ? param.max : 1,
+      invert: false,
+      round: false,
+    };
+
+    const nodeTarget = paramToNodeInput.get(target.path);
+    if (nodeTarget) {
+      return templateForNodeInput({ nodeType: nodeTarget.nodeType, inputId: nodeTarget.inputId, mapping });
+    }
+
+    // Fallback: keep the old behavior by driving a registry parameter via param-set.
+    const tpl = templateForParam(target.path, selectedMode);
+    if (!tpl) return null;
+    tpl.mapping = mapping;
+    return tpl;
+  }
+
+  function beginLearnForTemplate(tpl: MidiBindingTemplateV1) {
+    const created = instantiateMidiBindings({ version: 1, bindings: [tpl] })[0];
+    if (!created) return;
+    void midiService.init();
+    midiNodeBridge.startLearn(created.midiNodeId);
+  }
+
+  function startLearnSelected() {
+    if (!selectedTarget) return;
+    const tpl = createTemplateForTarget(selectedTarget);
+    if (!tpl) return;
+    beginLearnForTemplate(tpl);
+  }
+
+  function toggleMode(binding: DetectedMidiBinding) {
+    const target = binding.template.target;
+    if (target.kind !== 'param') return;
+    const next: MidiBindingMode = target.mode === 'REMOTE' ? 'MODULATION' : 'REMOTE';
+    nodeEngine.updateNodeConfig(binding.targetNodeId, { mode: next });
+  }
+
+  function updateMapping(binding: DetectedMidiBinding, updates: Partial<MidiBindingTemplateV1['mapping']>) {
+    const current = binding.template.mapping;
+    const rawMin = updates.min;
+    const rawMax = updates.max;
+    const min = typeof rawMin === 'number' && Number.isFinite(rawMin) ? rawMin : current.min;
+    const max = typeof rawMax === 'number' && Number.isFinite(rawMax) ? rawMax : current.max;
+    const clampedMin = clampNumber(min, undefined, max);
+    const clampedMax = clampNumber(max, clampedMin, undefined);
+    nodeEngine.updateNodeConfig(binding.mapNodeId, {
+      ...updates,
+      min: clampedMin,
+      max: clampedMax,
     });
   }
 
-  function toggleInvert(id: string) {
-    const binding = $bindings.find((b) => b.id === id);
-    if (!binding) return;
-    midiParamBridge.updateBinding(id, {
-      mapping: { ...binding.mapping, invert: !binding.mapping.invert },
+  function toggleInvert(binding: DetectedMidiBinding) {
+    updateMapping(binding, { invert: !binding.template.mapping.invert });
+  }
+
+  function toggleRound(binding: DetectedMidiBinding) {
+    updateMapping(binding, { round: !binding.template.mapping.round });
+  }
+
+  function startLearn(binding: DetectedMidiBinding) {
+    void midiService.init();
+    midiNodeBridge.startLearn(binding.midiNodeId);
+  }
+
+  function clearBinding(binding: DetectedMidiBinding) {
+    nodeEngine.updateNodeConfig(binding.midiNodeId, { source: null });
+  }
+
+  function removeBinding(binding: DetectedMidiBinding) {
+    removeMidiBinding(binding);
+  }
+
+  function formatValue(value?: number | null): string {
+    if (value === null || value === undefined) return '—';
+    if (!Number.isFinite(Number(value))) return '—';
+    return Number(value).toFixed(2);
+  }
+
+  function lastMappedValueText(mapNodeId: string, _tick: number): string {
+    const node = nodeEngine.getNode(mapNodeId);
+    const v = node?.outputValues?.out as number | undefined;
+    return formatValue(v ?? null);
+  }
+
+  function downloadJson(payload: unknown, filename: string) {
+    if (typeof document === 'undefined') return;
+    const data = JSON.stringify(payload, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportTemplates() {
+    const file = exportMidiTemplateFile(nodeEngine.exportGraph());
+    downloadJson(file, 'shugu-midi-templates.json');
+  }
+
+  function openImport() {
+    importInputEl?.click?.();
+  }
+
+  async function handleImportChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const text = await file.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      alert('Invalid JSON file.');
+      return;
+    }
+
+    const templates = parseMidiTemplateFile(parsed);
+    if (!templates) {
+      alert('Unsupported template format (expected version: 1).');
+      return;
+    }
+
+    const created = instantiateMidiBindings(templates);
+    alert(`Imported ${created.length} template(s).`);
+  }
+
+  onMount(async () => {
+    await midiService.init();
+    midiNodeBridge.init();
+    refreshTargets();
+    unsubscribeRegistry = parameterRegistry.subscribe(() => scheduleRefresh());
+
+    // Sync list from the Node Graph (bidirectional: editing the graph updates this view too).
+    graphUnsub = graphStateStore.subscribe((state) => {
+      bindings = detectMidiBindings(state);
     });
-  }
 
-  function describeSource(source: MidiBinding['source']): string {
-    const inputLabel = source.inputId
-      ? $inputs.find((i) => i.id === source.inputId)?.name ?? source.inputId
-      : 'Any MIDI';
+    // One-time migration from legacy Registry MIDI bindings.
+    migrateLegacyMidiParamBindings();
+  });
 
-    const controlLabel =
-      source.type === 'pitchbend'
-        ? `PitchBend ch${source.channel + 1}`
-        : `${source.type.toUpperCase()} ${source.number} ch${source.channel + 1}`;
-
-    return `${inputLabel}: ${controlLabel}`;
-  }
-
-  function describeTarget(target: MidiBinding['target']): string {
-    if (target.type === 'PARAM') return target.path;
-    if (target.type === 'CLIENT_RANGE') return 'Clients / Range';
-    return 'Clients / Object';
-  }
-
-  function formatValue(value?: number): string {
-    if (value === undefined) return '—';
-    return value.toFixed(2);
-  }
-
-  function getInputValue(e: Event): number {
-    return parseFloat((e.target as HTMLInputElement).value);
-  }
+  onDestroy(() => {
+    unsubscribeRegistry?.();
+    graphUnsub?.();
+  });
 </script>
 
 <div class="registry-midi-panel">
   <div class="panel-header">
-    <h2>Registry MIDI Mapper</h2>
-    <div class="input-selector">
-      <label for="midi-input">Input:</label>
-      <select id="midi-input" value={$selectedInputId} on:change={handleInputChange}>
-        {#if $inputs.length === 0}
-          <option value="">No MIDI inputs</option>
-        {:else}
-          {#each $inputs as input}
-            <option value={input.id}>{input.name}</option>
-          {/each}
-        {/if}
-      </select>
-      <Button variant="ghost" size="sm" on:click={refreshParams}>🔄</Button>
+    <h2>Registry MIDI Templates</h2>
+    <div class="header-actions">
+      <input
+        bind:this={importInputEl}
+        type="file"
+        accept="application/json"
+        on:change={handleImportChange}
+        style="display: none;"
+      />
+      <Button variant="ghost" size="sm" on:click={openImport}>⬇ Import</Button>
+      <Button variant="ghost" size="sm" on:click={exportTemplates}>⬆ Export</Button>
+      <div class="input-selector">
+        <label for="midi-input">Input:</label>
+        <select id="midi-input" value={$selectedInputId} on:change={handleInputChange}>
+          {#if $inputs.length === 0}
+            <option value="">No MIDI inputs</option>
+          {:else}
+            {#each $inputs as input}
+              <option value={input.id}>{input.name}</option>
+            {/each}
+          {/if}
+        </select>
+        <Button variant="ghost" size="sm" on:click={refreshTargets}>🔄</Button>
+      </div>
     </div>
   </div>
 
-  <!-- MIDI Monitor -->
   <div class="monitor-section">
     <h3>MIDI Monitor</h3>
     <div class="monitor-display">
@@ -226,19 +382,9 @@
           >
         </div>
         <div class="monitor-row">
-          <span class="label">Type:</span>
-          <span class="value">{$lastMessage.type.toUpperCase()}</span>
+          <span class="label">Signal:</span>
+          <span class="value">{formatEvent($lastMessage)}</span>
         </div>
-        <div class="monitor-row">
-          <span class="label">Channel:</span>
-          <span class="value">{$lastMessage.channel + 1}</span>
-        </div>
-        {#if $lastMessage.number !== undefined}
-          <div class="monitor-row">
-            <span class="label">Number:</span>
-            <span class="value">{$lastMessage.number}</span>
-          </div>
-        {/if}
         <div class="monitor-row">
           <span class="label">Value:</span>
           <span class="value"
@@ -246,26 +392,17 @@
           >
         </div>
       {:else}
-        <div class="monitor-empty">Move a MIDI control...</div>
+        <div class="monitor-empty">Move a MIDI control…</div>
       {/if}
     </div>
   </div>
 
-  <!-- Learn Mode Indicator -->
-  {#if $learnMode.active && $learnMode.target}
-    <div class="learn-indicator">
-      <span>🎹 Learning: Move a MIDI control for <strong>{describeTarget($learnMode.target)}</strong></span>
-      <Button variant="ghost" size="sm" on:click={cancelLearn}>Cancel</Button>
-    </div>
-  {/if}
-
-  <!-- Quick Add -->
   <div class="quick-add">
-    <h3>Quick Add Binding</h3>
+    <h3>Quick Add</h3>
     <div class="quick-add-row">
-      <select bind:value={selectedGroupKey} aria-label="Parameter group">
+      <select bind:value={selectedGroupKey} aria-label="Target group">
         {#if availableGroups.length === 0}
-          <option value="">No numeric parameters</option>
+          <option value="">No targets</option>
         {:else}
           {#each availableGroups as group (group.key)}
             <option value={group.key}>{group.label}</option>
@@ -275,7 +412,7 @@
 
       <select bind:value={selectedTargetId} aria-label="Target">
         {#if availableGroups.length === 0}
-          <option value="">No numeric parameters</option>
+          <option value="">No targets</option>
         {:else}
           {#each availableGroups.find((g) => g.key === selectedGroupKey)?.params ?? [] as item}
             <option value={item.id}>{item.label}</option>
@@ -283,12 +420,12 @@
         {/if}
       </select>
 
-      <Button
-        variant="primary"
-        size="sm"
-        on:click={() => selectedTarget && startLearn(selectedTarget)}
-        disabled={!selectedTarget}
-      >
+      <select bind:value={selectedMode} aria-label="Mode" disabled={selectedTarget?.type !== 'PARAM'}>
+        <option value="REMOTE">REMOTE</option>
+        <option value="MODULATION">MODULATION</option>
+      </select>
+
+      <Button variant="primary" size="sm" on:click={startLearnSelected} disabled={!selectedTarget}>
         Learn MIDI
       </Button>
     </div>
@@ -298,72 +435,78 @@
     {/if}
   </div>
 
-  <!-- Bindings List -->
   <div class="bindings-section">
-    <h3>Active Bindings ({$bindings.length})</h3>
-    {#if $bindings.length === 0}
-      <div class="empty-state">No bindings yet. Use "Learn MIDI" above.</div>
+    <h3>Active Bindings ({bindings.length})</h3>
+    {#if bindings.length === 0}
+      <div class="empty-state">No bindings yet. Use "Learn MIDI" above, or create them in Node Graph.</div>
     {:else}
       <div class="bindings-list">
-        {#each $bindings as binding (binding.id)}
+        {#each bindings as binding (binding.id)}
           <div class="binding-card">
             <div class="binding-header">
-              <div class="binding-source">{describeSource(binding.source)}</div>
+              <div class="binding-source">{describeSource(binding.template.source, $inputs)}</div>
               <div class="binding-arrow">→</div>
-              <div class="binding-target">{describeTarget(binding.target)}</div>
+              <div class="binding-target">{binding.template.label}</div>
             </div>
 
             <div class="binding-controls">
-              {#if binding.target.type === 'PARAM'}
+              {#if binding.template.target.kind === 'param'}
                 <div class="control-group">
                   <span class="control-label">Mode:</span>
                   <button
-                    class="mode-toggle mode-{binding.mode.toLowerCase()}"
-                    on:click={() => toggleMode(binding.id)}
+                    class="mode-toggle mode-{binding.template.target.mode.toLowerCase()}"
+                    type="button"
+                    on:click={() => toggleMode(binding)}
                   >
-                    {binding.mode}
+                    {binding.template.target.mode}
                   </button>
                 </div>
               {/if}
 
-              {#if binding.target.type === 'PARAM'}
-                <div class="control-group">
-                  <span class="control-label">Range:</span>
-                  <input
-                    type="number"
-                    class="range-input"
-                    value={binding.mapping.min}
-                    on:change={(e) => updateRange(binding.id, 'min', getInputValue(e))}
-                  />
-                  <span>–</span>
-                  <input
-                    type="number"
-                    class="range-input"
-                    value={binding.mapping.max}
-                    on:change={(e) => updateRange(binding.id, 'max', getInputValue(e))}
-                  />
-                </div>
-              {/if}
-
               <div class="control-group">
-                <label class="control-label" for={`invert-${binding.id}`}>
-                  Invert
-                </label>
+                <span class="control-label">Range:</span>
                 <input
-                  id={`invert-${binding.id}`}
-                  type="checkbox"
-                  checked={binding.mapping.invert}
-                  on:change={() => toggleInvert(binding.id)}
+                  type="number"
+                  class="range-input"
+                  value={binding.template.mapping.min}
+                  on:change={(e) => updateMapping(binding, { min: numberFromEvent(e) })}
+                />
+                <span>–</span>
+                <input
+                  type="number"
+                  class="range-input"
+                  value={binding.template.mapping.max}
+                  on:change={(e) => updateMapping(binding, { max: numberFromEvent(e) })}
                 />
               </div>
 
               <div class="control-group">
-                <span class="last-value">Last: {formatValue(binding.lastValue)}</span>
+                <label class="control-label" for={`invert-${binding.id}`}>Invert</label>
+                <input
+                  id={`invert-${binding.id}`}
+                  type="checkbox"
+                  checked={binding.template.mapping.invert}
+                  on:change={() => toggleInvert(binding)}
+                />
               </div>
 
-              <Button variant="danger" size="sm" on:click={() => removeBinding(binding.id)}
-                >×</Button
-              >
+              <div class="control-group">
+                <label class="control-label" for={`round-${binding.id}`}>Round</label>
+                <input
+                  id={`round-${binding.id}`}
+                  type="checkbox"
+                  checked={binding.template.mapping.round}
+                  on:change={() => toggleRound(binding)}
+                />
+              </div>
+
+              <div class="control-group">
+                <span class="last-value">Mapped: {lastMappedValueText(binding.mapNodeId, $tickTimeStore)}</span>
+              </div>
+
+              <Button variant="ghost" size="sm" on:click={() => startLearn(binding)}>Learn</Button>
+              <Button variant="ghost" size="sm" on:click={() => clearBinding(binding)}>Clear</Button>
+              <Button variant="danger" size="sm" on:click={() => removeBinding(binding)}>×</Button>
             </div>
           </div>
         {/each}
@@ -385,7 +528,7 @@
   .panel-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     flex-wrap: wrap;
     gap: var(--space-md, 16px);
   }
@@ -396,10 +539,22 @@
     color: var(--text-primary, #fff);
   }
 
+  .header-actions {
+    display: flex;
+    gap: var(--space-sm, 8px);
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
   .input-selector {
     display: flex;
     align-items: center;
     gap: var(--space-sm, 8px);
+  }
+
+  .input-selector label {
+    color: var(--text-secondary, #aaa);
+    font-size: var(--text-sm, 0.875rem);
   }
 
   .input-selector select {
@@ -450,31 +605,19 @@
     font-style: italic;
   }
 
-  .learn-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--space-sm, 8px) var(--space-md, 16px);
-    background: var(--color-warning, #f59e0b);
-    color: #000;
-    border-radius: var(--radius-md, 8px);
-    animation: pulse 1.5s infinite;
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.7;
-    }
-  }
-
   .quick-add-row {
     display: flex;
     gap: var(--space-sm, 8px);
     align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .quick-add-row select {
+    padding: var(--space-sm, 8px);
+    background: var(--bg-tertiary, #2a2a2a);
+    border: 1px solid var(--border-color, #444);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-primary, #fff);
   }
 
   .target-path-hint {
@@ -487,20 +630,10 @@
     white-space: nowrap;
   }
 
-  .quick-add-row select {
-    flex: 1;
-    padding: var(--space-sm, 8px);
-    background: var(--bg-tertiary, #2a2a2a);
-    border: 1px solid var(--border-color, #444);
-    border-radius: var(--radius-sm, 4px);
-    color: var(--text-primary, #fff);
-  }
-
   .empty-state {
     color: var(--text-muted, #666);
     font-style: italic;
-    text-align: center;
-    padding: var(--space-lg, 24px);
+    padding: var(--space-md, 16px) 0;
   }
 
   .bindings-list {
@@ -522,11 +655,16 @@
     gap: var(--space-sm, 8px);
     margin-bottom: var(--space-sm, 8px);
     font-weight: 500;
+    flex-wrap: wrap;
   }
 
   .binding-source {
     color: var(--color-warning, #f59e0b);
     font-family: var(--font-mono, monospace);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .binding-arrow {
@@ -536,6 +674,10 @@
   .binding-target {
     color: var(--color-primary, #6366f1);
     font-family: var(--font-mono, monospace);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .binding-controls {
@@ -576,7 +718,7 @@
   }
 
   .range-input {
-    width: 60px;
+    width: 70px;
     padding: 2px 6px;
     background: var(--bg-primary, #1a1a1a);
     border: 1px solid var(--border-color, #444);

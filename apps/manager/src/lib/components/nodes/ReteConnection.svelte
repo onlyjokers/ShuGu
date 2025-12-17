@@ -20,6 +20,7 @@
 
   export let localLoop: boolean | undefined = undefined;
   export let deployedLoop: boolean | undefined = undefined;
+  export let active: boolean | undefined = undefined;
 
   // svelte-ignore unused-export-let
   export let start: Position = { x: 0, y: 0 };
@@ -34,7 +35,7 @@
 </script>
 
 <svg
-  class="connection {localLoop ? 'local-loop' : ''} {deployedLoop ? 'deployed-loop' : ''}"
+  class="connection {localLoop ? 'local-loop' : ''} {deployedLoop ? 'deployed-loop' : ''} {active ? 'active' : ''}"
   data-connection-id={id}
   data-testid="connection"
 >
@@ -70,5 +71,12 @@
     stroke: rgba(20, 184, 166, 0.95);
     stroke-width: 6px;
     opacity: 1;
+  }
+
+  svg.active path {
+    stroke: rgba(250, 204, 21, 0.95);
+    stroke-width: 7px;
+    opacity: 1;
+    filter: drop-shadow(0 0 18px rgba(250, 204, 21, 0.35));
   }
 </style>

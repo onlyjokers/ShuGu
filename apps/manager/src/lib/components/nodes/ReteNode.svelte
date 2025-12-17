@@ -23,6 +23,11 @@
     return arg;
   }
 
+  // MIDI activity highlight state (set by NodeCanvas).
+  $: isActive = Boolean((data as any).active);
+  $: activeInputs = new Set<string>((((data as any).activeInputs ?? []) as string[]).map(String));
+  $: activeOutputs = new Set<string>((((data as any).activeOutputs ?? []) as string[]).map(String));
+
   // Live Port Values
   // Values are derived from NodeEngine runtime outputs and graph connections.
   // This enables "MIDI → mapping → processor" pipelines to show numbers at each port.
@@ -153,7 +158,7 @@
 </script>
 
 <div
-  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''}"
+  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isActive ? 'active' : ''}"
   style:width
   style:height
   data-testid="node"
@@ -186,7 +191,7 @@
       <div class="inputs">
         {#each inputs as [key, input]}
           <div
-            class="port-row input"
+            class="port-row input {activeInputs.has(String(key)) ? 'active' : ''}"
             data-testid={"input-" + key}
             data-rete-node-id={data.id}
             data-rete-port-side="input"
@@ -216,13 +221,11 @@
 	                  <div class="port-value input" data-testid={"input-value-" + key}>
 	                    {portValueText.inputs[String(key)]}
 	                  </div>
-	                {/if}
-	              </div>
-	              {#if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
-	                <Ref
-	                  class="port-control"
-	                  data-testid="input-control"
-	                  init={(element) =>
+	                {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
+	                  <Ref
+	                    class="port-control port-inline-input"
+	                    data-testid="input-control"
+	                    init={(element) =>
                     emit({
                       type: 'render',
                       data: {
@@ -231,9 +234,10 @@
                         payload: any(input).control,
                       },
                     })}
-                  unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-                />
-              {/if}
+                    unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+	                  />
+	                {/if}
+	              </div>
             </div>
           </div>
         {/each}
@@ -244,7 +248,7 @@
       <div class="outputs">
         {#each outputs as [key, output]}
           <div
-            class="port-row output"
+            class="port-row output {activeOutputs.has(String(key)) ? 'active' : ''}"
             data-testid={"output-" + key}
             data-rete-node-id={data.id}
             data-rete-port-side="output"
@@ -348,6 +352,24 @@
     justify-content: flex-end;
   }
 
+  .node.active {
+    outline: 2px solid rgba(250, 204, 21, 0.55);
+    outline-offset: 0;
+  }
+
+  .port-row.active {
+    background: rgba(250, 204, 21, 0.08);
+    border-radius: 10px;
+  }
+
+  .port-row.active .port-label {
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .port-row.active .port-value {
+    color: rgba(250, 204, 21, 0.95);
+  }
+
   :global(.input-socket) {
     margin-left: -10px;
     flex: 0 0 auto;
@@ -372,7 +394,7 @@
 
   .port-title-line {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
     width: 100%;
     min-width: 0;
@@ -398,6 +420,8 @@
   }
 
   .port-value {
+    display: inline-flex;
+    align-items: center;
     font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 650;
@@ -408,6 +432,10 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.32);
+    border-radius: 10px;
+    padding: 4px 8px;
   }
 
   .port-value.input {
@@ -419,10 +447,15 @@
   }
 
   :global(.port-control) {
-    width: 100%;
+    flex: 0 0 auto;
   }
 
   :global(.port-inline-value) {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  :global(.port-inline-input) {
     width: auto;
     flex: 0 0 auto;
   }

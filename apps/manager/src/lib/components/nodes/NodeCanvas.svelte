@@ -15,8 +15,13 @@
   import ReteConnection from '$lib/components/nodes/ReteConnection.svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { midiService } from '$lib/features/midi/midi-service';
-  import { midiNodeBridge } from '$lib/features/midi/midi-node-bridge';
+  import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
+  import { midiNodeBridge, midiSourceMatchesEvent } from '$lib/features/midi/midi-node-bridge';
+  import {
+    exportMidiTemplateFile,
+    instantiateMidiBindings,
+    parseMidiTemplateFile,
+  } from '$lib/features/midi/midi-templates';
   import { getSDK } from '$lib/stores/manager';
   import { sensorData } from '$lib/stores/manager';
   import type {
@@ -65,6 +70,7 @@
   let selectedNodeId = '';
   let nodeCount = 0;
   let graphState = { nodes: [], connections: [] };
+  let importTemplatesInputEl: HTMLInputElement | null = null;
   let numberParamOptions: { path: string; label: string }[] = [];
   let selectedNode: NodeInstance | undefined = undefined;
   let isNodeDragging = false;
@@ -245,6 +251,17 @@
   let loopHighlightDirty = false;
   let sensorUnsub: (() => void) | null = null;
 
+  // MIDI activity highlight (source node + downstream chain)
+  const MIDI_HIGHLIGHT_TTL_MS = 180;
+  const midiSourceNodeTypes = new Set(['midi-fuzzy', 'midi-boolean']);
+  let midiUnsub: (() => void) | null = null;
+  let midiHighlightTimeout: ReturnType<typeof setTimeout> | null = null;
+  let midiHighlightDirty = false;
+  let midiActiveNodeIds = new Set<string>();
+  let midiActiveConnIds = new Set<string>();
+  let midiActiveInputPortsByNode = new Map<string, Set<string>>();
+  let midiActiveOutputPortsByNode = new Map<string, Set<string>>();
+
   let deployPending = false;
   let deployPendingLoopId = '';
   let deployPendingClientId = '';
@@ -352,6 +369,132 @@
   function scheduleLoopHighlight() {
     loopHighlightDirty = true;
     if (!isSyncingGraph) void applyLoopHighlights();
+  }
+
+  function scheduleMidiHighlight() {
+    midiHighlightDirty = true;
+    if (!isSyncingGraph) void applyMidiHighlights();
+  }
+
+  function arraysEqual(a: string[] | undefined, b: string[]): boolean {
+    if (!a) return b.length === 0;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  async function applyMidiHighlights() {
+    if (!areaPlugin) return;
+    if (!midiHighlightDirty) return;
+    midiHighlightDirty = false;
+
+    for (const [id, node] of nodeMap.entries()) {
+      const nextActive = midiActiveNodeIds.has(id);
+      const nextInputs = Array.from(midiActiveInputPortsByNode.get(id) ?? []).sort();
+      const nextOutputs = Array.from(midiActiveOutputPortsByNode.get(id) ?? []).sort();
+
+      const prevActive = Boolean((node as any).active);
+      const prevInputs = ((node as any).activeInputs ?? []) as string[];
+      const prevOutputs = ((node as any).activeOutputs ?? []) as string[];
+
+      let changed = false;
+      if (prevActive !== nextActive) {
+        (node as any).active = nextActive;
+        changed = true;
+      }
+      if (!arraysEqual(prevInputs, nextInputs)) {
+        (node as any).activeInputs = nextInputs;
+        changed = true;
+      }
+      if (!arraysEqual(prevOutputs, nextOutputs)) {
+        (node as any).activeOutputs = nextOutputs;
+        changed = true;
+      }
+
+      if (changed) await areaPlugin.update('node', id);
+    }
+
+    for (const [id, conn] of connectionMap.entries()) {
+      const nextActive = midiActiveConnIds.has(id);
+      if (Boolean((conn as any).active) !== nextActive) {
+        (conn as any).active = nextActive;
+        await areaPlugin.update('connection', id);
+      }
+    }
+  }
+
+  function clearMidiHighlight() {
+    midiActiveNodeIds = new Set();
+    midiActiveConnIds = new Set();
+    midiActiveInputPortsByNode = new Map();
+    midiActiveOutputPortsByNode = new Map();
+    scheduleMidiHighlight();
+  }
+
+  function handleMidiActivity(event: MidiEvent) {
+    const selectedInputId = get(midiService.selectedInputId) || null;
+    const sourceNodeIds = (graphState.nodes ?? [])
+      .filter((n) => midiSourceNodeTypes.has(String(n.type)))
+      .filter((n) => midiSourceMatchesEvent((n.config as any)?.source, event, selectedInputId))
+      .map((n) => String(n.id));
+
+    if (sourceNodeIds.length === 0) return;
+
+    const outsByNode = new Map<string, EngineConnection[]>();
+    for (const c of graphState.connections ?? []) {
+      const src = String(c.sourceNodeId);
+      const list = outsByNode.get(src) ?? [];
+      list.push(c);
+      outsByNode.set(src, list);
+    }
+
+    const nextNodeIds = new Set<string>();
+    const nextConnIds = new Set<string>();
+    const nextInputsByNode = new Map<string, Set<string>>();
+    const nextOutputsByNode = new Map<string, Set<string>>();
+
+    const queue: string[] = [];
+    const visited = new Set<string>();
+    for (const id of sourceNodeIds) {
+      nextNodeIds.add(id);
+      queue.push(id);
+      visited.add(id);
+    }
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      for (const conn of outsByNode.get(nodeId) ?? []) {
+        const connId = String(conn.id);
+        const targetNodeId = String(conn.targetNodeId);
+        const sourcePortId = String(conn.sourcePortId);
+        const targetPortId = String(conn.targetPortId);
+
+        nextConnIds.add(connId);
+        nextNodeIds.add(targetNodeId);
+
+        const outSet = nextOutputsByNode.get(nodeId) ?? new Set<string>();
+        outSet.add(sourcePortId);
+        nextOutputsByNode.set(nodeId, outSet);
+
+        const inSet = nextInputsByNode.get(targetNodeId) ?? new Set<string>();
+        inSet.add(targetPortId);
+        nextInputsByNode.set(targetNodeId, inSet);
+
+        if (!visited.has(targetNodeId)) {
+          visited.add(targetNodeId);
+          queue.push(targetNodeId);
+        }
+      }
+    }
+
+    midiActiveNodeIds = nextNodeIds;
+    midiActiveConnIds = nextConnIds;
+    midiActiveInputPortsByNode = nextInputsByNode;
+    midiActiveOutputPortsByNode = nextOutputsByNode;
+    scheduleMidiHighlight();
+
+    if (midiHighlightTimeout) clearTimeout(midiHighlightTimeout);
+    midiHighlightTimeout = setTimeout(() => clearMidiHighlight(), MIDI_HIGHLIGHT_TTL_MS);
   }
 
   async function applyLoopHighlights() {
@@ -635,6 +778,7 @@
                   sendNodeOverride(instance.id, 'input', input.id, next);
                 },
               });
+              control.inline = true;
               control.min = min;
               control.max = max;
               control.step = step;
@@ -648,15 +792,15 @@
               : typeof configValue === 'string'
                 ? configValue
                 : String(derivedDefault ?? '');
-          inp.addControl(
-            new ClassicPreset.InputControl('text', {
-              initial,
-              change: (value) => {
-                nodeEngine.updateNodeInputValue(instance.id, input.id, value);
-                sendNodeOverride(instance.id, 'input', input.id, value);
-              },
-            })
-          );
+          const control: any = new ClassicPreset.InputControl('text', {
+            initial,
+            change: (value) => {
+              nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+              sendNodeOverride(instance.id, 'input', input.id, value);
+            },
+          });
+          control.inline = true;
+          inp.addControl(control);
         } else if (input.type === 'boolean') {
           const initial =
             typeof current === 'boolean'
@@ -664,15 +808,15 @@
               : typeof configValue === 'boolean'
                 ? configValue
                 : Boolean(derivedDefault);
-          inp.addControl(
-            new BooleanControl({
-              initial,
-              change: (value) => {
-                nodeEngine.updateNodeInputValue(instance.id, input.id, value);
-                sendNodeOverride(instance.id, 'input', input.id, value);
-              },
-            })
-          );
+          const control: any = new BooleanControl({
+            initial,
+            change: (value) => {
+              nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+              sendNodeOverride(instance.id, 'input', input.id, value);
+            },
+          });
+          control.inline = true;
+          inp.addControl(control);
         }
         inp.showControl = true;
         inputControlKeys.add(input.id);
@@ -688,13 +832,17 @@
               ? String(current)
               : String(derivedDefault ?? '#ffffff');
         inp.addControl(
-          new ClassicPreset.InputControl('color', {
-            initial,
-            change: (value) => {
-              nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
-              sendNodeOverride(instance.id, 'config', input.id, value);
-            },
-          })
+          (() => {
+            const control: any = new ClassicPreset.InputControl('color', {
+              initial,
+              change: (value) => {
+                nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
+                sendNodeOverride(instance.id, 'config', input.id, value);
+              },
+            });
+            control.inline = true;
+            return control;
+          })()
         );
         inp.showControl = true;
         inputControlKeys.add(input.id);
@@ -702,16 +850,16 @@
 
       // Select controls can also appear inline on the input row (use config as fallback).
       if (!isSink && configField?.type === 'select') {
-        inp.addControl(
-          new SelectControl({
-            initial: String(instance.config?.[input.id] ?? configField.defaultValue ?? ''),
-            options: configField.options ?? [],
-            change: (value) => {
-              nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
-              sendNodeOverride(instance.id, 'config', input.id, value);
-            },
-          })
-        );
+        const control: any = new SelectControl({
+          initial: String(instance.config?.[input.id] ?? configField.defaultValue ?? ''),
+          options: configField.options ?? [],
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
+            sendNodeOverride(instance.id, 'config', input.id, value);
+          },
+        });
+        control.inline = true;
+        inp.addControl(control);
         inputControlKeys.add(input.id);
       }
 
@@ -1156,6 +1304,7 @@
       isSyncingGraph = false;
       requestMinimapUpdate();
       void applyLoopHighlights();
+      void applyMidiHighlights();
     }
   }
 
@@ -1442,6 +1591,57 @@
     }
   }
 
+  function downloadJson(payload: unknown, filename: string) {
+    if (typeof document === 'undefined') return;
+    const data = JSON.stringify(payload, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportTemplates() {
+    const file = exportMidiTemplateFile(nodeEngine.exportGraph());
+    downloadJson(file, 'shugu-midi-templates.json');
+  }
+
+  function importTemplates() {
+    importTemplatesInputEl?.click?.();
+  }
+
+  function viewportCenterGraphPos(): { x: number; y: number } {
+    if (!container) return { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
+    const rect = container.getBoundingClientRect();
+    return computeGraphPosition(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+
+  async function handleImportTemplatesChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const text = await file.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      alert('Invalid JSON file.');
+      return;
+    }
+
+    const templates = parseMidiTemplateFile(parsed);
+    if (!templates) {
+      alert('Unsupported template format (expected version: 1).');
+      return;
+    }
+
+    const created = instantiateMidiBindings(templates, { anchor: viewportCenterGraphPos() });
+    alert(`Imported ${created.length} template(s).`);
+  }
+
   function handlePickerPick(item: PickerItem) {
     const nodeId = addNode(item.type, pickerGraphPos);
     if (!nodeId) return;
@@ -1487,6 +1687,7 @@
     // MIDI nodes rely on the shared MIDI singleton. Keep the bridge alive;
     // request MIDI access lazily when MIDI nodes are present or user presses Learn.
     midiNodeBridge.init();
+    midiUnsub = midiService.onMessage((event) => handleMidiActivity(event));
 
     refreshNumberParams();
     paramsUnsub = parameterRegistry.subscribe(() => refreshNumberParams());
@@ -1800,6 +2001,8 @@
     loopsUnsub?.();
     deployedLoopsUnsub?.();
     sensorUnsub?.();
+    midiUnsub?.();
+    if (midiHighlightTimeout) clearTimeout(midiHighlightTimeout);
     if (deployPendingTimeout) clearTimeout(deployPendingTimeout);
     if (wheelHandler) window.removeEventListener('wheel', wheelHandler, { capture: true } as any);
     if (contextMenuHandler)
@@ -1824,6 +2027,13 @@
 </script>
 
 <div class="node-canvas-container">
+  <input
+    bind:this={importTemplatesInputEl}
+    type="file"
+    accept="application/json"
+    on:change={handleImportTemplatesChange}
+    style="display: none;"
+  />
   <div class="canvas-toolbar">
     <div class="toolbar-left">
       <Button
@@ -1834,6 +2044,8 @@
         {$isRunningStore ? '⏹ Stop' : '▶ Start'}
       </Button>
       <Button variant="ghost" size="sm" on:click={handleClear}>🗑️ Clear</Button>
+      <Button variant="ghost" size="sm" on:click={importTemplates}>⬇ Import</Button>
+      <Button variant="ghost" size="sm" on:click={exportTemplates}>⬆ Export</Button>
       <span class="node-count">{nodeCount} nodes</span>
     </div>
     <div class="toolbar-right">
