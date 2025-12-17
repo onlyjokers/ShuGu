@@ -7,7 +7,7 @@
  * - Cycle detection in compile phase
  */
 import { writable, get, type Writable } from 'svelte/store';
-import type { NodeInstance, Connection, NodeDefinition, ProcessContext, GraphState } from './types';
+import type { NodeInstance, Connection, ProcessContext, GraphState } from './types';
 import { nodeRegistry } from './registry';
 import { parameterRegistry } from '../parameters/registry';
 import { PROTOCOL_VERSION } from '@shugu/protocol';
@@ -39,6 +39,8 @@ class NodeEngineClass {
   public graphState: Writable<GraphState> = writable({ nodes: [], connections: [] });
   public isRunning: Writable<boolean> = writable(false);
   public lastError: Writable<string | null> = writable(null);
+  // Emits on every tick so the UI can render live values without forcing full graphState updates.
+  public tickTime: Writable<number> = writable(0);
   public localLoops: Writable<LocalLoop[]> = writable([]);
   public deployedLoops: Writable<string[]> = writable([]);
 
@@ -331,6 +333,9 @@ class NodeEngineClass {
         console.error(`[NodeEngine] Sink handler error in node ${node.id}:`, err);
       }
     }
+
+    // Notify observers that a new tick has completed (useful for live port value display).
+    this.tickTime.set(now);
   }
 
   private deepEqual(a: unknown, b: unknown): boolean {

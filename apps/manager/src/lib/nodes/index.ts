@@ -1,7 +1,7 @@
 /**
  * Node System Index
  */
-import './nodes';
+import './specs/register';
 
 export * from './types';
 export { nodeEngine } from './engine';

@@ -1,0 +1,56 @@
+{
+  "type": "proc-synth-update",
+  "label": "Synth (Update)",
+  "category": "Processors",
+  "inputs": [
+    { "id": "client", "label": "Client", "type": "client" },
+    { "id": "waveform", "label": "Wave", "type": "fuzzy" },
+    { "id": "frequency", "label": "Freq", "type": "number", "min": 0, "step": 1 },
+    { "id": "volume", "label": "Vol", "type": "number", "min": 0, "max": 1, "step": 0.01 },
+    { "id": "modDepth", "label": "Depth", "type": "number", "min": 0, "max": 1, "step": 0.01 },
+    { "id": "modFrequency", "label": "Rate", "type": "number", "min": 0, "step": 1 },
+    { "id": "durationMs", "label": "Dur", "type": "number", "min": 0, "step": 10 }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    { "key": "frequency", "label": "Freq (Hz)", "type": "number", "defaultValue": 180, "min": 0, "step": 1 },
+    { "key": "volume", "label": "Volume", "type": "number", "defaultValue": 0.7, "min": 0, "max": 1, "step": 0.01 },
+    {
+      "key": "waveform",
+      "label": "Waveform",
+      "type": "select",
+      "defaultValue": "square",
+      "options": [
+        { "value": "square", "label": "Square" },
+        { "value": "sine", "label": "Sine" },
+        { "value": "triangle", "label": "Triangle" },
+        { "value": "sawtooth", "label": "Sawtooth" }
+      ]
+    },
+    { "key": "modDepth", "label": "Wobble Depth", "type": "number", "defaultValue": 0, "min": 0, "max": 1, "step": 0.01 },
+    { "key": "modFrequency", "label": "Wobble Rate (Hz)", "type": "number", "defaultValue": 12, "min": 0, "step": 1 },
+    { "key": "durationMs", "label": "Dur (ms)", "type": "number", "defaultValue": 200, "min": 0, "step": 10 }
+  ],
+  "runtime": {
+    "kind": "command",
+    "command": {
+      "action": "modulateSoundUpdate",
+      "payload": {
+        "frequency": { "kind": "number", "inputKey": "frequency", "configKey": "frequency", "default": 180, "clamp": { "min": 0 } },
+        "volume": { "kind": "number", "inputKey": "volume", "configKey": "volume", "default": 0.7, "clamp": { "min": 0, "max": 1 } },
+        "waveform": { "kind": "enumFromFuzzy", "inputKey": "waveform", "options": ["square", "sine", "triangle", "sawtooth"], "configKey": "waveform", "default": "square" },
+        "modDepth": { "kind": "number", "inputKey": "modDepth", "configKey": "modDepth", "default": 0, "clamp": { "min": 0, "max": 1 }, "omitIfZero": true },
+        "modFrequency": {
+          "kind": "number",
+          "inputKey": "modFrequency",
+          "configKey": "modFrequency",
+          "default": 12,
+          "clamp": { "min": 0 },
+          "when": { "source": "payload", "key": "modDepth", "op": "gt", "value": 0 }
+        },
+        "durationMs": { "kind": "number", "inputKey": "durationMs", "configKey": "durationMs", "default": 200, "clamp": { "min": 0 } }
+      }
+    }
+  }
+}
+

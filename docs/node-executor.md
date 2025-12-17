@@ -30,7 +30,7 @@ Manager 端 `NodeEngine` 会做 SCC（强连通分量）检测（**包含 sink �
 Manager → Client 通过 `PluginControlMessage` 下发：
 
 - `pluginId`: `node-executor`
-- `command`: `deploy | start | stop | remove`
+- `command`: `deploy | start | stop | remove | override-set | override-remove`
 
 ### 2.1 deploy payload
 
@@ -71,6 +71,40 @@ Client 收到 `deploy` 后：
 { "loopId": "loop:..." }
 ```
 
+### 2.3 override-set / override-remove payload（Remote Override）
+
+当 loop 已部署并在 client 本地运行时，manager 可以对节点的 **输入端口** 或 **config 字段**做临时覆盖（防止和本地循环“打架”）。
+
+payload（简化）：
+
+```json
+{
+  "loopId": "loop:...",
+  "overrides": [
+    {
+      "nodeId": "node-...",
+      "portId": "frequencyHz",
+      "kind": "input",
+      "value": 2.5,
+      "ttlMs": 1500
+    },
+    {
+      "nodeId": "node-...",
+      "portId": "mode",
+      "kind": "config",
+      "value": "blink",
+      "ttlMs": 1500
+    }
+  ]
+}
+```
+
+语义：
+
+- `kind: input`：覆盖节点输入口（优先级高于连线与本地输入值）
+- `kind: config`：覆盖节点 config（不改写 base config；TTL 到期后恢复）
+- `ttlMs`：可选；到期后自动失效（manager 通常在拖动/交互时持续刷新 TTL）
+
 ---
 
 ## 3. Capabilities（能力 / 权限）
@@ -102,7 +136,7 @@ Client 端 `NodeExecutor` 会通过 `SensorDataMessage` 上报状态（避免额
 - `deployed | started | stopped | removed`
 - `rejected`（capability 不满足 / 校验失败）
 - `error`（执行器内部异常）
-- `stopped` + `reason: 'watchdog'`（tick 超预算自动停止）
+- `stopped` + `reason: 'watchdog'`（例如 `watchdog: slow-tick/sink-burst/oscillation`）
 
 Manager UI 会展示：
 

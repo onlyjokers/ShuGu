@@ -49,6 +49,8 @@ export class NodeExecutor {
   private loopId: string | null = null;
   private lastError: string | null = null;
   private running = false;
+  private consecutiveSlowTicks = 0;
+  private recentTickDurationsMs: number[] = [];
 
   private options: {
     isEnabled: () => boolean;
@@ -94,7 +96,8 @@ export class NodeExecutor {
       canRunCapability: options?.canRunCapability ?? defaultCanRunCapability,
       limits: {
         maxNodes: options?.limits?.maxNodes ?? 80,
-        minTickIntervalMs: options?.limits?.minTickIntervalMs ?? 16,
+        // Default to ~30 FPS on mobile to avoid excessive power/thermal usage.
+        minTickIntervalMs: options?.limits?.minTickIntervalMs ?? 33,
         maxTickIntervalMs: options?.limits?.maxTickIntervalMs ?? 250,
         maxTickDurationMs: options?.limits?.maxTickDurationMs ?? 120,
       },
@@ -108,15 +111,55 @@ export class NodeExecutor {
 
     this.runtime = new NodeRuntime(this.registry, {
       onTick: ({ durationMs }) => {
-        if (durationMs <= this.options.limits.maxTickDurationMs) return;
-        this.lastError = `tick exceeded budget (${durationMs.toFixed(1)}ms)`;
+        const next = Number(durationMs);
+        if (Number.isFinite(next) && next >= 0) {
+          this.recentTickDurationsMs = [...this.recentTickDurationsMs, next].slice(-12);
+        }
+
+        if (next <= this.options.limits.maxTickDurationMs) {
+          this.consecutiveSlowTicks = 0;
+          return;
+        }
+
+        this.consecutiveSlowTicks += 1;
+        if (this.consecutiveSlowTicks < 3) {
+          console.warn('[node-executor] slow tick (transient)', {
+            durationMs: next,
+            consecutive: this.consecutiveSlowTicks,
+          });
+          return;
+        }
+
+        this.lastError = `tick exceeded budget (${next.toFixed(1)}ms) x${this.consecutiveSlowTicks}`;
         console.warn('[node-executor] stopping due to slow tick', this.lastError);
         this.runtime.stop();
         this.running = false;
         this.report('stopped', {
           loopId: this.loopId,
           reason: 'watchdog',
+          watchdog: 'slow-tick',
           error: this.lastError,
+          diagnostics: {
+            consecutiveSlowTicks: this.consecutiveSlowTicks,
+            recentTickDurationsMs: this.recentTickDurationsMs,
+          },
+        });
+      },
+      onWatchdog: (info) => {
+        const message =
+          typeof info?.message === 'string' && info.message ? info.message : 'watchdog triggered';
+        this.lastError = message;
+        this.runtime.stop();
+        this.running = false;
+        this.report('stopped', {
+          loopId: this.loopId,
+          reason: 'watchdog',
+          watchdog: typeof info?.reason === 'string' ? info.reason : 'unknown',
+          error: message,
+          diagnostics: {
+            ...((info?.diagnostics ?? {}) as Record<string, unknown>),
+            recentTickDurationsMs: this.recentTickDurationsMs,
+          },
         });
       },
     });
@@ -152,6 +195,14 @@ export class NodeExecutor {
       }
       if (message.command === 'remove') {
         this.remove(message.payload);
+        return;
+      }
+      if (message.command === 'override-set') {
+        this.applyOverrides(message.payload);
+        return;
+      }
+      if (message.command === 'override-remove') {
+        this.removeOverrides(message.payload);
         return;
       }
     } catch (err) {
@@ -258,10 +309,59 @@ export class NodeExecutor {
     if (loopId && this.loopId && loopId !== this.loopId) return;
     this.runtime.stop();
     this.runtime.clear();
+    this.runtime.clearOverrides();
     this.loopId = null;
     this.running = false;
     this.lastError = null;
     this.report('removed', { loopId });
+  }
+
+  private applyOverrides(payload: unknown): void {
+    if (!isRecord(payload)) return;
+    const loopId = this.readLoopId(payload);
+    if (loopId && this.loopId && loopId !== this.loopId) return;
+
+    const overrides = (payload as any).overrides;
+    if (!Array.isArray(overrides)) return;
+
+    for (const item of overrides) {
+      if (!isRecord(item)) continue;
+      const nodeId = typeof item.nodeId === 'string' ? item.nodeId : '';
+      const key =
+        typeof item.portId === 'string'
+          ? item.portId
+          : typeof item.key === 'string'
+            ? item.key
+            : '';
+      if (!nodeId || !key) continue;
+      const kind = item.kind === 'config' ? 'config' : 'input';
+      const ttlMs =
+        typeof item.ttlMs === 'number' && Number.isFinite(item.ttlMs) ? item.ttlMs : undefined;
+      this.runtime.applyOverride(nodeId, kind, key, item.value, ttlMs);
+    }
+  }
+
+  private removeOverrides(payload: unknown): void {
+    if (!isRecord(payload)) return;
+    const loopId = this.readLoopId(payload);
+    if (loopId && this.loopId && loopId !== this.loopId) return;
+
+    const overrides = (payload as any).overrides;
+    if (!Array.isArray(overrides)) return;
+
+    for (const item of overrides) {
+      if (!isRecord(item)) continue;
+      const nodeId = typeof item.nodeId === 'string' ? item.nodeId : '';
+      const key =
+        typeof item.portId === 'string'
+          ? item.portId
+          : typeof item.key === 'string'
+            ? item.key
+            : '';
+      if (!nodeId || !key) continue;
+      const kind = item.kind === 'config' ? 'config' : 'input';
+      this.runtime.removeOverride(nodeId, kind, key);
+    }
   }
 
   private readLoopId(payload: unknown): string | null {

@@ -1,0 +1,15 @@
+{
+  "type": "midi-map",
+  "label": "Numeral Mapping",
+  "category": "MIDI",
+  "inputs": [{ "id": "in", "label": "In", "type": "fuzzy" }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "configSchema": [
+    { "key": "min", "label": "Min", "type": "number", "defaultValue": 0, "step": 0.01 },
+    { "key": "max", "label": "Max", "type": "number", "defaultValue": 1, "step": 0.01 },
+    { "key": "invert", "label": "Invert", "type": "boolean", "defaultValue": false },
+    { "key": "round", "label": "Round", "type": "boolean", "defaultValue": false }
+  ],
+  "runtime": { "kind": "midi-map" }
+}
+

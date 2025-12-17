@@ -8,6 +8,14 @@
 
   export let data: any;
   $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
+  $: numberInputMin =
+    data instanceof ClassicPreset.InputControl && data.type === 'number' ? (data as any).min : undefined;
+  $: numberInputMax =
+    data instanceof ClassicPreset.InputControl && data.type === 'number' ? (data as any).max : undefined;
+  $: numberInputStep =
+    data instanceof ClassicPreset.InputControl && data.type === 'number'
+      ? ((data as any).step ?? 'any')
+      : undefined;
   const graphStateStore = nodeEngine.graphState;
   const midiLearnModeStore = midiNodeBridge.learnMode;
   const midiLastMessageStore = midiService.lastMessage;
@@ -19,7 +27,13 @@
     const target = event.target as HTMLInputElement;
     if (data.type === 'number') {
       const num = Number(target.value);
-      data.setValue(Number.isFinite(num) ? num : 0);
+      let next = Number.isFinite(num) ? num : 0;
+      const min = (data as any).min;
+      const max = (data as any).max;
+      if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
+      if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
+      if (Number.isFinite(num) && next !== num) target.value = String(next);
+      data.setValue(next);
     } else {
       data.setValue(target.value);
     }
@@ -149,6 +163,9 @@
       class="control-input"
       type={data.type}
       value={data.value}
+      min={numberInputMin}
+      max={numberInputMax}
+      step={numberInputStep}
       readonly={data.readonly}
       disabled={data.readonly}
       on:pointerdown|stopPropagation

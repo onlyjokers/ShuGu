@@ -8,7 +8,7 @@ type ReverseGeocodeParams = {
 };
 
 export type ReverseGeocodeResponse = {
-  provider: 'nominatim';
+  provider: 'nominatim' | 'fallback';
   lat: number;
   lng: number;
   formattedAddress: string;
@@ -25,6 +25,7 @@ export type ReverseGeocodeResponse = {
     poi?: string;
     postcode?: string;
   };
+  error?: string;
 };
 
 type NominatimReverseResponse = {
@@ -87,6 +88,21 @@ export class GeoService {
         this.cache.set(key, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, value });
         return value;
       })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[GeoService] reverse geocode failed; falling back to lat/lng', {
+          lat: params.lat,
+          lng: params.lng,
+          lang: params.lang,
+          zoom: params.zoom,
+          error: message,
+        });
+
+        const value = this.fallbackReverseGeocode(params, message);
+        // Cache fallback briefly to avoid repeated server-side 500s on dashboards.
+        this.cache.set(key, { expiresAt: Date.now() + 2 * 60 * 1000, value });
+        return value;
+      })
       .finally(() => {
         this.inflight.delete(key);
       });
@@ -146,6 +162,21 @@ export class GeoService {
       formattedAddress,
       displayName: json.display_name,
       details,
+    };
+  }
+
+  private fallbackReverseGeocode(
+    params: ReverseGeocodeParams,
+    errorMessage?: string
+  ): ReverseGeocodeResponse {
+    const formatted = `${params.lat.toFixed(6)}, ${params.lng.toFixed(6)}`;
+    return {
+      provider: 'fallback',
+      lat: params.lat,
+      lng: params.lng,
+      formattedAddress: formatted,
+      displayName: formatted,
+      error: errorMessage,
     };
   }
 

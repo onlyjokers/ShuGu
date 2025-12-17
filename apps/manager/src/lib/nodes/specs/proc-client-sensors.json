@@ -1,0 +1,21 @@
+{
+  "type": "proc-client-sensors",
+  "label": "Client Sensors",
+  "category": "Processors",
+  "inputs": [{ "id": "client", "label": "Client", "type": "client" }],
+  "outputs": [
+    { "id": "accelX", "label": "Accel X", "type": "number" },
+    { "id": "accelY", "label": "Accel Y", "type": "number" },
+    { "id": "accelZ", "label": "Accel Z", "type": "number" },
+    { "id": "gyroA", "label": "Gyro α", "type": "number" },
+    { "id": "gyroB", "label": "Gyro β", "type": "number" },
+    { "id": "gyroG", "label": "Gyro γ", "type": "number" },
+    { "id": "micVol", "label": "Mic Vol", "type": "number" },
+    { "id": "micLow", "label": "Mic Low", "type": "number" },
+    { "id": "micHigh", "label": "Mic High", "type": "number" },
+    { "id": "micBpm", "label": "Mic BPM", "type": "number" }
+  ],
+  "configSchema": [],
+  "runtime": { "kind": "proc-client-sensors" }
+}
+

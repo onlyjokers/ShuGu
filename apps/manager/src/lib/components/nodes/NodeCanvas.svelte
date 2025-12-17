@@ -271,11 +271,47 @@
   let executorLastServerTimestampByClient = new Map<string, number>();
   let showExecutorLogs = false;
 
+  const OVERRIDE_TTL_MS = 1500;
+
   function getLoopClientId(loop: LocalLoop): string {
     const clientNodeId = loop.clientsInvolved?.[0] ?? '';
     const node = graphState.nodes.find((n: any) => String(n.id) === String(clientNodeId));
     const id = node?.config?.clientId;
     return typeof id === 'string' ? id : '';
+  }
+
+  function getDeployedLoopForNode(nodeId: string): LocalLoop | null {
+    for (const loop of localLoops) {
+      if (!deployedLoopIds.has(loop.id)) continue;
+      if (loop.nodeIds.includes(nodeId)) return loop;
+    }
+    return null;
+  }
+
+  function sendNodeOverride(
+    nodeId: string,
+    kind: 'input' | 'config',
+    portId: string,
+    value: unknown
+  ) {
+    if (!nodeId || !portId) return;
+
+    const node = graphState.nodes.find((n) => String(n.id) === String(nodeId));
+    if (node?.type === 'client-object' && kind === 'config' && portId === 'clientId') return;
+
+    const loop = getDeployedLoopForNode(nodeId);
+    if (!loop) return;
+
+    const clientId = getLoopClientId(loop);
+    if (!clientId) return;
+
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-set', {
+      loopId: loop.id,
+      overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+    } as any);
   }
 
   function loopLabel(loop: LocalLoop): string {
@@ -556,17 +592,54 @@
         current !== undefined || configValue !== undefined || derivedDefault !== undefined;
       if (hasInitial && isPrimitive && !isSink) {
         if (input.type === 'number') {
+          const min =
+            typeof input.min === 'number'
+              ? input.min
+              : typeof configField?.min === 'number'
+                ? configField.min
+                : undefined;
+          const max =
+            typeof input.max === 'number'
+              ? input.max
+              : typeof configField?.max === 'number'
+                ? configField.max
+                : undefined;
+          const step =
+            typeof input.step === 'number'
+              ? input.step
+              : typeof configField?.step === 'number'
+                ? configField.step
+                : undefined;
+
           const initial =
             typeof current === 'number'
               ? current
               : typeof configValue === 'number'
                 ? configValue
                 : Number(derivedDefault ?? 0);
+
+          const clamp = (value: number) => {
+            let next = value;
+            if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
+            if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
+            return next;
+          };
+
           inp.addControl(
-            new ClassicPreset.InputControl('number', {
-              initial,
-              change: (value) => nodeEngine.updateNodeInputValue(instance.id, input.id, value),
-            })
+            (() => {
+              const control: any = new ClassicPreset.InputControl('number', {
+                initial: clamp(initial),
+                change: (value) => {
+                  const next = typeof value === 'number' ? clamp(value) : value;
+                  nodeEngine.updateNodeInputValue(instance.id, input.id, next);
+                  sendNodeOverride(instance.id, 'input', input.id, next);
+                },
+              });
+              control.min = min;
+              control.max = max;
+              control.step = step;
+              return control;
+            })()
           );
         } else if (input.type === 'string') {
           const initial =
@@ -578,7 +651,10 @@
           inp.addControl(
             new ClassicPreset.InputControl('text', {
               initial,
-              change: (value) => nodeEngine.updateNodeInputValue(instance.id, input.id, value),
+              change: (value) => {
+                nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+                sendNodeOverride(instance.id, 'input', input.id, value);
+              },
             })
           );
         } else if (input.type === 'boolean') {
@@ -591,7 +667,10 @@
           inp.addControl(
             new BooleanControl({
               initial,
-              change: (value) => nodeEngine.updateNodeInputValue(instance.id, input.id, value),
+              change: (value) => {
+                nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+                sendNodeOverride(instance.id, 'input', input.id, value);
+              },
             })
           );
         }
@@ -611,7 +690,10 @@
         inp.addControl(
           new ClassicPreset.InputControl('color', {
             initial,
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [input.id]: value }),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
+              sendNodeOverride(instance.id, 'config', input.id, value);
+            },
           })
         );
         inp.showControl = true;
@@ -624,7 +706,10 @@
           new SelectControl({
             initial: String(instance.config?.[input.id] ?? configField.defaultValue ?? ''),
             options: configField.options ?? [],
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [input.id]: value }),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
+              sendNodeOverride(instance.id, 'config', input.id, value);
+            },
           })
         );
         inputControlKeys.add(input.id);
@@ -641,18 +726,6 @@
       node.addOutput(output.id, out);
     }
 
-    // ComfyUI-like node widgets: render configSchema as inline controls
-    if (instance.type === 'client-object') {
-      node.addControl(
-        'clientId',
-        new ClientPickerControl({
-          label: 'Clients',
-          initial: String(instance.config?.clientId ?? ''),
-          change: (value) => nodeEngine.updateNodeConfig(instance.id, { clientId: value }),
-        })
-      );
-    }
-
     for (const field of def?.configSchema ?? []) {
       if (inputControlKeys.has(field.key)) continue;
       const key = field.key;
@@ -664,7 +737,10 @@
             label: field.label,
             initial: String(current ?? ''),
             options: field.options ?? [],
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              sendNodeOverride(instance.id, 'config', key, value);
+            },
           })
         );
       } else if (field.type === 'boolean') {
@@ -673,16 +749,44 @@
           new BooleanControl({
             label: field.label,
             initial: Boolean(current),
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              sendNodeOverride(instance.id, 'config', key, value);
+            },
           })
         );
       } else if (field.type === 'number') {
+        const clamp = (value: number) => {
+          let next = value;
+          const min = typeof field.min === 'number' ? field.min : undefined;
+          const max = typeof field.max === 'number' ? field.max : undefined;
+          if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
+          if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
+          return next;
+        };
+
         const control: any = new ClassicPreset.InputControl('number', {
-          initial: Number(current ?? 0),
-          change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+          initial: clamp(Number(current ?? 0)),
+          change: (value) => {
+            const next = typeof value === 'number' ? clamp(value) : value;
+            nodeEngine.updateNodeConfig(instance.id, { [key]: next });
+            sendNodeOverride(instance.id, 'config', key, next);
+          },
         });
         control.controlLabel = field.label;
+        control.min = field.min;
+        control.max = field.max;
+        control.step = field.step;
         node.addControl(key, control);
+      } else if (field.type === 'client-picker') {
+        node.addControl(
+          key,
+          new ClientPickerControl({
+            label: field.label,
+            initial: String(current ?? ''),
+            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+          })
+        );
       } else if (field.type === 'param-path') {
         node.addControl(
           key,
@@ -694,7 +798,10 @@
               value: p.path,
               label: `${p.label} (${p.path})`,
             })),
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              sendNodeOverride(instance.id, 'config', key, value);
+            },
           })
         );
       } else if (field.type === 'midi-source') {
@@ -702,7 +809,10 @@
       } else {
         const control: any = new ClassicPreset.InputControl('text', {
           initial: String(current ?? ''),
-          change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
         });
         control.controlLabel = field.label;
         node.addControl(key, control);

@@ -12,6 +12,13 @@ export interface NodePort {
   type: PortType;
   defaultValue?: unknown;
   /**
+   * Optional numeric UI hints (enforced in Manager UI).
+   * When present, numeric inputs/configs are clamped and rendered with min/max/step attributes.
+   */
+  min?: number;
+  max?: number;
+  step?: number;
+  /**
    * `data` ports participate in graph execution order (DAG).
    * `sink` ports are side-effect inputs (delivered after compute), so they don't create cycles.
    */
@@ -44,9 +51,12 @@ export interface NodeDefinition {
 export interface ConfigField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source';
+  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source' | 'client-picker';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 export interface ProcessContext {

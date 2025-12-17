@@ -1,0 +1,10 @@
+{
+  "type": "client-object",
+  "label": "Client",
+  "category": "Objects",
+  "inputs": [{ "id": "in", "label": "In", "type": "command", "kind": "sink" }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "client" }],
+  "configSchema": [{ "key": "clientId", "label": "Clients", "type": "client-picker", "defaultValue": "" }],
+  "runtime": { "kind": "client-object" }
+}
+
