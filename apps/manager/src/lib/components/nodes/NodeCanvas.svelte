@@ -12,11 +12,20 @@
   import Button from '$lib/components/ui/Button.svelte';
   import ReteNode from '$lib/components/nodes/ReteNode.svelte';
   import ReteControl from '$lib/components/nodes/ReteControl.svelte';
+  import ReteConnection from '$lib/components/nodes/ReteConnection.svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
   import { midiService } from '$lib/features/midi/midi-service';
   import { midiNodeBridge } from '$lib/features/midi/midi-node-bridge';
-  import type { NodeInstance, NodePort, PortType, Connection as EngineConnection } from '$lib/nodes/types';
+  import { getSDK } from '$lib/stores/manager';
+  import { sensorData } from '$lib/stores/manager';
+  import type {
+    NodeInstance,
+    NodePort,
+    PortType,
+    Connection as EngineConnection,
+  } from '$lib/nodes/types';
+  import type { LocalLoop } from '$lib/nodes';
   import {
     BooleanControl,
     ClientPickerControl,
@@ -174,7 +183,14 @@
     if (!Number.isFinite(y)) area.transform.y = 0;
   }
 
-  type MiniNode = { id: string; x: number; y: number; width: number; height: number; selected: boolean };
+  type MiniNode = {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    selected: boolean;
+  };
   type MinimapState = {
     size: number;
     nodes: MiniNode[];
@@ -213,9 +229,239 @@
   let graphStateStore = nodeEngine?.graphState;
   let isRunningStore = nodeEngine?.isRunning;
   let lastErrorStore = nodeEngine?.lastError;
+  let localLoopsStore = nodeEngine?.localLoops;
+  let deployedLoopsStore = nodeEngine?.deployedLoops;
+
+  let localLoops: LocalLoop[] = [];
+  let deployedLoopIds = new Set<string>();
+  let selectedLoopId = '';
+
+  let localLoopNodeIds = new Set<string>();
+  let localLoopConnIds = new Set<string>();
+  let deployedNodeIds = new Set<string>();
+  let deployedConnIds = new Set<string>();
+  let loopsUnsub: (() => void) | null = null;
+  let deployedLoopsUnsub: (() => void) | null = null;
+  let loopHighlightDirty = false;
+  let sensorUnsub: (() => void) | null = null;
+
+  let deployPending = false;
+  let deployPendingLoopId = '';
+  let deployPendingClientId = '';
+  let deployPendingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  type ExecutorLogEntry = {
+    at: number;
+    event: string;
+    loopId: string | null;
+    error: string | null;
+    payload: Record<string, unknown>;
+  };
+
+  type ExecutorClientStatus = {
+    running: boolean;
+    loopId: string | null;
+    lastEvent: string;
+    lastError: string | null;
+    lastSeenAt: number;
+    log: ExecutorLogEntry[];
+  };
+
+  let executorStatusByClient = new Map<string, ExecutorClientStatus>();
+  let executorLastServerTimestampByClient = new Map<string, number>();
+  let showExecutorLogs = false;
+
+  function getLoopClientId(loop: LocalLoop): string {
+    const clientNodeId = loop.clientsInvolved?.[0] ?? '';
+    const node = graphState.nodes.find((n: any) => String(n.id) === String(clientNodeId));
+    const id = node?.config?.clientId;
+    return typeof id === 'string' ? id : '';
+  }
+
+  function loopLabel(loop: LocalLoop): string {
+    const clientId = getLoopClientId(loop);
+    if (clientId) return `Client ${clientId}`;
+    const nodeId = loop.clientsInvolved?.[0] ?? '';
+    return nodeId ? `Client node ${nodeId.slice(0, 8)}…` : loop.id;
+  }
+
+  $: if (localLoops.length > 0 && !localLoops.some((l) => l.id === selectedLoopId)) {
+    selectedLoopId = localLoops[0]?.id ?? '';
+  }
+
+  $: selectedLoop = localLoops.find((l) => l.id === selectedLoopId);
+  $: selectedLoopClientId = selectedLoop ? getLoopClientId(selectedLoop) : '';
+  $: isSelectedLoopDeployed = Boolean(selectedLoopId && deployedLoopIds.has(selectedLoopId));
+  $: selectedExecutorStatus = selectedLoopClientId
+    ? executorStatusByClient.get(selectedLoopClientId)
+    : undefined;
+
+  function recomputeLoopHighlightSets() {
+    localLoopNodeIds = new Set<string>();
+    localLoopConnIds = new Set<string>();
+    deployedNodeIds = new Set<string>();
+    deployedConnIds = new Set<string>();
+
+    for (const loop of localLoops) {
+      for (const nid of loop.nodeIds) localLoopNodeIds.add(nid);
+      for (const cid of loop.connectionIds) localLoopConnIds.add(cid);
+      if (!deployedLoopIds.has(loop.id)) continue;
+      for (const nid of loop.nodeIds) deployedNodeIds.add(nid);
+      for (const cid of loop.connectionIds) deployedConnIds.add(cid);
+    }
+
+    scheduleLoopHighlight();
+  }
+
+  function scheduleLoopHighlight() {
+    loopHighlightDirty = true;
+    if (!isSyncingGraph) void applyLoopHighlights();
+  }
+
+  async function applyLoopHighlights() {
+    if (!areaPlugin) return;
+    if (!loopHighlightDirty) return;
+    loopHighlightDirty = false;
+
+    for (const [id, node] of nodeMap.entries()) {
+      const nextLocal = localLoopNodeIds.has(id);
+      const nextDeployed = deployedNodeIds.has(id);
+      if (Boolean((node as any).localLoop) !== nextLocal) {
+        (node as any).localLoop = nextLocal;
+        await areaPlugin.update('node', id);
+      }
+      if (Boolean((node as any).deployedLoop) !== nextDeployed) {
+        (node as any).deployedLoop = nextDeployed;
+        await areaPlugin.update('node', id);
+      }
+    }
+
+    for (const [id, conn] of connectionMap.entries()) {
+      const nextLocal = localLoopConnIds.has(id);
+      const nextDeployed = deployedConnIds.has(id);
+      if (Boolean((conn as any).localLoop) !== nextLocal) {
+        (conn as any).localLoop = nextLocal;
+        await areaPlugin.update('connection', id);
+      }
+      if (Boolean((conn as any).deployedLoop) !== nextDeployed) {
+        (conn as any).deployedLoop = nextDeployed;
+        await areaPlugin.update('connection', id);
+      }
+    }
+  }
+
+  function updateExecutorStatus(clientId: string, entry: ExecutorLogEntry) {
+    const next = new Map(executorStatusByClient);
+    const prev =
+      next.get(clientId) ??
+      ({
+        running: false,
+        loopId: null,
+        lastEvent: 'unknown',
+        lastError: null,
+        lastSeenAt: 0,
+        log: [],
+      } as ExecutorClientStatus);
+
+    const log = [...prev.log, entry].slice(-30);
+    const running =
+      entry.event === 'deployed' || entry.event === 'started'
+        ? true
+        : entry.event === 'stopped' || entry.event === 'removed' || entry.event === 'rejected'
+          ? false
+          : prev.running;
+
+    next.set(clientId, {
+      running,
+      loopId: entry.loopId ?? prev.loopId,
+      lastEvent: entry.event,
+      lastError: entry.error ?? prev.lastError,
+      lastSeenAt: entry.at,
+      log,
+    });
+    executorStatusByClient = next;
+  }
+
+  function deploySelectedLoop() {
+    if (!selectedLoop) return;
+    if (!selectedLoopClientId) {
+      alert('Select a client in the Client node before deploying.');
+      return;
+    }
+    const sdk = getSDK();
+    if (!sdk) {
+      alert('Manager SDK not connected.');
+      return;
+    }
+
+    const caps = selectedLoop.requiredCapabilities?.length
+      ? selectedLoop.requiredCapabilities.join(', ')
+      : 'none';
+    const ok = confirm(
+      `Deploy local loop to client ${selectedLoopClientId}?\n\nrequiredCapabilities: ${caps}`
+    );
+    if (!ok) return;
+
+    try {
+      const payload = nodeEngine.exportGraphForLoop(selectedLoop.id) as any;
+      sdk.sendPluginControl(
+        { mode: 'clientIds', ids: [selectedLoopClientId] },
+        'node-executor',
+        'deploy',
+        payload
+      );
+
+      deployPending = true;
+      deployPendingLoopId = selectedLoop.id;
+      deployPendingClientId = selectedLoopClientId;
+      if (deployPendingTimeout) clearTimeout(deployPendingTimeout);
+      deployPendingTimeout = setTimeout(() => {
+        if (!deployPending) return;
+        deployPending = false;
+        const loopId = deployPendingLoopId;
+        deployPendingLoopId = '';
+        deployPendingClientId = '';
+        alert(`Deploy timeout for loop ${loopId}`);
+      }, 8000);
+    } catch (err) {
+      console.error('[NodeCanvas] deploy failed', err);
+      alert(err instanceof Error ? err.message : 'Deploy failed');
+    }
+  }
+
+  function stopSelectedLoop() {
+    if (!selectedLoop) return;
+    if (!selectedLoopClientId) return;
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendPluginControl(
+      { mode: 'clientIds', ids: [selectedLoopClientId] },
+      'node-executor',
+      'stop',
+      { loopId: selectedLoop.id } as any
+    );
+    nodeEngine.markLoopDeployed(selectedLoop.id, false);
+  }
+
+  function removeSelectedLoop() {
+    if (!selectedLoop) return;
+    if (!selectedLoopClientId) return;
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendPluginControl(
+      { mode: 'clientIds', ids: [selectedLoopClientId] },
+      'node-executor',
+      'remove',
+      { loopId: selectedLoop.id } as any
+    );
+    nodeEngine.markLoopDeployed(selectedLoop.id, false);
+  }
 
   const nodeCategories = nodeRegistry.listByCategory();
-  const addCategoryOptions = ['Objects', ...Array.from(nodeCategories.keys()).filter((k) => k !== 'Objects')];
+  const addCategoryOptions = [
+    'Objects',
+    ...Array.from(nodeCategories.keys()).filter((k) => k !== 'Objects'),
+  ];
 
   $: {
     const defs = nodeCategories.get(addCategory) ?? [];
@@ -299,13 +545,15 @@
 
       // ComfyUI-like default widgets for primitive inputs with config/default fallbacks
       const hasDefault = input.defaultValue !== undefined;
-      const isPrimitive = input.type === 'number' || input.type === 'string' || input.type === 'boolean';
+      const isPrimitive =
+        input.type === 'number' || input.type === 'string' || input.type === 'boolean';
       const isSink = input.kind === 'sink';
       const configField = configFieldByKey.get(input.id);
       const configValue = instance.config?.[input.id];
       const current = instance.inputValues?.[input.id];
       const derivedDefault = hasDefault ? input.defaultValue : configField?.defaultValue;
-      const hasInitial = current !== undefined || configValue !== undefined || derivedDefault !== undefined;
+      const hasInitial =
+        current !== undefined || configValue !== undefined || derivedDefault !== undefined;
       if (hasInitial && isPrimitive && !isSink) {
         if (input.type === 'number') {
           const initial =
@@ -442,7 +690,10 @@
             label: field.label,
             placeholder: 'Select parameter…',
             initial: String(current ?? ''),
-            options: numberParamOptions.map((p) => ({ value: p.path, label: `${p.label} (${p.path})` })),
+            options: numberParamOptions.map((p) => ({
+              value: p.path,
+              label: `${p.label} (${p.path})`,
+            })),
             change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
           })
         );
@@ -471,11 +722,16 @@
     if (!instance) return null;
     const def = nodeRegistry.get(instance.type);
     if (!def) return null;
-    if (socket.side === 'output') return (def.outputs ?? []).find((p) => p.id === socket.key) ?? null;
+    if (socket.side === 'output')
+      return (def.outputs ?? []).find((p) => p.id === socket.key) ?? null;
     return (def.inputs ?? []).find((p) => p.id === socket.key) ?? null;
   }
 
-  function bestMatchingPort(ports: NodePort[], requiredType: PortType, portSide: 'input' | 'output') {
+  function bestMatchingPort(
+    ports: NodePort[],
+    requiredType: PortType,
+    portSide: 'input' | 'output'
+  ) {
     let best: NodePort | null = null;
     let bestScore = -1;
 
@@ -506,7 +762,11 @@
     return { x: (clientX - rect.left) / k, y: (clientY - rect.top) / k };
   }
 
-  function findPortRowSocketAt(clientX: number, clientY: number, desiredSide: 'input' | 'output'): SocketData | null {
+  function findPortRowSocketAt(
+    clientX: number,
+    clientY: number,
+    desiredSide: 'input' | 'output'
+  ): SocketData | null {
     if (!container) return null;
     if (typeof document === 'undefined') return null;
     const elements = document.elementsFromPoint(clientX, clientY) as Element[];
@@ -579,7 +839,9 @@
     pickerSelectedCategory = addCategory || 'Objects';
     isPickerOpen = true;
     void tick().then(() => {
-      const input = pickerElement?.querySelector?.('input.picker-search') as HTMLInputElement | null;
+      const input = pickerElement?.querySelector?.(
+        'input.picker-search'
+      ) as HTMLInputElement | null;
       input?.focus?.();
       input?.select?.();
     });
@@ -668,7 +930,11 @@
     return cats.includes('Objects') ? ['Objects', ...rest] : rest;
   })();
 
-  $: if (isPickerOpen && pickerCategories.length > 0 && !pickerCategories.includes(pickerSelectedCategory)) {
+  $: if (
+    isPickerOpen &&
+    pickerCategories.length > 0 &&
+    !pickerCategories.includes(pickerSelectedCategory)
+  ) {
     pickerSelectedCategory = pickerCategories[0] ?? '';
   }
 
@@ -741,7 +1007,6 @@
           console.warn('[NodeCanvas] removeConnection failed', id, err);
         }
         connectionMap.delete(id);
-
       }
 
       // Remove stale nodes (from editor to match engine)
@@ -780,6 +1045,7 @@
     } finally {
       isSyncingGraph = false;
       requestMinimapUpdate();
+      void applyLoopHighlights();
     }
   }
 
@@ -833,10 +1099,12 @@
     }
 
     const hasNodes = nodes.length > 0;
-    let minX = hasNodes ? nodes[0]?.x ?? 0 : viewport.x;
-    let minY = hasNodes ? nodes[0]?.y ?? 0 : viewport.y;
+    let minX = hasNodes ? (nodes[0]?.x ?? 0) : viewport.x;
+    let minY = hasNodes ? (nodes[0]?.y ?? 0) : viewport.y;
     let maxX = hasNodes ? (nodes[0]?.x ?? 0) + (nodes[0]?.width ?? 0) : viewport.x + viewport.width;
-    let maxY = hasNodes ? (nodes[0]?.y ?? 0) + (nodes[0]?.height ?? 0) : viewport.y + viewport.height;
+    let maxY = hasNodes
+      ? (nodes[0]?.y ?? 0) + (nodes[0]?.height ?? 0)
+      : viewport.y + viewport.height;
 
     for (const n of nodes) {
       minX = Math.min(minX, n.x);
@@ -1002,7 +1270,11 @@
         if (ctx?.type === 'nodedragged') {
           isNodeDragging = false;
         }
-        if (ctx?.type === 'translated' || ctx?.type === 'zoomed' || ctx?.type === 'nodetranslated') {
+        if (
+          ctx?.type === 'translated' ||
+          ctx?.type === 'zoomed' ||
+          ctx?.type === 'nodetranslated'
+        ) {
           requestMinimapUpdate();
         }
         if (ctx?.type === 'pointerdown') {
@@ -1098,6 +1370,10 @@
   onMount(async () => {
     if (!container) return;
 
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as any).__shuguNodeEngine = nodeEngine;
+    }
+
     // MIDI nodes rely on the shared MIDI singleton. Keep the bridge alive;
     // request MIDI access lazily when MIDI nodes are present or user presses Learn.
     midiNodeBridge.init();
@@ -1140,7 +1416,11 @@
             key: String(initial.key),
           };
           const desiredSide = initialSocket.side === 'output' ? 'input' : 'output';
-          const snapped = findPortRowSocketAt(lastPointerClient.x, lastPointerClient.y, desiredSide);
+          const snapped = findPortRowSocketAt(
+            lastPointerClient.x,
+            lastPointerClient.y,
+            desiredSide
+          );
           if (snapped) {
             // Mimic classic flow: non-multiple inputs get replaced.
             if (desiredSide === 'input') {
@@ -1178,9 +1458,11 @@
     render.addPreset(
       // @ts-expect-error preset type mismatch
       SveltePresets.classic.setup({
-        socketPositionWatcher: socketPositionWatcher ?? (socketPositionWatcher = new LiveDOMSocketPosition()),
+        socketPositionWatcher:
+          socketPositionWatcher ?? (socketPositionWatcher = new LiveDOMSocketPosition()),
         customize: {
           node: () => ReteNode,
+          connection: () => ReteConnection,
           control: () => ReteControl,
         },
       })
@@ -1192,6 +1474,67 @@
         void midiService.init();
       }
       void scheduleGraphSync(state);
+    });
+
+    loopsUnsub = localLoopsStore?.subscribe((loops) => {
+      localLoops = Array.isArray(loops) ? loops : [];
+      recomputeLoopHighlightSets();
+    });
+
+    deployedLoopsUnsub = deployedLoopsStore?.subscribe((ids) => {
+      deployedLoopIds = new Set(Array.isArray(ids) ? ids : []);
+      recomputeLoopHighlightSets();
+    });
+
+    sensorUnsub = sensorData.subscribe((map) => {
+      for (const [clientId, msg] of map.entries()) {
+        const m: any = msg as any;
+        if (!m || m.sensorType !== 'custom') continue;
+        const payload: any = m.payload ?? {};
+        if (payload?.kind !== 'node-executor') continue;
+
+        const serverTs = Number(m.serverTimestamp ?? 0);
+        if (!Number.isFinite(serverTs) || serverTs <= 0) continue;
+        if (executorLastServerTimestampByClient.get(clientId) === serverTs) continue;
+        executorLastServerTimestampByClient.set(clientId, serverTs);
+
+        const event = typeof payload.event === 'string' ? payload.event : 'unknown';
+        const loopId = typeof payload.loopId === 'string' ? payload.loopId : null;
+        const error = payload.error ? String(payload.error) : null;
+
+        updateExecutorStatus(clientId, {
+          at: serverTs,
+          event,
+          loopId,
+          error,
+          payload: payload as Record<string, unknown>,
+        });
+
+        // Deploy ACK flow: only mark the loop as deployed once the client confirms.
+        if (!deployPending) continue;
+        if (!deployPendingClientId || !deployPendingLoopId) continue;
+        if (clientId !== deployPendingClientId) continue;
+        if (loopId && loopId !== deployPendingLoopId) continue;
+
+        if (event === 'deployed') {
+          nodeEngine.markLoopDeployed(deployPendingLoopId, true);
+          deployPending = false;
+          deployPendingLoopId = '';
+          deployPendingClientId = '';
+          if (deployPendingTimeout) clearTimeout(deployPendingTimeout);
+          deployPendingTimeout = null;
+          continue;
+        }
+
+        if (event === 'rejected' || event === 'error') {
+          deployPending = false;
+          deployPendingLoopId = '';
+          deployPendingClientId = '';
+          if (deployPendingTimeout) clearTimeout(deployPendingTimeout);
+          deployPendingTimeout = null;
+          alert(`Deploy failed: ${error ?? event}`);
+        }
+      }
     });
 
     bindEditorPipes();
@@ -1344,6 +1687,10 @@
   onDestroy(() => {
     graphUnsub?.();
     paramsUnsub?.();
+    loopsUnsub?.();
+    deployedLoopsUnsub?.();
+    sensorUnsub?.();
+    if (deployPendingTimeout) clearTimeout(deployPendingTimeout);
     if (wheelHandler) window.removeEventListener('wheel', wheelHandler, { capture: true } as any);
     if (contextMenuHandler)
       container?.removeEventListener('contextmenu', contextMenuHandler, { capture: true } as any);
@@ -1357,6 +1704,12 @@
     editor?.clear();
     nodeMap.clear();
     connectionMap.clear();
+
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      if ((window as any).__shuguNodeEngine === nodeEngine) {
+        delete (window as any).__shuguNodeEngine;
+      }
+    }
   });
 </script>
 
@@ -1374,11 +1727,103 @@
       <span class="node-count">{nodeCount} nodes</span>
     </div>
     <div class="toolbar-right">
+      {#if localLoops.length > 0}
+        <div class="loop-controls">
+          <select class="loop-select" bind:value={selectedLoopId}>
+            {#each localLoops as loop (loop.id)}
+              <option value={loop.id}>{loopLabel(loop)}</option>
+            {/each}
+          </select>
+          {#if selectedLoop}
+            <span class="loop-meta">
+              {#if selectedLoop.requiredCapabilities?.length}
+                caps: {selectedLoop.requiredCapabilities.join(', ')}
+              {:else}
+                caps: none
+              {/if}
+            </span>
+            <span class="executor-meta">
+              exec:
+              {#if selectedExecutorStatus}
+                <span
+                  class="executor-badge {selectedExecutorStatus.running ? 'running' : 'stopped'}"
+                >
+                  {selectedExecutorStatus.running ? 'running' : 'stopped'}
+                </span>
+                <span class="executor-event">{selectedExecutorStatus.lastEvent}</span>
+                {#if selectedExecutorStatus.lastError}
+                  <span class="executor-error" title={selectedExecutorStatus.lastError}>⚠</span>
+                {/if}
+              {:else}
+                <span class="executor-badge unknown">unknown</span>
+              {/if}
+            </span>
+          {/if}
+          {#if isSelectedLoopDeployed}
+            <Button variant="ghost" size="sm" on:click={stopSelectedLoop}>⏹ Stop Loop</Button>
+            <Button variant="ghost" size="sm" on:click={removeSelectedLoop}>🧹 Remove</Button>
+          {:else}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={deployPending && selectedLoopId === deployPendingLoopId}
+              on:click={deploySelectedLoop}
+            >
+              {deployPending && selectedLoopId === deployPendingLoopId
+                ? '… Deploying'
+                : '⬇ Deploy Loop'}
+            </Button>
+          {/if}
+          {#if selectedExecutorStatus}
+            <Button
+              variant="ghost"
+              size="sm"
+              on:click={() => (showExecutorLogs = !showExecutorLogs)}
+            >
+              {showExecutorLogs ? '✕ Logs' : '📜 Logs'}
+            </Button>
+          {/if}
+        </div>
+      {/if}
       {#if $lastErrorStore}
         <span class="error-message">⚠️ {$lastErrorStore}</span>
       {/if}
     </div>
   </div>
+
+  {#if showExecutorLogs && selectedExecutorStatus}
+    <div class="executor-logs" on:pointerdown|stopPropagation>
+      <div class="executor-logs-header">
+        <div class="executor-logs-title">
+          node-executor logs · {selectedLoopClientId || 'unknown client'}
+        </div>
+        <button
+          class="executor-logs-close"
+          type="button"
+          on:click={() => (showExecutorLogs = false)}
+        >
+          ✕
+        </button>
+      </div>
+      <div class="executor-logs-body">
+        {#if selectedExecutorStatus.log.length === 0}
+          <div class="executor-logs-empty">No logs yet.</div>
+        {:else}
+          {#each [...selectedExecutorStatus.log].reverse() as entry (entry.at + ':' + entry.event)}
+            <div class="executor-logs-row">
+              <span class="executor-logs-at">
+                {new Date(entry.at).toLocaleTimeString()}
+              </span>
+              <span class="executor-logs-event">{entry.event}</span>
+              {#if entry.error}
+                <span class="executor-logs-error" title={entry.error}>{entry.error}</span>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <div
     class="canvas-wrapper"
@@ -1497,9 +1942,11 @@
     flex: 1 1 auto;
     height: 100%;
     width: 100%;
+    position: relative;
     min-width: 0;
     min-height: 0;
-    background: radial-gradient(circle at 20% 0%, rgba(99, 102, 241, 0.18), transparent 45%),
+    background:
+      radial-gradient(circle at 20% 0%, rgba(99, 102, 241, 0.18), transparent 45%),
       radial-gradient(circle at 80% 10%, rgba(168, 85, 247, 0.16), transparent 50%),
       linear-gradient(180deg, #0b0c14 0%, #070811 100%);
     border-radius: var(--radius-md, 8px);
@@ -1520,6 +1967,190 @@
     display: flex;
     gap: var(--space-sm, 8px);
     align-items: center;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .loop-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .loop-select {
+    height: 32px;
+    border-radius: 10px;
+    padding: 0 10px;
+    background: rgba(2, 6, 23, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    max-width: 220px;
+  }
+
+  .loop-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.65);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+
+  .executor-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.65);
+    white-space: nowrap;
+    max-width: 260px;
+  }
+
+  .executor-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.82);
+  }
+
+  .executor-badge.running {
+    border-color: rgba(20, 184, 166, 0.55);
+    background: rgba(20, 184, 166, 0.16);
+    color: rgba(153, 246, 228, 0.95);
+  }
+
+  .executor-badge.stopped {
+    border-color: rgba(251, 146, 60, 0.5);
+    background: rgba(251, 146, 60, 0.16);
+    color: rgba(254, 215, 170, 0.95);
+  }
+
+  .executor-badge.unknown {
+    border-color: rgba(148, 163, 184, 0.4);
+    background: rgba(148, 163, 184, 0.14);
+    color: rgba(226, 232, 240, 0.9);
+  }
+
+  .executor-event {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .executor-error {
+    color: rgba(248, 113, 113, 0.95);
+    font-size: 12px;
+    line-height: 1;
+    cursor: help;
+  }
+
+  .executor-logs {
+    position: absolute;
+    top: 54px;
+    right: 14px;
+    width: 420px;
+    max-width: calc(100% - 28px);
+    max-height: min(320px, calc(100% - 78px));
+    z-index: 30;
+    overflow: hidden;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(14px);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .executor-logs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 10px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 10px;
+  }
+
+  .executor-logs-title {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.82);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .executor-logs-close {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.25);
+    color: rgba(255, 255, 255, 0.8);
+    border-radius: 10px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .executor-logs-close:hover {
+    border-color: rgba(99, 102, 241, 0.55);
+    background: rgba(2, 6, 23, 0.32);
+  }
+
+  .executor-logs-body {
+    padding: 10px 10px 12px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .executor-logs-row {
+    display: grid;
+    grid-template-columns: 76px 80px 1fr;
+    gap: 10px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.78);
+    align-items: baseline;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(2, 6, 23, 0.22);
+    border-radius: 12px;
+    padding: 8px 10px;
+  }
+
+  .executor-logs-at {
+    color: rgba(148, 163, 184, 0.9);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .executor-logs-event {
+    font-weight: 700;
+    letter-spacing: 0.1px;
+  }
+
+  .executor-logs-error {
+    color: rgba(248, 113, 113, 0.95);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .executor-logs-empty {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
   }
 
   .node-count {
@@ -1545,7 +2176,12 @@
       radial-gradient(circle at 30% 0%, rgba(99, 102, 241, 0.12), transparent 50%),
       radial-gradient(circle at 70% 10%, rgba(168, 85, 247, 0.1), transparent 55%),
       linear-gradient(180deg, rgba(10, 11, 20, 0.85) 0%, rgba(7, 8, 17, 0.95) 100%);
-    background-size: 32px 32px, 32px 32px, auto, auto, auto;
+    background-size:
+      32px 32px,
+      32px 32px,
+      auto,
+      auto,
+      auto;
     background-position: center, center, center, center, center;
   }
 
@@ -1717,6 +2353,16 @@
   :global(.node-canvas-container .node.selected) {
     border-color: rgba(99, 102, 241, 0.95) !important;
     box-shadow: 0 18px 52px rgba(99, 102, 241, 0.18) !important;
+  }
+
+  :global(.node-canvas-container .node.local-loop) {
+    border-color: rgba(236, 72, 153, 0.85) !important;
+    box-shadow: 0 18px 56px rgba(236, 72, 153, 0.16) !important;
+  }
+
+  :global(.node-canvas-container .node.deployed-loop) {
+    border-color: rgba(20, 184, 166, 0.95) !important;
+    box-shadow: 0 18px 56px rgba(20, 184, 166, 0.16) !important;
   }
 
   :global(.node-canvas-container .node .title) {

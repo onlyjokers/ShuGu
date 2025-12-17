@@ -1,0 +1,300 @@
+import { PROTOCOL_VERSION, type PluginControlMessage } from '@shugu/protocol';
+import type { ClientSDK } from './client-sdk.js';
+import { NodeRegistry } from './node-registry.js';
+import { registerDefaultNodeDefinitions, type NodeCommand } from './node-definitions.js';
+import { NodeRuntime } from './node-runtime.js';
+import type { GraphState } from './node-types.js';
+
+export type NodeExecutorDeployPayload = {
+  graph: Pick<GraphState, 'nodes' | 'connections'>;
+  meta: {
+    loopId: string;
+    requiredCapabilities?: string[];
+    tickIntervalMs?: number;
+    protocolVersion?: number;
+    executorVersion?: string;
+  };
+};
+
+export type NodeExecutorStatus = {
+  running: boolean;
+  loopId: string | null;
+  lastError: string | null;
+};
+
+export type NodeExecutorOptions = {
+  /**
+   * Optional gate for safety/UX. If provided and returns false, deploy/start will be rejected.
+   */
+  isEnabled?: () => boolean;
+  /**
+   * Safety limits (Task 6 will tighten these further).
+   */
+  canRunCapability?: (capability: string) => boolean;
+  limits?: {
+    maxNodes?: number;
+    minTickIntervalMs?: number;
+    maxTickIntervalMs?: number;
+    maxTickDurationMs?: number;
+  };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object';
+}
+
+export class NodeExecutor {
+  private registry = new NodeRegistry();
+  private runtime: NodeRuntime;
+  private loopId: string | null = null;
+  private lastError: string | null = null;
+  private running = false;
+
+  private options: {
+    isEnabled: () => boolean;
+    canRunCapability: (capability: string) => boolean;
+    limits: {
+      maxNodes: number;
+      minTickIntervalMs: number;
+      maxTickIntervalMs: number;
+      maxTickDurationMs: number;
+    };
+  };
+
+  constructor(
+    private sdk: ClientSDK,
+    private executeCommand: (cmd: NodeCommand) => void,
+    options?: NodeExecutorOptions
+  ) {
+    const defaultCanRunCapability = (capability: string) => {
+      if (capability === 'sensors') {
+        return (
+          typeof window !== 'undefined' &&
+          ('DeviceMotionEvent' in window || 'DeviceOrientationEvent' in window)
+        );
+      }
+      if (capability === 'flashlight') {
+        return typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+      }
+      if (capability === 'screen') {
+        return typeof document !== 'undefined';
+      }
+      if (capability === 'sound') {
+        return (
+          typeof window !== 'undefined' &&
+          Boolean((window as any).AudioContext || (window as any).webkitAudioContext)
+        );
+      }
+      if (capability === 'visual') return true;
+      return true;
+    };
+
+    this.options = {
+      isEnabled: options?.isEnabled ?? (() => true),
+      canRunCapability: options?.canRunCapability ?? defaultCanRunCapability,
+      limits: {
+        maxNodes: options?.limits?.maxNodes ?? 80,
+        minTickIntervalMs: options?.limits?.minTickIntervalMs ?? 16,
+        maxTickIntervalMs: options?.limits?.maxTickIntervalMs ?? 250,
+        maxTickDurationMs: options?.limits?.maxTickDurationMs ?? 120,
+      },
+    };
+
+    registerDefaultNodeDefinitions(this.registry, {
+      getClientId: () => this.sdk.getState().clientId,
+      getLatestSensor: () => this.sdk.getLatestSensorData(),
+      executeCommand: (cmd) => this.executeCommand(cmd),
+    });
+
+    this.runtime = new NodeRuntime(this.registry, {
+      onTick: ({ durationMs }) => {
+        if (durationMs <= this.options.limits.maxTickDurationMs) return;
+        this.lastError = `tick exceeded budget (${durationMs.toFixed(1)}ms)`;
+        console.warn('[node-executor] stopping due to slow tick', this.lastError);
+        this.runtime.stop();
+        this.running = false;
+        this.report('stopped', {
+          loopId: this.loopId,
+          reason: 'watchdog',
+          error: this.lastError,
+        });
+      },
+    });
+  }
+
+  getStatus(): NodeExecutorStatus {
+    return { running: this.running, loopId: this.loopId, lastError: this.lastError };
+  }
+
+  destroy(): void {
+    this.runtime.stop();
+    this.runtime.clear();
+    this.loopId = null;
+    this.running = false;
+    this.lastError = null;
+    this.report('destroyed', {});
+  }
+
+  handlePluginControl(message: PluginControlMessage): void {
+    if (message.pluginId !== 'node-executor') return;
+    try {
+      if (message.command === 'deploy') {
+        this.deploy(message.payload);
+        return;
+      }
+      if (message.command === 'start') {
+        this.start(message.payload);
+        return;
+      }
+      if (message.command === 'stop') {
+        this.stop(message.payload);
+        return;
+      }
+      if (message.command === 'remove') {
+        this.remove(message.payload);
+        return;
+      }
+    } catch (err) {
+      this.lastError = err instanceof Error ? err.message : String(err);
+      console.error('[node-executor] command failed', message.command, err);
+      this.report('error', { command: message.command, error: this.lastError });
+    }
+  }
+
+  private deploy(payload: unknown): void {
+    if (!this.options.isEnabled()) {
+      throw new Error('node-executor is disabled on this client');
+    }
+    const parsed = this.parseDeployPayload(payload);
+
+    const nodeCount = parsed.graph.nodes.length;
+    if (nodeCount > this.options.limits.maxNodes) {
+      throw new Error(`graph too large (${nodeCount} nodes > ${this.options.limits.maxNodes})`);
+    }
+
+    const required = parsed.meta.requiredCapabilities ?? [];
+    const missing = required.filter((cap) => !this.options.canRunCapability(cap));
+    if (missing.length > 0) {
+      this.report('rejected', {
+        loopId: parsed.meta.loopId,
+        requiredCapabilities: required,
+        missingCapabilities: missing,
+      });
+      throw new Error(`missing required capabilities: ${missing.join(', ')}`);
+    }
+
+    const tickIntervalMs = Number(parsed.meta.tickIntervalMs ?? 33);
+    const clampedTick = Math.max(
+      this.options.limits.minTickIntervalMs,
+      Math.min(this.options.limits.maxTickIntervalMs, Math.floor(tickIntervalMs))
+    );
+
+    if (
+      typeof parsed.meta.protocolVersion === 'number' &&
+      parsed.meta.protocolVersion !== PROTOCOL_VERSION
+    ) {
+      console.warn(
+        `[node-executor] protocol mismatch (payload=${parsed.meta.protocolVersion}, client=${PROTOCOL_VERSION})`
+      );
+    }
+
+    // Best-effort: ensure the deployed graph targets this client.
+    const selfClientId = this.sdk.getState().clientId;
+    const clientNodes = parsed.graph.nodes.filter((n) => n.type === 'client-object');
+    const configuredClientId =
+      typeof clientNodes[0]?.config?.clientId === 'string'
+        ? String(clientNodes[0]?.config?.clientId)
+        : '';
+    if (selfClientId && configuredClientId && selfClientId !== configuredClientId) {
+      throw new Error(
+        `graph clientId mismatch (payload=${configuredClientId}, self=${selfClientId})`
+      );
+    }
+
+    this.runtime.stop();
+    this.runtime.clear();
+    this.runtime.setTickIntervalMs(clampedTick);
+    this.runtime.loadGraph(parsed.graph);
+
+    this.loopId = parsed.meta.loopId;
+    this.lastError = null;
+    this.runtime.start();
+    this.running = true;
+
+    console.log('[node-executor] deployed', {
+      loopId: this.loopId,
+      tickIntervalMs: clampedTick,
+      requiredCapabilities: parsed.meta.requiredCapabilities ?? [],
+    });
+
+    this.report('deployed', {
+      loopId: this.loopId,
+      tickIntervalMs: clampedTick,
+      requiredCapabilities: parsed.meta.requiredCapabilities ?? [],
+    });
+  }
+
+  private start(payload: unknown): void {
+    if (!this.options.isEnabled()) {
+      throw new Error('node-executor is disabled on this client');
+    }
+    const loopId = this.readLoopId(payload);
+    if (loopId && this.loopId && loopId !== this.loopId) return;
+    this.runtime.start();
+    this.running = true;
+    this.report('started', { loopId: this.loopId });
+  }
+
+  private stop(payload: unknown): void {
+    const loopId = this.readLoopId(payload);
+    if (loopId && this.loopId && loopId !== this.loopId) return;
+    this.runtime.stop();
+    this.running = false;
+    this.report('stopped', { loopId: this.loopId });
+  }
+
+  private remove(payload: unknown): void {
+    const loopId = this.readLoopId(payload);
+    if (loopId && this.loopId && loopId !== this.loopId) return;
+    this.runtime.stop();
+    this.runtime.clear();
+    this.loopId = null;
+    this.running = false;
+    this.lastError = null;
+    this.report('removed', { loopId });
+  }
+
+  private readLoopId(payload: unknown): string | null {
+    if (!isRecord(payload)) return null;
+    return typeof payload.loopId === 'string' ? payload.loopId : null;
+  }
+
+  private parseDeployPayload(payload: unknown): NodeExecutorDeployPayload {
+    if (!isRecord(payload)) throw new Error('invalid payload');
+    const graph = payload.graph;
+    const meta = payload.meta;
+    if (!isRecord(graph) || !isRecord(meta))
+      throw new Error('invalid payload (missing graph/meta)');
+    if (!Array.isArray(graph.nodes) || !Array.isArray(graph.connections)) {
+      throw new Error('invalid payload (graph.nodes/graph.connections)');
+    }
+    const loopId = typeof meta.loopId === 'string' ? meta.loopId : '';
+    if (!loopId) throw new Error('invalid payload (meta.loopId)');
+    return {
+      graph: graph as Pick<GraphState, 'nodes' | 'connections'>,
+      meta: meta as NodeExecutorDeployPayload['meta'],
+    };
+  }
+
+  private report(event: string, payload: Record<string, unknown>): void {
+    try {
+      this.sdk.sendSensorData(
+        'custom',
+        { kind: 'node-executor', event, ...payload },
+        { trackLatest: false }
+      );
+    } catch {
+      // ignore
+    }
+  }
+}

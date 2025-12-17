@@ -7,6 +7,7 @@
     disconnect,
     connectToServer,
     disconnectFromServer,
+    getSDK,
     permissions,
     currentScene,
     asciiEnabled,
@@ -19,6 +20,7 @@
 
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
+  let e2eSensorTimer: ReturnType<typeof setInterval> | null = null;
 
   type GeoFenceConfig = {
     center: { lat: number; lng: number };
@@ -92,6 +94,7 @@
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get('server');
+    const e2e = params.get('e2e') === '1';
     const isAccessingViaIP =
       window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
 
@@ -126,6 +129,33 @@
     // Preload bootstrap config early (HTTP only; no websocket connection).
     void refreshBootstrapConfig();
 
+    if (e2e) {
+      (window as any).__SHUGU_E2E = true;
+      permissions.set({
+        microphone: 'denied',
+        motion: 'granted',
+        camera: 'denied',
+        wakeLock: 'denied',
+        geolocation: 'granted',
+      });
+      hasStarted = true;
+      gateState = 'idle';
+      initialize({ serverUrl }, { autoConnect: true });
+
+      // Feed synthetic sensors so node-executor loops have live inputs in desktop e2e runs.
+      e2eSensorTimer = setInterval(() => {
+        const sdk = getSDK();
+        if (!sdk) return;
+        const t = Date.now() / 250;
+        sdk.sendSensorData('accel', {
+          x: Math.sin(t) * 2,
+          y: Math.cos(t) * 2,
+          z: 0,
+          includesGravity: false,
+        });
+      }, 120);
+    }
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handlePageHide);
     handleVisibilityChange();
@@ -133,6 +163,10 @@
 
   onDestroy(() => {
     disconnect();
+    if (e2eSensorTimer) {
+      clearInterval(e2eSensorTimer);
+      e2eSensorTimer = null;
+    }
     if (retryCooldownTimer) clearInterval(retryCooldownTimer);
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -457,7 +491,7 @@
         title={gateTitle}
         message={gateMessage}
         details={gateDetails}
-        retryCooldownS={retryCooldownS}
+        {retryCooldownS}
         retryDisabled={gateState === 'checking' || retryCooldownS > 0}
         on:retry={handleRetry}
       />

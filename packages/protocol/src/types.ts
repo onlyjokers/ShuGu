@@ -324,12 +324,13 @@ export interface MediaMetaMessage extends BaseMessage {
  */
 export type AudioPluginId = 'mel-spectrogram' | 'audio-splitter' | string;
 export type VisualPluginId = 'box-scene' | 'mel-scene' | 'ascii-scene' | string;
-export type PluginId = AudioPluginId | VisualPluginId;
+export type SystemPluginId = 'node-executor';
+export type PluginId = AudioPluginId | VisualPluginId | SystemPluginId;
 
 /**
  * Plugin commands
  */
-export type PluginCommand = 'init' | 'start' | 'stop' | 'configure';
+export type PluginCommand = 'init' | 'start' | 'stop' | 'configure' | 'deploy' | 'remove';
 
 /**
  * Plugin control message

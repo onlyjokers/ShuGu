@@ -66,9 +66,11 @@ export class FlashlightController {
                 this.hideFallback();
                 break;
             case 'on':
-                const success = await this.setTorch(true);
-                if (!success) this.showFallback();
-                break;
+                {
+                    const success = await this.setTorch(true);
+                    if (!success) this.showFallback();
+                    break;
+                }
             case 'blink':
                 this.startBlink(payload.frequency ?? 2, payload.dutyCycle ?? 0.5);
                 break;
@@ -457,7 +459,9 @@ export class VibrationController {
         if (this.isSupported) {
             try {
                 navigator.vibrate(0);
-            } catch (e) {}
+            } catch (e) {
+                // ignore
+            }
         }
         this.stopVisualVibration();
     }
@@ -475,10 +479,6 @@ export class VibrationController {
         // Calculate total duration
         const totalDuration = pattern.reduce((a, b) => a + b, 0);
         
-        let patternIndex = 0;
-        let lastToggleTime = 0;
-        let isVibrating = true; // First element is vibration duration
-
         const shake = () => {
             const elapsed = Date.now() - startTime;
             if (elapsed >= totalDuration) {
@@ -758,7 +758,9 @@ export class ModulatedSoundPlayer {
         this.lfo?.disconnect();
         try {
             this.lfo?.stop();
-        } catch {}
+        } catch {
+            // ignore
+        }
         this.lfo = null;
 
         if (this.gainNode) {

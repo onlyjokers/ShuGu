@@ -35,6 +35,19 @@ export interface ClientState {
 
 export type MessageHandler<T = Message> = (message: T) => void;
 
+export type LatestSensorData = {
+    sensorType: SensorType;
+    payload: SensorPayload;
+    /**
+     * Local time when the sensor data was produced/sent (ms).
+     */
+    clientTimestamp: number;
+    /**
+     * Best-effort server time approximation when produced (ms).
+     */
+    serverTimestamp: number;
+};
+
 export interface ClientIdentity {
     /**
      * Stable ID for a physical device (persist this in localStorage on the client app).
@@ -83,6 +96,7 @@ export class ClientSDK {
     private stateListeners: Set<(state: ClientState) => void> = new Set();
     private messageHandlers: Map<string, Set<MessageHandler>> = new Map();
     private timeSyncIntervalId: ReturnType<typeof setInterval> | null = null;
+    private latestSensorData: LatestSensorData | null = null;
 
     constructor(config: ClientSDKConfig) {
         this.config = {
@@ -207,7 +221,21 @@ export class ClientSDK {
     /**
      * Send sensor data to server
      */
-    sendSensorData(sensorType: SensorType, payload: SensorPayload): void {
+    sendSensorData(
+        sensorType: SensorType,
+        payload: SensorPayload,
+        options?: { trackLatest?: boolean }
+    ): void {
+        const clientTimestamp = Date.now();
+        if (options?.trackLatest !== false) {
+            this.latestSensorData = {
+                sensorType,
+                payload,
+                clientTimestamp,
+                serverTimestamp: getServerTime(this.state.timeSync),
+            };
+        }
+
         if (!this.socket?.connected || !this.state.clientId) return;
 
         const message = createSensorDataMessage(
@@ -216,6 +244,14 @@ export class ClientSDK {
             payload
         );
         this.socket.emit(SOCKET_EVENTS.MSG, message);
+    }
+
+    /**
+     * Latest locally produced sensor message (best-effort snapshot).
+     * Useful for client-side execution (e.g. node-executor) even when offline.
+     */
+    getLatestSensorData(): LatestSensorData | null {
+        return this.latestSensorData ? { ...this.latestSensorData } : null;
     }
 
     /**

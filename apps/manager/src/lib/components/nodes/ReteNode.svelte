@@ -2,7 +2,7 @@
   import Ref from 'rete-svelte-plugin/svelte/Ref.svelte';
   import type { ClassicScheme, SvelteArea2D } from 'rete-svelte-plugin/svelte/presets/classic/types';
 
-  type NodeExtraData = { width?: number; height?: number };
+  type NodeExtraData = { width?: number; height?: number; localLoop?: boolean; deployedLoop?: boolean };
 
   function sortByIndex<K, I extends undefined | { index?: number }>(entries: [K, I][]) {
     entries.sort((a, b) => ((a[1] && a[1].index) || 0) - ((b[1] && b[1].index) || 0));
@@ -23,7 +23,12 @@
   }
 </script>
 
-<div class="node {data.selected ? 'selected' : ''}" style:width style:height data-testid="node">
+<div
+  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''}"
+  style:width
+  style:height
+  data-testid="node"
+>
   <div class="title" data-testid="title">{data.label}</div>
 
   {#if controls.length}
@@ -248,5 +253,15 @@
   :global(.port-inline-value) {
     width: auto;
     flex: 0 0 auto;
+  }
+
+  .node.local-loop {
+    border-color: rgba(236, 72, 153, 0.8);
+    box-shadow: 0 18px 56px rgba(236, 72, 153, 0.16);
+  }
+
+  .node.deployed-loop {
+    border-color: rgba(20, 184, 166, 0.9);
+    box-shadow: 0 18px 56px rgba(20, 184, 166, 0.16);
   }
 </style>

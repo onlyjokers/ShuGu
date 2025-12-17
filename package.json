@@ -8,6 +8,7 @@
     "dev:server": "pnpm --filter @shugu/server run dev",
     "dev:manager": "pnpm --filter @shugu/manager run dev",
     "dev:client": "pnpm --filter @shugu/client run dev",
+    "e2e:node-executor": "node scripts/e2e/node-executor.mjs",
     "build:all": "pnpm -r run build",
     "lint": "pnpm -r run lint",
     "format": "prettier --write \"**/*.{ts,svelte,js,json,css,md}\"",
@@ -30,6 +31,9 @@
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-svelte": "^3.13.1",
+    "playwright": "^1.57.0",
+    "prettier": "^3.7.4",
+    "prettier-plugin-svelte": "^3.4.1",
     "socket.io-client": "^4.7.2",
     "svelte-eslint-parser": "^1.4.1"
   }
