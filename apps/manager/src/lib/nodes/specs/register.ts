@@ -12,8 +12,8 @@ import {
   targetClients,
   type ControlAction,
   type ControlPayload,
-  type SensorDataMessage,
 } from '@shugu/protocol';
+import { NodeRegistry as CoreNodeRegistry, registerDefaultNodeDefinitions } from '@shugu/node-core';
 
 import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
@@ -69,7 +69,8 @@ type CommandRuntime = {
   kind: 'command';
   command: {
     action: ControlAction;
-    clientInput?: string; // default: 'client'
+    /** Optional gating: when set, requires `inputs[clientInput].clientId` to be present. */
+    clientInput?: string;
     output?: string; // default: 'cmd'
     payload: Record<string, CommandFieldMapping>;
   };
@@ -100,6 +101,46 @@ export type NodeSpec = {
   configSchema: ConfigField[];
   runtime: NodeRuntime;
 };
+
+type CoreRuntimeImpl = Pick<NodeDefinition, 'process' | 'onSink'>;
+
+const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
+  const registry = new CoreNodeRegistry();
+
+  registerDefaultNodeDefinitions(registry, {
+    // Manager-side: resolve clientId from node config.
+    getClientId: () => null,
+    getSensorForClientId: (clientId) => {
+      if (!clientId) return null;
+      return (get(sensorData).get(clientId) as any) ?? null;
+    },
+    executeCommand: () => {
+      // Manager always routes via executeCommandForClientId.
+    },
+    executeCommandForClientId: (clientId, cmd) => {
+      if (!clientId) return;
+      const sdk = getSDK();
+      if (!sdk) return;
+      sdk.sendControl(targetClients([clientId]), cmd.action, cmd.payload ?? {}, cmd.executeAt);
+    },
+  });
+
+  const pick = (type: string): CoreRuntimeImpl => {
+    const def = registry.get(type);
+    if (!def) {
+      throw new Error(`[node-specs] missing core runtime impl: ${type}`);
+    }
+    return { process: def.process, onSink: def.onSink };
+  };
+
+  return new Map<string, CoreRuntimeImpl>([
+    ['client-object', pick('client-object')],
+    ['proc-client-sensors', pick('proc-client-sensors')],
+    ['number', pick('number')],
+    ['math', pick('math')],
+    ['lfo', pick('lfo')],
+  ]);
+})();
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -230,12 +271,14 @@ function evalCommandMapping(
 }
 
 function createCommandProcess(runtime: CommandRuntime): NodeDefinition['process'] {
-  const clientInput = runtime.command.clientInput ?? 'client';
+  const clientInput = runtime.command.clientInput;
   const outKey = runtime.command.output ?? 'cmd';
 
   return (inputs, config) => {
-    const client = inputs[clientInput] as any;
-    if (!client?.clientId) return { [outKey]: null };
+    if (clientInput) {
+      const client = inputs[clientInput] as any;
+      if (!client?.clientId) return { [outKey]: null };
+    }
 
     const payload: Record<string, unknown> = {};
     const entries = Object.entries(runtime.command.payload ?? {});
@@ -276,77 +319,19 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
   };
 
   switch (spec.runtime.kind) {
-    case 'client-object': {
+    case 'client-object':
+    case 'proc-client-sensors':
+    case 'number':
+    case 'math':
+    case 'lfo': {
+      const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
+      if (!impl) {
+        throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
+      }
       return {
         ...base,
-        process: (_inputs, config) => {
-          const clientId = String((config.clientId ?? '') as string);
-          const sensors: SensorDataMessage | undefined = clientId ? get(sensorData).get(clientId) : undefined;
-          return { out: { clientId, sensors } };
-        },
-        onSink: (inputs, config) => {
-          const clientId = String((config.clientId ?? '') as string);
-          if (!clientId) return;
-
-          const sdk = getSDK();
-          if (!sdk) return;
-
-          const raw = inputs.in;
-          const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
-          for (const cmd of commands) {
-            if (!cmd || typeof cmd !== 'object') continue;
-            const action = (cmd as any).action as ControlAction | undefined;
-            const payload = (cmd as any).payload as ControlPayload | undefined;
-            const executeAt = (cmd as any).executeAt as number | undefined;
-            if (!action) continue;
-            sdk.sendControl(targetClients([clientId]), action, payload ?? {}, executeAt);
-          }
-        },
-      };
-    }
-    case 'proc-client-sensors': {
-      return {
-        ...base,
-        process: (inputs) => {
-          const client = inputs.client as any;
-          const msg = client?.sensors as any;
-
-          const out = {
-            accelX: 0,
-            accelY: 0,
-            accelZ: 0,
-            gyroA: 0,
-            gyroB: 0,
-            gyroG: 0,
-            micVol: 0,
-            micLow: 0,
-            micHigh: 0,
-            micBpm: 0,
-          };
-
-          if (!msg || typeof msg !== 'object') return out;
-          const payload = msg.payload ?? {};
-          switch (msg.sensorType) {
-            case 'accel':
-              out.accelX = Number(payload.x ?? 0);
-              out.accelY = Number(payload.y ?? 0);
-              out.accelZ = Number(payload.z ?? 0);
-              break;
-            case 'gyro':
-            case 'orientation':
-              out.gyroA = Number(payload.alpha ?? 0);
-              out.gyroB = Number(payload.beta ?? 0);
-              out.gyroG = Number(payload.gamma ?? 0);
-              break;
-            case 'mic':
-              out.micVol = Number(payload.volume ?? 0);
-              out.micLow = Number(payload.lowEnergy ?? 0);
-              out.micHigh = Number(payload.highEnergy ?? 0);
-              out.micBpm = Number(payload.bpm ?? 0);
-              break;
-          }
-          return out;
-        },
+        process: impl.process,
+        ...(impl.onSink ? { onSink: impl.onSink } : {}),
       };
     }
     case 'param-get': {
@@ -383,86 +368,6 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
           }
 
           return { value };
-        },
-      };
-    }
-    case 'number': {
-      return {
-        ...base,
-        process: (_inputs, config) => ({ value: (config.value as number) ?? 0 }),
-      };
-    }
-    case 'math': {
-      return {
-        ...base,
-        process: (inputs, config) => {
-          const a = (inputs.a as number) ?? 0;
-          const b = (inputs.b as number) ?? 0;
-          const op = String(config.operation ?? '+');
-
-          let result: number;
-          switch (op) {
-            case '+':
-              result = a + b;
-              break;
-            case '-':
-              result = a - b;
-              break;
-            case '*':
-              result = a * b;
-              break;
-            case '/':
-              result = b !== 0 ? a / b : 0;
-              break;
-            case 'min':
-              result = Math.min(a, b);
-              break;
-            case 'max':
-              result = Math.max(a, b);
-              break;
-            case 'mod':
-              result = b !== 0 ? a % b : 0;
-              break;
-            case 'pow':
-              result = Math.pow(a, b);
-              break;
-            default:
-              result = a + b;
-          }
-
-          return { result };
-        },
-      };
-    }
-    case 'lfo': {
-      return {
-        ...base,
-        process: (inputs, config, context: ProcessContext) => {
-          const frequency = (inputs.frequency as number) ?? 1;
-          const amplitude = (inputs.amplitude as number) ?? 1;
-          const offset = (inputs.offset as number) ?? 0;
-          const waveform = String(config.waveform ?? 'sine');
-
-          const phase = (context.time / 1000) * frequency * 2 * Math.PI;
-          let normalized: number;
-          switch (waveform) {
-            case 'sine':
-              normalized = (Math.sin(phase) + 1) / 2;
-              break;
-            case 'square':
-              normalized = Math.sin(phase) >= 0 ? 1 : 0;
-              break;
-            case 'triangle':
-              normalized = Math.abs(((context.time / 1000) * frequency * 2) % 2 - 1);
-              break;
-            case 'sawtooth':
-              normalized = ((context.time / 1000) * frequency) % 1;
-              break;
-            default:
-              normalized = (Math.sin(phase) + 1) / 2;
-          }
-
-          return { value: offset + normalized * amplitude };
         },
       };
     }

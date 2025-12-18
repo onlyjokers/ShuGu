@@ -3,7 +3,6 @@
   "label": "Synth (Update)",
   "category": "Processors",
   "inputs": [
-    { "id": "client", "label": "Client", "type": "client" },
     { "id": "waveform", "label": "Wave", "type": "fuzzy" },
     { "id": "frequency", "label": "Freq", "type": "number", "min": 0, "step": 1 },
     { "id": "volume", "label": "Vol", "type": "number", "min": 0, "max": 1, "step": 0.01 },
@@ -53,4 +52,3 @@
     }
   }
 }
-

@@ -16,12 +16,13 @@
         "build": "tsc",
         "dev": "tsc --watch",
         "clean": "rm -rf dist",
-        "lint": "eslint src --ext .ts"
+        "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
     },
     "files": [
         "dist"
     ],
     "dependencies": {
+        "@shugu/node-core": "workspace:*",
         "@shugu/protocol": "workspace:*",
         "socket.io-client": "^4.7.2"
     },

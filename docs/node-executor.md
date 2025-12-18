@@ -6,6 +6,9 @@
 - 减少网络带宽占用与 manager CPU 占用
 - manager 只在“参数/图更新”时下发更新，client 端持续运行本地循环
 
+> Implementation note: `NodeRuntime` / `NodeRegistry` / shared node definitions are now implemented in
+> `@shugu/node-core` (single source of truth). `@shugu/sdk-client` re-exports the public runtime API for compatibility.
+
 ---
 
 ## 1. 触发条件：什么是“可下发循环”
@@ -182,6 +185,14 @@ pnpm e2e:node-executor
 ```
 
 该脚本会启动 `dev:server/dev:manager/dev:client` 并运行 headless Chromium：`scripts/e2e/node-executor.mjs`。
+
+### 6.3 Offline verification（无 Playwright / 无 dev server）
+
+如果你的运行环境不允许绑定本地端口（例如某些 sandbox），可以用离线脚本快速验证 `NodeExecutor` 的核心行为：
+
+```bash
+pnpm e2e:node-executor:offline
+```
 
 ---
 

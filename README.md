@@ -79,8 +79,12 @@ client to run locally (reduces bandwidth and manager CPU).
 - Protocol: `PluginControlMessage` (`pluginId: node-executor`, `command: deploy/start/stop/remove`)
 - Safety: capability gating + whitelist + resource limits on the client
 - Monitoring: client reports `node-executor` status/logs back to manager
+- Single source of truth: core runtime/types/registry live in `@shugu/node-core` (manager wraps it; `@shugu/sdk-client` re-exports)
 
-See `docs/node-executor.md` and run the E2E harness with `pnpm e2e:node-executor`.
+See `docs/node-executor.md` and run:
+
+- `pnpm e2e:node-executor` (Playwright + dev servers)
+- `pnpm e2e:node-executor:offline` (no dev servers / no Playwright)
 
 ## Mobile Browser Compatibility
 

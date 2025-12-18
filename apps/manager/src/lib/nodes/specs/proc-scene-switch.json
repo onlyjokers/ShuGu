@@ -3,7 +3,6 @@
   "label": "Visual Scene",
   "category": "Processors",
   "inputs": [
-    { "id": "client", "label": "Client", "type": "client" },
     { "id": "index", "label": "Index", "type": "number", "min": 0, "max": 1, "step": 0.01 }
   ],
   "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
@@ -37,4 +36,3 @@
     }
   }
 }
-

@@ -213,31 +213,31 @@
                   },
                 })}
               unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-	            />
-	            <div class="port-body">
-	              <div class="port-title-line">
-	                <div class="port-label" data-testid="input-title">{input.label || ''}</div>
-	                {#if portValueText.inputs[String(key)] && (inputConnections[String(key)]?.length ?? 0) > 0}
-	                  <div class="port-value input" data-testid={"input-value-" + key}>
-	                    {portValueText.inputs[String(key)]}
-	                  </div>
-	                {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
-	                  <Ref
-	                    class="port-control port-inline-input"
-	                    data-testid="input-control"
-	                    init={(element) =>
-                    emit({
-                      type: 'render',
-                      data: {
-                        type: 'control',
-                        element,
-                        payload: any(input).control,
-                      },
-                    })}
+            />
+            <div class="port-body">
+              <div class="port-title-line">
+                <div class="port-label" data-testid="input-title">{input.label || ''}</div>
+                {#if portValueText.inputs[String(key)] && (inputConnections[String(key)]?.length ?? 0) > 0}
+                  <div class="port-value input" data-testid={"input-value-" + key}>
+                    {portValueText.inputs[String(key)]}
+                  </div>
+                {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
+                  <Ref
+                    class="port-control port-inline-input"
+                    data-testid="input-control"
+                    init={(element) =>
+                      emit({
+                        type: 'render',
+                        data: {
+                          type: 'control',
+                          element,
+                          payload: any(input).control,
+                        },
+                      })}
                     unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-	                  />
-	                {/if}
-	              </div>
+                  />
+                {/if}
+              </div>
             </div>
           </div>
         {/each}
@@ -254,15 +254,15 @@
             data-rete-port-side="output"
             data-rete-port-key={key}
           >
-	            <div class="port-body">
-	              <div class="output-line">
-	                <div class="port-label" data-testid="output-title">{output.label || ''}</div>
-	                {#if portValueText.outputs[String(key)] && !any(output).control}
-	                  <div class="port-value output" data-testid={"output-value-" + key}>
-	                    {portValueText.outputs[String(key)]}
-	                  </div>
-	                {/if}
-	                {#if any(output).control}
+            <div class="port-body">
+              <div class="output-line">
+                <div class="port-label" data-testid="output-title">{output.label || ''}</div>
+                {#if portValueText.outputs[String(key)] && !any(output).control}
+                  <div class="port-value output" data-testid={"output-value-" + key}>
+                    {portValueText.outputs[String(key)]}
+                  </div>
+                {/if}
+                {#if any(output).control}
                   <Ref
                     class="port-control port-inline-value"
                     data-testid="output-control"

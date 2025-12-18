@@ -1,16 +1,18 @@
 /**
- * NodeEngine - Headless Singleton for Node Graph Execution
- * 
- * Key Features:
- * - Survives UI lifecycle (tab switches)
- * - Compile-Run separation for O(N) tick performance
- * - Cycle detection in compile phase
+ * NodeEngine - Headless Singleton for Node Graph Execution (Manager)
+ *
+ * Wraps @shugu/node-core's NodeRuntime and keeps Manager-only concerns here:
+ * - Svelte stores for UI observation
+ * - Local loop detection + deployment/offload bookkeeping
+ * - Parameter registry modulation cleanup
  */
-import { writable, get, type Writable } from 'svelte/store';
-import type { NodeInstance, Connection, ProcessContext, GraphState } from './types';
+import { get, writable, type Writable } from 'svelte/store';
+import { PROTOCOL_VERSION } from '@shugu/protocol';
+import { NodeRuntime } from '@shugu/node-core';
+
+import type { Connection, GraphState, NodeInstance } from './types';
 import { nodeRegistry } from './registry';
 import { parameterRegistry } from '../parameters/registry';
-import { PROTOCOL_VERSION } from '@shugu/protocol';
 
 export type LocalLoop = {
   id: string;
@@ -23,18 +25,12 @@ export type LocalLoop = {
 const TICK_INTERVAL = 33; // ~30 FPS
 
 class NodeEngineClass {
-  // Graph State
-  private nodes = new Map<string, NodeInstance>();
-  private connections: Connection[] = [];
-  
-  // Execution Cache (compiled)
-  private executionOrder: NodeInstance[] = [];
-  private needsRecompile = true;
-  
-  // Runtime
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private lastTickTime = 0;
-  
+  private runtime: NodeRuntime;
+
+  // Nodes that are offloaded to the client runtime (skip execution + sinks on manager)
+  private offloadedNodeIds = new Set<string>();
+  private deployedLoopIds = new Set<string>();
+
   // Stores for UI observation
   public graphState: Writable<GraphState> = writable({ nodes: [], connections: [] });
   public isRunning: Writable<boolean> = writable(false);
@@ -44,28 +40,57 @@ class NodeEngineClass {
   public localLoops: Writable<LocalLoop[]> = writable([]);
   public deployedLoops: Writable<string[]> = writable([]);
 
-  // Nodes that are offloaded to the client runtime (skip execution + sinks on manager)
-  private offloadedNodeIds = new Set<string>();
-  private deployedLoopIds = new Set<string>();
+  constructor() {
+    this.runtime = new NodeRuntime(nodeRegistry, {
+      tickIntervalMs: TICK_INTERVAL,
+      isNodeEnabled: (nodeId) => !this.offloadedNodeIds.has(nodeId),
+      onTick: ({ time }) => {
+        this.tickTime.set(time);
+      },
+      onWatchdog: (info) => {
+        const message = info?.message ? String(info.message) : 'watchdog triggered';
+        console.warn('[NodeEngine] watchdog triggered:', info?.reason, message, info?.diagnostics);
+        this.lastError.set(message);
+        this.isRunning.set(false);
+      },
+    });
+
+    this.syncGraphState();
+    this.updateLocalLoops();
+  }
 
   // ========== Graph Manipulation ==========
 
   addNode(node: NodeInstance): void {
-    this.nodes.set(node.id, node);
+    const snapshot = this.runtime.exportGraph();
+    const next: GraphState = {
+      nodes: [
+        ...snapshot.nodes,
+        {
+          ...node,
+          config: { ...(node.config ?? {}) },
+          inputValues: { ...(node.inputValues ?? {}) },
+          outputValues: { ...(node.outputValues ?? {}) },
+        },
+      ],
+      connections: [...snapshot.connections],
+    };
+
+    this.runtime.loadGraph(next);
     this.syncGraphState();
     this.updateLocalLoops();
   }
 
   removeNode(nodeId: string): void {
-    // Remove node
-    this.nodes.delete(nodeId);
-    
-    // Remove connected edges
-    this.connections = this.connections.filter(
-      (c) => c.sourceNodeId !== nodeId && c.targetNodeId !== nodeId
-    );
-    
-    this.needsRecompile = true;
+    const snapshot = this.runtime.exportGraph();
+    const next: GraphState = {
+      nodes: snapshot.nodes.filter((n) => n.id !== nodeId),
+      connections: snapshot.connections.filter(
+        (c) => c.sourceNodeId !== nodeId && c.targetNodeId !== nodeId
+      ),
+    };
+
+    this.runtime.loadGraph(next);
     this.syncGraphState();
     this.updateLocalLoops();
 
@@ -75,31 +100,31 @@ class NodeEngineClass {
   }
 
   updateNodeConfig(nodeId: string, config: Record<string, unknown>): void {
-    const node = this.nodes.get(nodeId);
-    if (node) {
-      node.config = { ...node.config, ...config };
-      this.syncGraphState();
-    }
+    const node = this.runtime.getNode(nodeId);
+    if (!node) return;
+    node.config = { ...node.config, ...config };
+    this.syncGraphState();
   }
 
   updateNodeInputValue(nodeId: string, portId: string, value: unknown): void {
-    const node = this.nodes.get(nodeId);
+    const node = this.runtime.getNode(nodeId);
     if (!node) return;
     node.inputValues[portId] = value;
     // Avoid syncing graph state on every knob turn; graphState holds live references anyway.
   }
 
   updateNodePosition(nodeId: string, position: { x: number; y: number }): void {
-    const node = this.nodes.get(nodeId);
-    if (node) {
-      node.position = position;
-      // Don't sync graph state for position-only changes (performance)
-    }
+    const node = this.runtime.getNode(nodeId);
+    if (!node) return;
+    node.position = position;
+    // Don't sync graph state for position-only changes (performance)
   }
 
   addConnection(connection: Connection): boolean {
+    const snapshot = this.runtime.exportGraph();
+
     // Check for duplicate
-    const exists = this.connections.some(
+    const exists = snapshot.connections.some(
       (c) =>
         c.sourceNodeId === connection.sourceNodeId &&
         c.sourcePortId === connection.sourcePortId &&
@@ -109,8 +134,8 @@ class NodeEngineClass {
     if (exists) return false;
 
     // Type guard: ensure port types are compatible
-    const sourceNode = this.nodes.get(connection.sourceNodeId);
-    const targetNode = this.nodes.get(connection.targetNodeId);
+    const sourceNode = snapshot.nodes.find((n) => n.id === connection.sourceNodeId);
+    const targetNode = snapshot.nodes.find((n) => n.id === connection.targetNodeId);
     if (!sourceNode || !targetNode) return false;
 
     const sourceDef = nodeRegistry.get(sourceNode.type);
@@ -121,8 +146,7 @@ class NodeEngineClass {
     if (!sourcePort || !targetPort) return false;
     const sourceType = sourcePort.type ?? 'any';
     const targetType = targetPort.type ?? 'any';
-    const typeMismatch =
-      sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType;
+    const typeMismatch = sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType;
     if (typeMismatch) {
       this.lastError.set(
         `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
@@ -130,250 +154,63 @@ class NodeEngineClass {
       return false;
     }
 
-    // Temporarily add connection to check for cycles
-    this.connections.push(connection);
-    
+    const next: GraphState = {
+      nodes: snapshot.nodes,
+      connections: [...snapshot.connections, connection],
+    };
+
+    // Validate cycles without mutating the live runtime first.
     try {
-      this.compile();
-      this.syncGraphState();
-      this.updateLocalLoops();
-      return true;
+      const validator = new NodeRuntime(nodeRegistry);
+      validator.loadGraph(next);
+      validator.compileNow();
     } catch (err) {
-      // Cycle detected, rollback
-      this.connections.pop();
       this.lastError.set(err instanceof Error ? err.message : 'Connection failed');
       return false;
     }
+
+    this.runtime.loadGraph(next);
+    this.runtime.compileNow();
+    this.lastError.set(null);
+    this.syncGraphState();
+    this.updateLocalLoops();
+    return true;
   }
 
   removeConnection(connectionId: string): void {
-    this.connections = this.connections.filter((c) => c.id !== connectionId);
-    this.needsRecompile = true;
+    const snapshot = this.runtime.exportGraph();
+    const next: GraphState = {
+      nodes: snapshot.nodes,
+      connections: snapshot.connections.filter((c) => c.id !== connectionId),
+    };
+
+    this.runtime.loadGraph(next);
     this.syncGraphState();
     this.updateLocalLoops();
   }
 
   getNode(nodeId: string): NodeInstance | undefined {
-    return this.nodes.get(nodeId);
-  }
-
-  // ========== Compile Phase (O(V+E)) ==========
-
-  private compile(): void {
-    const nodes = Array.from(this.nodes.values());
-    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-    
-    // Build adjacency list (inbound edges for each node)
-    const inDegree = new Map<string, number>();
-    const outEdges = new Map<string, string[]>(); // sourceId -> [targetIds]
-    
-    for (const node of nodes) {
-      inDegree.set(node.id, 0);
-      outEdges.set(node.id, []);
-    }
-    
-    for (const conn of this.connections) {
-      const targetNode = nodeMap.get(conn.targetNodeId);
-      if (targetNode) {
-        const targetDef = nodeRegistry.get(targetNode.type);
-        const targetPort = targetDef?.inputs.find((p) => p.id === conn.targetPortId);
-        // Sink edges do not participate in the execution DAG.
-        if (targetPort?.kind === 'sink') continue;
-      }
-
-      const currentIn = inDegree.get(conn.targetNodeId) ?? 0;
-      inDegree.set(conn.targetNodeId, currentIn + 1);
-      
-      const outs = outEdges.get(conn.sourceNodeId) ?? [];
-      if (!outs.includes(conn.targetNodeId)) {
-        outs.push(conn.targetNodeId);
-        outEdges.set(conn.sourceNodeId, outs);
-      }
-    }
-
-    // Kahn's Algorithm
-    const queue: string[] = [];
-    const result: NodeInstance[] = [];
-    
-    // Start with nodes that have no incoming edges
-    for (const [nodeId, degree] of inDegree) {
-      if (degree === 0) {
-        queue.push(nodeId);
-      }
-    }
-    
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
-      const node = nodeMap.get(nodeId);
-      if (node) {
-        result.push(node);
-      }
-      
-      for (const targetId of outEdges.get(nodeId) ?? []) {
-        const newDegree = (inDegree.get(targetId) ?? 1) - 1;
-        inDegree.set(targetId, newDegree);
-        if (newDegree === 0) {
-          queue.push(targetId);
-        }
-      }
-    }
-
-    // Cycle Detection: if we haven't processed all nodes, there's a cycle
-    if (result.length !== nodes.length) {
-      throw new Error('Cycle detected in node graph! Connection rejected.');
-    }
-
-    this.executionOrder = result;
-    this.needsRecompile = false;
-    this.lastError.set(null);
-  }
-
-  // ========== Tick Phase (O(N)) ==========
-
-  private tick(): void {
-    if (this.needsRecompile) {
-      try {
-        this.compile();
-      } catch (err) {
-        console.error('[NodeEngine] Compile error:', err);
-        return;
-      }
-    }
-
-    const now = Date.now();
-    const deltaTime = this.lastTickTime > 0 ? now - this.lastTickTime : TICK_INTERVAL;
-    this.lastTickTime = now;
-
-    const context: ProcessContext = {
-      nodeId: '',
-      time: now,
-      deltaTime,
-    };
-
-    // Propagate values through the graph
-    for (const node of this.executionOrder) {
-      if (this.offloadedNodeIds.has(node.id)) continue;
-      const definition = nodeRegistry.get(node.type);
-      if (!definition) continue;
-
-      // Gather inputs from connected outputs
-      const inputs: Record<string, unknown> = {};
-      for (const port of definition.inputs) {
-        if (port.kind === 'sink') continue;
-        // Check for connected output
-        const conn = this.connections.find(
-          (c) => c.targetNodeId === node.id && c.targetPortId === port.id
-        );
-        if (conn) {
-          const sourceNode = this.nodes.get(conn.sourceNodeId);
-          if (sourceNode) {
-            inputs[port.id] = sourceNode.outputValues[conn.sourcePortId];
-          }
-        } else {
-          // Use default or stored input value
-          inputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
-          // Preserve manual values even if this input becomes connected later.
-          // (ComfyUI-style: connecting disables the widget but doesn't overwrite its value.)
-          node.inputValues[port.id] = inputs[port.id];
-        }
-      }
-
-      // Execute node
-      context.nodeId = node.id;
-      try {
-        const outputs = definition.process(inputs, node.config, context);
-        node.outputValues = outputs;
-      } catch (err) {
-        console.error(`[NodeEngine] Error in node ${node.id}:`, err);
-      }
-    }
-
-    // Deliver sink inputs (side effects) after compute pass
-    for (const node of this.executionOrder) {
-      if (this.offloadedNodeIds.has(node.id)) continue;
-      const definition = nodeRegistry.get(node.type);
-      if (!definition?.onSink) continue;
-
-      const sinkInputs: Record<string, unknown> = {};
-      for (const conn of this.connections) {
-        if (conn.targetNodeId !== node.id) continue;
-
-        const port = definition.inputs.find((p) => p.id === conn.targetPortId);
-        if (!port || port.kind !== 'sink') continue;
-
-        const sourceNode = this.nodes.get(conn.sourceNodeId);
-        if (!sourceNode) continue;
-
-        const value = sourceNode.outputValues[conn.sourcePortId];
-        const prev = sinkInputs[conn.targetPortId];
-        if (prev === undefined) {
-          sinkInputs[conn.targetPortId] = value;
-        } else if (Array.isArray(prev)) {
-          prev.push(value);
-        } else {
-          sinkInputs[conn.targetPortId] = [prev, value];
-        }
-      }
-
-      if (Object.keys(sinkInputs).length === 0) continue;
-
-      let changed = false;
-      for (const [portId, next] of Object.entries(sinkInputs)) {
-        if (!this.deepEqual(node.inputValues[portId], next)) {
-          changed = true;
-        }
-        node.inputValues[portId] = next;
-      }
-
-      if (!changed) continue;
-      context.nodeId = node.id;
-      try {
-        definition.onSink(sinkInputs, node.config, context);
-      } catch (err) {
-        console.error(`[NodeEngine] Sink handler error in node ${node.id}:`, err);
-      }
-    }
-
-    // Notify observers that a new tick has completed (useful for live port value display).
-    this.tickTime.set(now);
-  }
-
-  private deepEqual(a: unknown, b: unknown): boolean {
-    if (a === b) return true;
-    if (a && b && typeof a === 'object' && typeof b === 'object') {
-      try {
-        return JSON.stringify(a) === JSON.stringify(b);
-      } catch {
-        return false;
-      }
-    }
-    return false;
+    return this.runtime.getNode(nodeId);
   }
 
   // ========== Lifecycle ==========
 
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), TICK_INTERVAL);
+    this.runtime.setTickIntervalMs(TICK_INTERVAL);
+    this.runtime.start();
     this.isRunning.set(true);
     console.log('[NodeEngine] Started');
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.runtime.stop();
     this.isRunning.set(false);
     console.log('[NodeEngine] Stopped');
   }
 
   clear(): void {
     this.stop();
-    this.nodes.clear();
-    this.connections = [];
-    this.executionOrder = [];
-    this.needsRecompile = true;
+    this.runtime.clear();
     this.offloadedNodeIds.clear();
     this.deployedLoopIds.clear();
     this.syncGraphState();
@@ -386,19 +223,21 @@ class NodeEngineClass {
   // ========== Serialization ==========
 
   private syncGraphState(): void {
-    this.graphState.set({
-      nodes: Array.from(this.nodes.values()),
-      connections: [...this.connections],
-    });
+    this.graphState.set(this.runtime.getGraphRef());
   }
 
   loadGraph(state: GraphState): void {
-    this.nodes.clear();
-    for (const node of state.nodes) {
-      this.nodes.set(node.id, { ...node, inputValues: { ...(node.inputValues ?? {}) }, outputValues: {} });
-    }
-    this.connections = [...state.connections];
-    this.needsRecompile = true;
+    const sanitized: GraphState = {
+      nodes: (state.nodes ?? []).map((node) => ({
+        ...node,
+        config: { ...(node.config ?? {}) },
+        inputValues: { ...(node.inputValues ?? {}) },
+        outputValues: {}, // reset runtime outputs
+      })),
+      connections: [...(state.connections ?? [])],
+    };
+
+    this.runtime.loadGraph(sanitized);
     this.offloadedNodeIds.clear();
     this.deployedLoopIds.clear();
     this.syncGraphState();
@@ -426,6 +265,7 @@ class NodeEngineClass {
           this.deployedLoopIds.delete(deployedId);
         }
       }
+
       // Rebuild offloaded nodes set from deployed loops.
       this.offloadedNodeIds.clear();
       for (const loop of loops) {
@@ -443,12 +283,12 @@ class NodeEngineClass {
   }
 
   private detectLocalClientLoops(): LocalLoop[] {
-    const nodes = Array.from(this.nodes.values());
+    const { nodes, connections } = this.runtime.getGraphRef();
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
     const adj = new Map<string, string[]>();
     for (const n of nodes) adj.set(n.id, []);
-    for (const conn of this.connections) {
+    for (const conn of connections) {
       const outs = adj.get(conn.sourceNodeId) ?? [];
       outs.push(conn.targetNodeId);
       adj.set(conn.sourceNodeId, outs);
@@ -522,7 +362,7 @@ class NodeEngineClass {
       // Single node SCC must have a self-loop to be a cycle.
       if (component.length === 1) {
         const only = component[0];
-        const hasSelf = this.connections.some((c) => c.sourceNodeId === only && c.targetNodeId === only);
+        const hasSelf = connections.some((c) => c.sourceNodeId === only && c.targetNodeId === only);
         if (!hasSelf) continue;
       }
 
@@ -531,7 +371,7 @@ class NodeEngineClass {
       const hasSensors = component.some(isClientSensors);
       if (!hasSensors) continue;
 
-      const connIds = this.connections
+      const connIds = connections
         .filter((c) => nodeSet.has(c.sourceNodeId) && nodeSet.has(c.targetNodeId))
         .map((c) => c.id);
 
@@ -598,7 +438,7 @@ class NodeEngineClass {
 
     const nodes: GraphState['nodes'] = [];
     for (const id of loop.nodeIds) {
-      const node = this.nodes.get(id);
+      const node = this.runtime.getNode(id);
       if (!node) continue;
       if (!allowedNodeTypes.has(node.type)) {
         throw new Error(`Loop contains non-deployable node type: ${node.type}`);
@@ -614,12 +454,13 @@ class NodeEngineClass {
     }
 
     const nodeSet = new Set(nodes.map((n) => n.id));
-    const connections = this.connections.filter(
+    const { connections } = this.runtime.getGraphRef();
+    const loopConnections = connections.filter(
       (c) => nodeSet.has(c.sourceNodeId) && nodeSet.has(c.targetNodeId)
     );
 
     return {
-      graph: { nodes, connections },
+      graph: { nodes, connections: loopConnections },
       meta: {
         loopId,
         requiredCapabilities: loop.requiredCapabilities,
@@ -633,3 +474,4 @@ class NodeEngineClass {
 
 // Singleton instance
 export const nodeEngine = new NodeEngineClass();
+

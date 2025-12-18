@@ -41,8 +41,9 @@ async function bootstrap() {
   const port = process.env.PORT || 3001;
   const protocol = httpsOptions ? 'https' : 'http';
 
-  await app.listen(port, '0.0.0.0'); // Listen on all interfaces
-  console.log(`🚀 Server running on ${protocol}://localhost:${port}`);
+  const host = process.env.SHUGU_DEV_HOST || '0.0.0.0';
+  await app.listen(port, host);
+  console.log(`🚀 Server running on ${protocol}://localhost:${port} (host=${host})`);
   console.log(`📡 WebSocket ready for connections`);
 }
 

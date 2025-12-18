@@ -96,6 +96,9 @@ importers:
 
   apps/manager:
     dependencies:
+      '@shugu/node-core':
+        specifier: workspace:*
+        version: link:../../packages/node-core
       '@shugu/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -211,6 +214,16 @@ importers:
         specifier: ^5.3.0
         version: 5.9.3
 
+  packages/node-core:
+    dependencies:
+      '@shugu/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+
   packages/protocol:
     devDependencies:
       typescript:
@@ -219,6 +232,9 @@ importers:
 
   packages/sdk-client:
     dependencies:
+      '@shugu/node-core':
+        specifier: workspace:*
+        version: link:../node-core
       '@shugu/protocol':
         specifier: workspace:*
         version: link:../protocol

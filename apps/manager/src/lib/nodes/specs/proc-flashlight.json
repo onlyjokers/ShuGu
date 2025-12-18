@@ -3,7 +3,6 @@
   "label": "Flashlight",
   "category": "Processors",
   "inputs": [
-    { "id": "client", "label": "Client", "type": "client" },
     { "id": "mode", "label": "Mode", "type": "fuzzy" },
     { "id": "frequencyHz", "label": "Freq", "type": "number", "min": 0, "step": 0.1 },
     { "id": "dutyCycle", "label": "Duty", "type": "number", "min": 0, "max": 1, "step": 0.01 }
@@ -56,4 +55,3 @@
     }
   }
 }
-

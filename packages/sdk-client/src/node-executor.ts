@@ -1,8 +1,7 @@
 import { PROTOCOL_VERSION, type PluginControlMessage } from '@shugu/protocol';
 import type { ClientSDK } from './client-sdk.js';
-import { NodeRegistry } from './node-registry.js';
+import { NodeRegistry, NodeRuntime } from '@shugu/node-core';
 import { registerDefaultNodeDefinitions, type NodeCommand } from './node-definitions.js';
-import { NodeRuntime } from './node-runtime.js';
 import type { GraphState } from './node-types.js';
 
 export type NodeExecutorDeployPayload = {

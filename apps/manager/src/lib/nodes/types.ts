@@ -1,88 +1,20 @@
 /**
- * Node Graph Type Definitions
+ * Node Graph Type Definitions (Manager)
+ *
+ * Manager uses the shared node-core types, plus a small amount of manager-only metadata.
  */
 
-export type PortType = 'number' | 'boolean' | 'string' | 'color' | 'client' | 'command' | 'fuzzy' | 'any';
+export type {
+  ConfigField,
+  Connection,
+  GraphState,
+  NodeDefinition,
+  NodeInstance,
+  NodePort,
+  PortKind,
+  PortType,
+  ProcessContext,
+} from '@shugu/node-core';
+
 export type NodeMode = 'REMOTE' | 'MODULATION';
-export type PortKind = 'data' | 'sink';
 
-export interface NodePort {
-  id: string;
-  label: string;
-  type: PortType;
-  defaultValue?: unknown;
-  /**
-   * Optional numeric UI hints (enforced in Manager UI).
-   * When present, numeric inputs/configs are clamped and rendered with min/max/step attributes.
-   */
-  min?: number;
-  max?: number;
-  step?: number;
-  /**
-   * `data` ports participate in graph execution order (DAG).
-   * `sink` ports are side-effect inputs (delivered after compute), so they don't create cycles.
-   */
-  kind?: PortKind;
-}
-
-export interface NodeDefinition {
-  type: string;
-  label: string;
-  category: string;
-  inputs: NodePort[];
-  outputs: NodePort[];
-  configSchema: ConfigField[];
-  process: (
-    inputs: Record<string, unknown>,
-    config: Record<string, unknown>,
-    context: ProcessContext
-  ) => Record<string, unknown>;
-  /**
-   * Optional hook for sink inputs (side-effect ports).
-   * Called after the compute pass when sink values change.
-   */
-  onSink?: (
-    inputs: Record<string, unknown>,
-    config: Record<string, unknown>,
-    context: ProcessContext
-  ) => void;
-}
-
-export interface ConfigField {
-  key: string;
-  label: string;
-  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source' | 'client-picker';
-  defaultValue?: unknown;
-  options?: { value: string; label: string }[];
-  min?: number;
-  max?: number;
-  step?: number;
-}
-
-export interface ProcessContext {
-  nodeId: string;
-  time: number;  // Current time in ms
-  deltaTime: number;  // Time since last tick
-}
-
-export interface NodeInstance {
-  id: string;
-  type: string;
-  position: { x: number; y: number };
-  config: Record<string, unknown>;
-  inputValues: Record<string, unknown>;
-  outputValues: Record<string, unknown>;
-}
-
-export interface Connection {
-  id: string;
-  sourceNodeId: string;
-  sourcePortId: string;
-  targetNodeId: string;
-  targetPortId: string;
-}
-
-export interface GraphState {
-  nodes: NodeInstance[];
-  connections: Connection[];
-}

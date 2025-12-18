@@ -19,7 +19,7 @@ const MANAGER_USER = 'Eureka';
 function spawnService(label, args) {
   const proc = spawn('pnpm', args, {
     cwd: ROOT,
-    env: { ...process.env, FORCE_COLOR: '1' },
+    env: { ...process.env, FORCE_COLOR: '1', SHUGU_E2E: '1', SHUGU_DEV_HOST: '127.0.0.1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -105,13 +105,6 @@ function loopGraph({ clientId, primary }) {
         sourceNodeId: ids.client,
         sourcePortId: 'out',
         targetNodeId: ids.sensors,
-        targetPortId: 'client',
-      },
-      {
-        id: 'conn-e2e-client-to-screen',
-        sourceNodeId: ids.client,
-        sourcePortId: 'out',
-        targetNodeId: ids.screen,
         targetPortId: 'client',
       },
       {

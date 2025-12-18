@@ -29,6 +29,7 @@
     NodePort,
     PortType,
     Connection as EngineConnection,
+    GraphState,
   } from '$lib/nodes/types';
   import type { LocalLoop } from '$lib/nodes';
   import {
@@ -70,6 +71,7 @@
   let selectedNodeId = '';
   let nodeCount = 0;
   let graphState = { nodes: [], connections: [] };
+  let importGraphInputEl: HTMLInputElement | null = null;
   let importTemplatesInputEl: HTMLInputElement | null = null;
   let numberParamOptions: { path: string; label: string }[] = [];
   let selectedNode: NodeInstance | undefined = undefined;
@@ -1603,6 +1605,63 @@
     URL.revokeObjectURL(url);
   }
 
+  type NodeGraphFileV1 = { version: 1; kind: 'node-graph'; graph: GraphState };
+
+  function parseNodeGraphFile(payload: unknown): GraphState | null {
+    if (!payload || typeof payload !== 'object') return null;
+    // Wrapped export
+    const wrapped = payload as any;
+    if (wrapped.kind === 'node-graph' && wrapped.version === 1 && wrapped.graph) {
+      const graph = wrapped.graph as any;
+      if (Array.isArray(graph.nodes) && Array.isArray(graph.connections)) return graph as GraphState;
+      return null;
+    }
+    // Backward/loose: accept raw GraphState
+    const raw = payload as any;
+    if (Array.isArray(raw.nodes) && Array.isArray(raw.connections)) return raw as GraphState;
+    return null;
+  }
+
+  function exportGraph() {
+    const raw = nodeEngine.exportGraph();
+    // Strip runtime outputs to keep exported graphs deterministic and compact.
+    const graph: GraphState = {
+      nodes: (raw.nodes ?? []).map((n) => ({ ...n, outputValues: {} })),
+      connections: (raw.connections ?? []).map((c) => ({ ...c })),
+    };
+    const file: NodeGraphFileV1 = { version: 1, kind: 'node-graph', graph };
+    downloadJson(file, 'shugu-node-graph.json');
+  }
+
+  function importGraph() {
+    importGraphInputEl?.click?.();
+  }
+
+  async function handleImportGraphChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const text = await file.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      alert('Invalid JSON file.');
+      return;
+    }
+
+    const graph = parseNodeGraphFile(parsed);
+    if (!graph) {
+      alert('Unsupported graph format.');
+      return;
+    }
+
+    const ok = confirm('Load graph from file? This will replace the current graph.');
+    if (!ok) return;
+    nodeEngine.loadGraph(graph);
+  }
+
   function exportTemplates() {
     const file = exportMidiTemplateFile(nodeEngine.exportGraph());
     downloadJson(file, 'shugu-midi-templates.json');
@@ -2028,6 +2087,13 @@
 
 <div class="node-canvas-container">
   <input
+    bind:this={importGraphInputEl}
+    type="file"
+    accept="application/json"
+    on:change={handleImportGraphChange}
+    style="display: none;"
+  />
+  <input
     bind:this={importTemplatesInputEl}
     type="file"
     accept="application/json"
@@ -2044,8 +2110,10 @@
         {$isRunningStore ? '⏹ Stop' : '▶ Start'}
       </Button>
       <Button variant="ghost" size="sm" on:click={handleClear}>🗑️ Clear</Button>
-      <Button variant="ghost" size="sm" on:click={importTemplates}>⬇ Import</Button>
-      <Button variant="ghost" size="sm" on:click={exportTemplates}>⬆ Export</Button>
+      <Button variant="ghost" size="sm" on:click={importGraph}>⬇ Import</Button>
+      <Button variant="ghost" size="sm" on:click={exportGraph}>⬆ Export</Button>
+      <Button variant="ghost" size="sm" on:click={importTemplates}>⬇ Templates</Button>
+      <Button variant="ghost" size="sm" on:click={exportTemplates}>⬆ Templates</Button>
       <span class="node-count">{nodeCount} nodes</span>
     </div>
     <div class="toolbar-right">

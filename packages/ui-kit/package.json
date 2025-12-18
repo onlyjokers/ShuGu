@@ -19,7 +19,7 @@
         "build": "tsc",
         "dev": "tsc --watch",
         "clean": "rm -rf dist",
-        "lint": "eslint src --ext .ts,.svelte"
+    "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.{ts,svelte}\""
     },
     "files": [
         "dist",

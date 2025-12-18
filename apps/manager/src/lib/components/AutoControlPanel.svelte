@@ -75,7 +75,7 @@
 
   function toggleGroup(index: number) {
     groups[index].expanded = !groups[index].expanded;
-    groups = groups; // trigger reactivity
+    groups = [...groups]; // trigger reactivity
   }
 
   function handleParamContextMenu(

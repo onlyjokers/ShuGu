@@ -3,7 +3,6 @@
   "label": "Screen Color",
   "category": "Processors",
   "inputs": [
-    { "id": "client", "label": "Client", "type": "client" },
     { "id": "primary", "label": "Primary", "type": "color" },
     { "id": "secondary", "label": "Secondary", "type": "color" },
     { "id": "waveform", "label": "Wave", "type": "fuzzy" },
@@ -48,4 +47,3 @@
     }
   }
 }
-
