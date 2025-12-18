@@ -1,0 +1,30 @@
+{
+  "type": "math",
+  "label": "Math",
+  "category": "Math",
+  "inputs": [
+    { "id": "a", "label": "A", "type": "number", "defaultValue": 0 },
+    { "id": "b", "label": "B", "type": "number", "defaultValue": 0 }
+  ],
+  "outputs": [{ "id": "result", "label": "Result", "type": "number" }],
+  "configSchema": [
+    {
+      "key": "operation",
+      "label": "Operation",
+      "type": "select",
+      "defaultValue": "+",
+      "options": [
+        { "value": "+", "label": "Add (+)" },
+        { "value": "-", "label": "Subtract (-)" },
+        { "value": "*", "label": "Multiply (×)" },
+        { "value": "/", "label": "Divide (÷)" },
+        { "value": "min", "label": "Min" },
+        { "value": "max", "label": "Max" },
+        { "value": "mod", "label": "Modulo (%)" },
+        { "value": "pow", "label": "Power (^)" }
+      ]
+    }
+  ],
+  "runtime": { "kind": "math" }
+}
+

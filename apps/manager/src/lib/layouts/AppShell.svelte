@@ -1,40 +1,39 @@
 <script lang="ts">
   import ConnectionBar from '$lib/components/ConnectionBar.svelte';
+  import ConnectionMenu from '$lib/components/ConnectionMenu.svelte';
+
+  export let fullBleed = false;
+  export let collapseHeader = false;
 
   // Slots
-  // - sidebar: Client list, etc.
   // - main: Main content
-  // - right-sidebar: Sensor data (optional)
-  // - footer: Session actions
+  // - tabs: Page tabs in header
+  // - headerActions: Floating actions (bottom-left)
 </script>
 
 <div class="app-shell">
-  <header class="header">
+  <header class="header" class:collapsed={collapseHeader}>
     <div class="logo">
       <h1 class="title">Fluffy Manager</h1>
     </div>
-    <div class="connection-status">
-      <ConnectionBar />
+    <div class="header-tabs">
+      <slot name="tabs" />
+    </div>
+    <div class="header-menu">
+      <ConnectionMenu />
     </div>
   </header>
 
   <div class="body">
-    <aside class="sidebar-left">
-      <slot name="sidebar" />
-    </aside>
-
-    <main class="main-content">
+    <main class="main-content" class:fullBleed>
       <slot />
     </main>
-
-    <aside class="sidebar-right">
-      <slot name="right-sidebar" />
-    </aside>
   </div>
 
-  <footer class="footer">
-    <slot name="footer" />
-  </footer>
+  <div class="floating-actions">
+    <slot name="headerActions" />
+    <ConnectionBar />
+  </div>
 </div>
 
 <style>
@@ -47,14 +46,35 @@
   }
 
   .header {
-    height: 60px;
-    display: flex;
+    --header-height: 60px;
+    height: var(--header-height);
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
+    column-gap: var(--space-lg);
     padding: 0 var(--space-lg);
     background: var(--glass-bg);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    transition:
+      transform 560ms cubic-bezier(0.16, 1, 0.3, 1),
+      margin-bottom 560ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 240ms ease-out;
+    will-change: transform, margin-bottom, opacity;
+    position: relative;
+    z-index: 70;
+  }
+
+  .header.collapsed {
+    transform: translateY(calc(-1 * var(--header-height)));
+    margin-bottom: calc(-1 * var(--header-height));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .logo {
+    justify-self: start;
+    min-width: 0;
   }
 
   .title {
@@ -64,39 +84,46 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    white-space: nowrap;
+  }
+
+  .header-tabs {
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+    justify-self: center;
+  }
+
+  .header-menu {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    justify-self: end;
+  }
+
+  .floating-actions {
+    position: fixed;
+    left: 14px;
+    bottom: 14px;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-md);
+    max-width: calc(100vw - 28px);
   }
 
   .body {
     flex: 1;
-    display: flex;
     overflow: hidden;
   }
 
-  .sidebar-left {
-    width: 320px;
-    border-right: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-md);
-    gap: var(--space-md);
-    overflow-y: auto;
-  }
-
-  .sidebar-right {
-    width: 320px;
-    border-left: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-    padding: var(--space-md);
-    gap: var(--space-md);
-    overflow-y: auto;
-  }
-
   .main-content {
-    flex: 1;
+    height: 100%;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: var(--space-xl);
     position: relative;
     /* Dot pattern background */
@@ -104,21 +131,9 @@
     background-size: 24px 24px;
   }
 
-  .footer {
-    height: 60px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    display: flex;
-    align-items: center;
-    padding: 0 var(--space-lg);
-    justify-content: flex-end;
-    gap: var(--space-md);
-    flex-shrink: 0;
-  }
-
-  @media (max-width: 1200px) {
-    .sidebar-right {
-      display: none; /* Hide sensor sidebar on smaller screens or make it collapsible */
-    }
+  .main-content.fullBleed {
+    padding: 0;
+    overflow: hidden;
+    background-image: none;
   }
 </style>

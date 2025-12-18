@@ -1,6 +1,7 @@
 <script lang="ts">
   import { state, flashlight } from '$lib/stores/manager';
   import { controlState, updateControlState } from '$lib/stores/controlState';
+  import { parameterRegistry, parameterWritable } from '$lib/parameters';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Slider from '$lib/components/ui/Slider.svelte';
@@ -10,9 +11,15 @@
   export let useSync = true;
   export let syncDelay = 500;
 
-  let frequencyHz = 1; // 1 Hz interpreted as steady on
-  let blinkDutyCycle = 0.5;
-  let durationMs = 2000;
+  const frequencyHz = parameterWritable(
+    parameterRegistry.get<number>('controls/flashlight/frequencyHz')!
+  );
+  const blinkDutyCycle = parameterWritable(
+    parameterRegistry.get<number>('controls/flashlight/dutyCycle')!
+  );
+  const durationMs = parameterWritable(
+    parameterRegistry.get<number>('controls/flashlight/durationMs')!
+  );
   let playing = false;
   let playingUntil = 0;
   let updateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -28,22 +35,22 @@
 
   function scheduleStop(toAll = false) {
     if (stopTimer) clearTimeout(stopTimer);
-    if (durationMs <= 0) return;
+    if ($durationMs <= 0) return;
     stopTimer = setTimeout(() => {
       flashlight('off', undefined, toAll, getExecuteAt());
       playing = false;
-    }, durationMs);
-    playingUntil = Date.now() + durationMs;
+    }, $durationMs);
+    playingUntil = Date.now() + $durationMs;
   }
 
   function buildPayload() {
-    if (frequencyHz <= 1) {
+    if ($frequencyHz <= 1) {
       return { mode: 'on' as const };
     }
     return {
       mode: 'blink' as const,
-      frequency: frequencyHz,
-      dutyCycle: blinkDutyCycle,
+      frequency: $frequencyHz,
+      dutyCycle: $blinkDutyCycle,
     };
   }
 
@@ -69,7 +76,7 @@
   function queueUpdate() {
     if (!$streamEnabled) return;
     if (!hasSelection || !playing) return;
-    if (durationMs > 0 && Date.now() > playingUntil) return;
+    if ($durationMs > 0 && Date.now() > playingUntil) return;
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
       const payload = buildPayload();
@@ -104,7 +111,7 @@
         max={10}
         step={0.2}
         suffix=" Hz"
-        bind:value={frequencyHz}
+        bind:value={$frequencyHz}
       />
       <Slider
         label="Duty Cycle"
@@ -112,7 +119,7 @@
         max={0.9}
         step={0.05}
         suffix="%"
-        bind:value={blinkDutyCycle}
+        bind:value={$blinkDutyCycle}
       />
     </div>
 
@@ -122,7 +129,7 @@
       max={8000}
       step={50}
       suffix=" ms"
-      bind:value={durationMs}
+      bind:value={$durationMs}
     />
 
     <div class="button-grid">

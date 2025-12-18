@@ -1,0 +1,57 @@
+{
+  "type": "proc-flashlight",
+  "label": "Flashlight",
+  "category": "Processors",
+  "inputs": [
+    { "id": "mode", "label": "Mode", "type": "fuzzy" },
+    { "id": "frequencyHz", "label": "Freq", "type": "number", "min": 0, "step": 0.1 },
+    { "id": "dutyCycle", "label": "Duty", "type": "number", "min": 0, "max": 1, "step": 0.01 }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    {
+      "key": "mode",
+      "label": "Mode",
+      "type": "select",
+      "defaultValue": "blink",
+      "options": [
+        { "value": "off", "label": "Off" },
+        { "value": "on", "label": "On" },
+        { "value": "blink", "label": "Blink" }
+      ]
+    },
+    { "key": "frequencyHz", "label": "Frequency (Hz)", "type": "number", "defaultValue": 2, "min": 0, "step": 0.1 },
+    { "key": "dutyCycle", "label": "Duty Cycle", "type": "number", "defaultValue": 0.5, "min": 0, "max": 1, "step": 0.01 }
+  ],
+  "runtime": {
+    "kind": "command",
+    "command": {
+      "action": "flashlight",
+      "payload": {
+        "mode": {
+          "kind": "enumFromFuzzy",
+          "inputKey": "mode",
+          "options": ["off", "on", "blink"],
+          "configKey": "mode",
+          "default": "blink"
+        },
+        "frequency": {
+          "kind": "number",
+          "inputKey": "frequencyHz",
+          "configKey": "frequencyHz",
+          "default": 2,
+          "clamp": { "min": 0 },
+          "when": { "source": "payload", "key": "mode", "op": "eq", "value": "blink" }
+        },
+        "dutyCycle": {
+          "kind": "number",
+          "inputKey": "dutyCycle",
+          "configKey": "dutyCycle",
+          "default": 0.5,
+          "clamp": { "min": 0, "max": 1 },
+          "when": { "source": "payload", "key": "mode", "op": "eq", "value": "blink" }
+        }
+      }
+    }
+  }
+}

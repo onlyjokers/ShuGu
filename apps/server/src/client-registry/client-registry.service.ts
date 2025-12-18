@@ -9,7 +9,15 @@ interface ConnectionInfo {
     userAgent?: string;
     group?: string;
     selected: boolean;
+    deviceId?: string;
+    instanceId?: string;
 }
+
+type ClientIdentity = {
+    deviceId?: string;
+    instanceId?: string;
+    clientId?: string;
+};
 
 @Injectable()
 export class ClientRegistryService {
@@ -42,31 +50,130 @@ export class ClientRegistryService {
     registerConnection(
         socketId: string,
         role: ConnectionRole,
-        userAgent?: string
-    ): string {
-        const clientId = role === 'client'
-            ? this.generateClientId()
-            : this.generateManagerId();
+        userAgent?: string,
+        identity?: ClientIdentity,
+    ): { clientId: string; replacedSocketId?: string } {
+        const now = Date.now();
+        let replacedSocketId: string | undefined;
 
-        const info: ConnectionInfo = {
+        if (role === 'client') {
+            const deviceId = this.sanitizeId(identity?.deviceId);
+            const instanceId = this.sanitizeId(identity?.instanceId);
+            const requestedClientId = this.sanitizeId(identity?.clientId);
+
+            if (deviceId) {
+                const desiredClientId = requestedClientId ?? deviceId;
+                const existing = this.clients.get(desiredClientId);
+
+                if (existing) {
+                    // Same tab/session: take over the existing stable clientId to avoid duplicates.
+                    if (instanceId && existing.instanceId === instanceId) {
+                        replacedSocketId = existing.socketId !== socketId ? existing.socketId : undefined;
+                        if (replacedSocketId) {
+                            this.socketToClientId.delete(replacedSocketId);
+                        }
+
+                        existing.socketId = socketId;
+                        existing.connectedAt = now;
+                        existing.userAgent = userAgent;
+                        existing.deviceId = deviceId;
+                        existing.instanceId = instanceId;
+
+                        this.socketToClientId.set(socketId, desiredClientId);
+
+                        console.log(`[Registry] client reconnected: ${desiredClientId} (socket: ${socketId})`);
+                        return { clientId: desiredClientId, replacedSocketId };
+                    }
+
+                    // Another tab/device tries to use the same desired id: allocate a new suffix.
+                    const allocated = this.allocateClientId(deviceId);
+                    const info: ConnectionInfo = {
+                        socketId,
+                        clientId: allocated,
+                        role,
+                        connectedAt: now,
+                        userAgent,
+                        selected: false,
+                        deviceId,
+                        instanceId: instanceId ?? undefined,
+                    };
+                    this.clients.set(allocated, info);
+                    this.socketToClientId.set(socketId, allocated);
+                    console.log(`[Registry] client registered: ${allocated} (socket: ${socketId})`);
+                    return { clientId: allocated };
+                }
+
+                // Desired id is free, use it as-is.
+                const info: ConnectionInfo = {
+                    socketId,
+                    clientId: desiredClientId,
+                    role,
+                    connectedAt: now,
+                    userAgent,
+                    selected: false,
+                    deviceId,
+                    instanceId: instanceId ?? undefined,
+                };
+                this.clients.set(desiredClientId, info);
+                this.socketToClientId.set(socketId, desiredClientId);
+                console.log(`[Registry] client registered: ${desiredClientId} (socket: ${socketId})`);
+                return { clientId: desiredClientId };
+            }
+
+            // No usable identity provided; fall back to generated id.
+            const clientId = this.generateClientId();
+            const info: ConnectionInfo = {
+                socketId,
+                clientId,
+                role,
+                connectedAt: now,
+                userAgent,
+                selected: false,
+            };
+            this.clients.set(clientId, info);
+            this.socketToClientId.set(socketId, clientId);
+            console.log(`[Registry] client registered: ${clientId} (socket: ${socketId})`);
+            return { clientId };
+        }
+
+        // Managers: keep existing behavior (server-generated ids).
+        const managerId = this.generateManagerId();
+        const managerInfo: ConnectionInfo = {
             socketId,
-            clientId,
+            clientId: managerId,
             role,
-            connectedAt: Date.now(),
+            connectedAt: now,
             userAgent,
             selected: false,
         };
+        this.managers.set(managerId, managerInfo);
+        this.socketToClientId.set(socketId, managerId);
 
-        if (role === 'client') {
-            this.clients.set(clientId, info);
-        } else {
-            this.managers.set(clientId, info);
+        console.log(`[Registry] ${role} registered: ${managerId} (socket: ${socketId})`);
+        return { clientId: managerId };
+    }
+
+    private sanitizeId(value: unknown): string | null {
+        if (typeof value !== 'string') return null;
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        const limited = trimmed.slice(0, 80);
+        const sanitized = limited.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return sanitized || null;
+    }
+
+    private allocateClientId(baseId: string): string {
+        if (!this.isClientIdInUse(baseId)) return baseId;
+        for (let suffix = 1; suffix < 10_000; suffix++) {
+            const candidate = `${baseId}_${suffix}`;
+            if (!this.isClientIdInUse(candidate)) return candidate;
         }
+        // Last resort: fall back to a generated ID.
+        return this.generateClientId();
+    }
 
-        this.socketToClientId.set(socketId, clientId);
-
-        console.log(`[Registry] ${role} registered: ${clientId} (socket: ${socketId})`);
-        return clientId;
+    private isClientIdInUse(clientId: string): boolean {
+        return this.clients.has(clientId) || this.managers.has(clientId);
     }
 
     /**

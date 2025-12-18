@@ -4,11 +4,11 @@
     "private": true,
     "description": "Manager control panel for interactive art system",
     "scripts": {
-        "dev": "vite dev --port 5173 --host",
+        "dev": "vite dev --port 5173",
         "build": "vite build",
         "preview": "vite preview",
         "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-        "lint": "eslint src --ext .ts,.svelte",
+        "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.{ts,svelte}\"",
         "clean": "rm -rf .svelte-kit build"
     },
     "devDependencies": {
@@ -24,9 +24,17 @@
         "vite": "^5.0.0"
     },
     "dependencies": {
+        "@shugu/node-core": "workspace:*",
         "@shugu/protocol": "workspace:*",
         "@shugu/sdk-manager": "workspace:*",
-        "@shugu/ui-kit": "workspace:*"
+        "@shugu/ui-kit": "workspace:*",
+        "@xyflow/svelte": "0.0.41",
+        "rete": "^2.0.6",
+        "rete-area-plugin": "^2.1.5",
+        "rete-connection-plugin": "^2.0.5",
+        "rete-history-plugin": "^2.1.1",
+        "rete-render-utils": "^2.0.3",
+        "rete-svelte-plugin": "^2.1.1"
     },
     "type": "module"
 }

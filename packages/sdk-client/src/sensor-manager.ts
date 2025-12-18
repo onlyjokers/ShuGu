@@ -41,27 +41,29 @@ export class SensorManager {
      * Request motion sensor permissions (required on iOS 13+)
      */
     async requestPermissions(): Promise<SensorPermissionResult> {
-        const requestMotionPermission = (DeviceMotionEvent as any).requestPermission;
+        const deviceMotionEvent = (window as any).DeviceMotionEvent;
+        const requestMotionPermission = deviceMotionEvent?.requestPermission;
 
         // iOS 13+ requires user gesture and explicit permission request.
         // Request motion once; it unlocks orientation too on Safari, so treat orientation as best-effort.
         if (typeof requestMotionPermission === 'function') {
             try {
-                const motionPermission = await requestMotionPermission.call(DeviceMotionEvent);
+                const motionPermission = await requestMotionPermission.call(deviceMotionEvent);
 
                 if (motionPermission === 'granted') {
                     return { granted: true };
                 }
                 return {
                     granted: false,
-                    error: typeof motionPermission === 'string'
-                        ? motionPermission
-                        : 'Permission denied by user'
+                    error:
+                        typeof motionPermission === 'string'
+                            ? motionPermission
+                            : 'Permission denied by user',
                 };
             } catch (error) {
                 return {
                     granted: false,
-                    error: error instanceof Error ? error.message : 'Permission request failed'
+                    error: error instanceof Error ? error.message : 'Permission request failed',
                 };
             }
         }

@@ -5,15 +5,49 @@
     initialize,
     requestPermissions,
     disconnect,
-    connectionStatus,
-    clientId,
+    connectToServer,
+    disconnectFromServer,
+    getSDK,
+    permissions,
+    currentScene,
+    asciiEnabled,
+    asciiResolution,
   } from '$lib/stores/client';
   import StartScreen from '$lib/components/StartScreen.svelte';
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
   import PermissionWarning from '$lib/components/PermissionWarning.svelte';
+  import GeoGateOverlay from '$lib/components/GeoGateOverlay.svelte';
 
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
+  let e2eSensorTimer: ReturnType<typeof setInterval> | null = null;
+
+  type GeoFenceConfig = {
+    center: { lat: number; lng: number };
+    rangeM: number;
+    address?: string | null;
+    updatedAt: number;
+  };
+
+  type VisualBootstrapConfig = {
+    sceneId: string;
+    asciiEnabled: boolean;
+    asciiResolution: number;
+    updatedAt: number;
+  };
+
+  let fenceConfig: GeoFenceConfig | null = null;
+  let visualConfig: VisualBootstrapConfig | null = null;
+  let bootstrapConfigError: string | null = null;
+
+  let gateState: 'idle' | 'checking' | 'blocked' | 'error' = 'idle';
+  let gateTitle = '';
+  let gateMessage = '';
+  let gateDetails: { targetAddress?: string | null; distanceM?: number; rangeM?: number } = {};
+
+  let retryCooldownS = 0;
+  let retryCooldownTimer: ReturnType<typeof setInterval> | null = null;
+  let gateInFlight: Promise<void> | null = null;
 
   /**
    * Best-effort fullscreen entry. iOS Safari only recently supports the API; we probe multiple
@@ -60,6 +94,7 @@
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get('server');
+    const e2e = params.get('e2e') === '1';
     const isAccessingViaIP =
       window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
 
@@ -90,30 +125,355 @@
         }
       }
     }
+
+    // Preload bootstrap config early (HTTP only; no websocket connection).
+    void refreshBootstrapConfig();
+
+    if (e2e) {
+      (window as any).__SHUGU_E2E = true;
+      permissions.set({
+        microphone: 'denied',
+        motion: 'granted',
+        camera: 'denied',
+        wakeLock: 'denied',
+        geolocation: 'granted',
+      });
+      hasStarted = true;
+      gateState = 'idle';
+      initialize({ serverUrl }, { autoConnect: true });
+
+      // Feed synthetic sensors so node-executor loops have live inputs in desktop e2e runs.
+      e2eSensorTimer = setInterval(() => {
+        const sdk = getSDK();
+        if (!sdk) return;
+        const t = Date.now() / 250;
+        sdk.sendSensorData('accel', {
+          x: Math.sin(t) * 2,
+          y: Math.cos(t) * 2,
+          z: 0,
+          includesGravity: false,
+        });
+      }, 120);
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    handleVisibilityChange();
   });
 
   onDestroy(() => {
     disconnect();
+    if (e2eSensorTimer) {
+      clearInterval(e2eSensorTimer);
+      e2eSensorTimer = null;
+    }
+    if (retryCooldownTimer) clearInterval(retryCooldownTimer);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    }
   });
 
-  async function handleStart() {
-    hasStarted = true;
+  function handlePageHide(): void {
+    disconnectFromServer();
+  }
 
-    // Save server URL
-    localStorage.setItem('shugu-server-url', serverUrl);
+  function handleVisibilityChange(): void {
+    if (typeof document === 'undefined') return;
 
-    // Request fullscreen while the click gesture is still active to maximize success.
-    tryFullscreen('click');
+    const visible = document.visibilityState === 'visible';
+    if (!visible) {
+      // Treat background/lock-screen as offline so managers see the client as disconnected.
+      disconnectFromServer();
+      return;
+    }
 
-    // Initialize synchronously, then request permissions immediately while the user gesture is still active
-    // (iOS motion/mic permissions require being in the same click stack).
-    initialize({ serverUrl });
+    // Reconnect when visible again (only after Start gate passed).
+    if (hasStarted) {
+      connectToServer();
+    }
+  }
+
+  function startRetryCooldown(seconds = 3): void {
+    if (retryCooldownTimer) clearInterval(retryCooldownTimer);
+    retryCooldownS = seconds;
+    retryCooldownTimer = setInterval(() => {
+      retryCooldownS = Math.max(0, retryCooldownS - 1);
+      if (retryCooldownS === 0 && retryCooldownTimer) {
+        clearInterval(retryCooldownTimer);
+        retryCooldownTimer = null;
+      }
+    }, 1000);
+  }
+
+  function getServerOrigin(url: string): string | null {
+    try {
+      return new URL(url).origin;
+    } catch (error) {
+      console.warn('[Client] Invalid serverUrl', error);
+      return null;
+    }
+  }
+
+  async function refreshBootstrapConfig(): Promise<{
+    fence: GeoFenceConfig | null;
+    visual: VisualBootstrapConfig | null;
+  } | null> {
+    bootstrapConfigError = null;
+    const origin = getServerOrigin(serverUrl);
+    if (!origin) {
+      fenceConfig = null;
+      visualConfig = null;
+      bootstrapConfigError = 'Invalid serverUrl';
+      return null;
+    }
+
+    try {
+      const url = new URL('/bootstrap/config', origin);
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(body || response.statusText);
+      }
+
+      const json = (await response.json()) as {
+        fence?: GeoFenceConfig | null;
+        visual?: VisualBootstrapConfig | null;
+      };
+      fenceConfig = json?.fence ?? null;
+      visualConfig = json?.visual ?? null;
+      return { fence: fenceConfig, visual: visualConfig };
+    } catch (error) {
+      fenceConfig = null;
+      visualConfig = null;
+      bootstrapConfigError = (error as any)?.message ?? String(error);
+      return null;
+    }
+  }
+
+  function haversineDistanceM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const r = 6371_000; // meters
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return r * c;
+  }
+
+  function requestGeolocationOnce(options: PositionOptions): Promise<GeolocationPosition> {
+    if (!('geolocation' in navigator) || !navigator.geolocation) {
+      return Promise.reject(new Error('Geolocation API is not supported'));
+    }
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, options);
+    });
+  }
+
+  function isGeolocationPositionError(error: unknown): error is GeolocationPositionError {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof (error as any).code === 'number'
+    );
+  }
+
+  function classifyGeolocationError(error: unknown): 'denied' | 'unavailable' | 'unsupported' {
+    if (typeof isSecureContext === 'boolean' && !isSecureContext) return 'unsupported';
+    if (!('geolocation' in navigator) || !navigator.geolocation) return 'unsupported';
+    if (isGeolocationPositionError(error)) return error.code === 1 ? 'denied' : 'unavailable';
+    return 'unavailable';
+  }
+
+  function formatGeolocationError(error: unknown): string {
+    if (isGeolocationPositionError(error)) {
+      const codeLabel =
+        error.code === 1
+          ? 'PERMISSION_DENIED'
+          : error.code === 2
+            ? 'POSITION_UNAVAILABLE'
+            : 'TIMEOUT';
+      return `${codeLabel}: ${error.message || '(no message)'}`;
+    }
+    if (error instanceof Error) return error.message;
+    return String(error);
+  }
+
+  async function reverseGeocode(origin: string, lat: number, lng: number): Promise<string | null> {
+    const url = new URL('/geo/reverse', origin);
+    url.searchParams.set('lat', String(lat));
+    url.searchParams.set('lng', String(lng));
+    url.searchParams.set('lang', 'zh-CN');
+    url.searchParams.set('zoom', '18');
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(body || response.statusText);
+    }
+    const json = (await response.json()) as { formattedAddress?: string; displayName?: string };
+    const address = (json.formattedAddress || json.displayName || '').trim();
+    return address || null;
+  }
+
+  function formatMeters(value: number): string {
+    const m = Math.max(0, Math.round(value));
+    if (m < 1000) return `${m}m`;
+    return `${(m / 1000).toFixed(2)}km`;
+  }
+
+  function applyVisualBootstrap(visual: VisualBootstrapConfig | null): void {
+    if (!visual) return;
+    currentScene.set(visual.sceneId);
+    asciiEnabled.set(visual.asciiEnabled);
+    asciiResolution.set(visual.asciiResolution);
+  }
+
+  async function runGeoGate(): Promise<void> {
+    gateState = 'checking';
+    gateTitle = '正在检查位置…';
+    gateMessage = '请稍候';
+    gateDetails = {};
+
+    // Ensure no websocket connection until the geo-fence check passes.
+    disconnect();
+    initialize({ serverUrl }, { autoConnect: false });
 
     try {
       await requestPermissions();
     } catch (error) {
       console.error('[Client] Permission request failed', error);
     }
+
+    const origin = getServerOrigin(serverUrl);
+    if (!origin) {
+      disconnect();
+      gateState = 'error';
+      gateTitle = '无法启动';
+      gateMessage = '服务器地址错误，请检查 server 参数或本地配置';
+      return;
+    }
+
+    const bootstrap = await refreshBootstrapConfig();
+    if (!bootstrap && bootstrapConfigError) {
+      disconnect();
+      gateState = 'error';
+      gateTitle = '无法启动';
+      gateMessage = `无法获取启动配置：${bootstrapConfigError}`;
+      return;
+    }
+
+    const fence = bootstrap?.fence ?? null;
+    applyVisualBootstrap(bootstrap?.visual ?? null);
+
+    if (!fence) {
+      // If no fence is configured, allow start (no gating).
+      gateState = 'idle';
+      hasStarted = true;
+      if (document.visibilityState === 'visible') connectToServer();
+      return;
+    }
+
+    try {
+      const position = await requestGeolocationOnce({
+        enableHighAccuracy: true,
+        timeout: 25_000,
+        maximumAge: 5_000,
+      }).catch(async (error) => {
+        const status = classifyGeolocationError(error);
+        if (status === 'denied' || status === 'unsupported') throw error;
+        return requestGeolocationOnce({
+          enableHighAccuracy: false,
+          timeout: 35_000,
+          maximumAge: 30_000,
+        });
+      });
+
+      permissions.update((p) => ({ ...p, geolocation: 'granted' }));
+
+      const { latitude, longitude, accuracy } = position.coords;
+      const addressPromise = reverseGeocode(origin, latitude, longitude)
+        .then((address) => {
+          console.info('[Client] Geolocation acquired', {
+            latitude,
+            longitude,
+            accuracy,
+            address,
+            timestamp: position.timestamp,
+          });
+          return address;
+        })
+        .catch((error) => {
+          console.warn('[Client] Reverse geocode failed', error);
+          console.info('[Client] Geolocation acquired', {
+            latitude,
+            longitude,
+            accuracy,
+            address: null,
+            timestamp: position.timestamp,
+          });
+          return null;
+        });
+
+      const distanceM = haversineDistanceM(latitude, longitude, fence.center.lat, fence.center.lng);
+      gateDetails = { targetAddress: fence.address ?? null, distanceM, rangeM: fence.rangeM };
+
+      if (distanceM > fence.rangeM) {
+        // Do not connect to server/manager when outside the fence.
+        void addressPromise;
+        disconnect();
+        gateState = 'blocked';
+        gateTitle = '请前往演出位置启动';
+        gateMessage = `当前距离演出位置约 ${formatMeters(distanceM)}，允许范围 ${formatMeters(fence.rangeM)}`;
+        return;
+      }
+
+      gateState = 'idle';
+      hasStarted = true;
+      if (document.visibilityState === 'visible') connectToServer();
+      void addressPromise;
+    } catch (error) {
+      const status = classifyGeolocationError(error);
+      permissions.update((p) => ({ ...p, geolocation: status }));
+
+      disconnect();
+      gateState = 'error';
+      gateTitle = '无法获取位置';
+      gateMessage = status === 'denied' ? '请开启定位权限后重试' : formatGeolocationError(error);
+    }
+  }
+
+  async function handleStart() {
+    // Save server URL
+    localStorage.setItem('shugu-server-url', serverUrl);
+
+    // Request fullscreen while the click gesture is still active to maximize success.
+    tryFullscreen('click');
+
+    if (gateInFlight) return;
+    gateInFlight = runGeoGate().finally(() => {
+      gateInFlight = null;
+    });
+    await gateInFlight;
+  }
+
+  async function handleRetry() {
+    if (retryCooldownS > 0) return;
+    startRetryCooldown(3);
+    if (gateInFlight) return;
+    gateInFlight = runGeoGate().finally(() => {
+      gateInFlight = null;
+    });
+    await gateInFlight;
   }
 </script>
 
@@ -125,6 +485,17 @@
 <div class="app">
   {#if !hasStarted}
     <StartScreen on:start={handleStart} />
+    {#if gateState !== 'idle'}
+      <GeoGateOverlay
+        mode={gateState === 'checking' ? 'checking' : gateState === 'blocked' ? 'blocked' : 'error'}
+        title={gateTitle}
+        message={gateMessage}
+        details={gateDetails}
+        {retryCooldownS}
+        retryDisabled={gateState === 'checking' || retryCooldownS > 0}
+        on:retry={handleRetry}
+      />
+    {/if}
   {:else}
     <VisualCanvas />
     <PermissionWarning />

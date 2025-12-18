@@ -1,16 +1,23 @@
 <script lang="ts">
   import '@shugu/ui-kit/styles';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { spring } from 'svelte/motion';
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
+  import { nodeEngine } from '$lib/nodes';
+  import {
+    loadLocalProject,
+    saveLocalProject,
+    startAutoSave,
+    stopAutoSave,
+  } from '$lib/project/projectManager';
 
   // Layouts & Components
   import AppShell from '$lib/layouts/AppShell.svelte';
-  import ClientList from '$lib/components/ClientList.svelte';
-  import SensorDisplay from '$lib/components/SensorDisplay.svelte';
-  import PluginControl from '$lib/components/PluginControl.svelte';
+  import ClientSelector from '$lib/components/ClientSelector.svelte';
   import Button from '$lib/components/ui/Button.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
 
   // Feature Controls
   import FlashlightControl from '$lib/features/lighting/FlashlightControl.svelte';
@@ -19,7 +26,10 @@
   import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
-  import MidiMapper from '$lib/features/midi/MidiMapper.svelte';
+  import GeoControl from '$lib/features/location/GeoControl.svelte';
+  import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
+  import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
+  import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
 
   let serverUrl = 'https://localhost:3001';
   let isConnecting = false;
@@ -27,10 +37,46 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'midi' = 'dashboard';
+  type WorkspaceTab = 'dashboard' | 'auto' | 'registry-midi' | 'nodes';
+  let activePage: WorkspaceTab = 'dashboard';
+  const nodeGraphRunning = nodeEngine.isRunning;
+
+  let tabsEl: HTMLDivElement | null = null;
+  let tabDashboardEl: HTMLButtonElement | null = null;
+  let tabAutoEl: HTMLButtonElement | null = null;
+  let tabRegistryMidiEl: HTMLButtonElement | null = null;
+  let tabNodesEl: HTMLButtonElement | null = null;
+  const tabSlider = spring(
+    { x: 0, width: 0 },
+    {
+      stiffness: 0.18,
+      damping: 0.72,
+    }
+  );
+
+  let projectRestored = false;
+  let autoSaveStarted = false;
 
   // Global Sync State
   let useSync = true;
+
+  function getActiveTabEl(): HTMLButtonElement | null {
+    if (activePage === 'dashboard') return tabDashboardEl;
+    if (activePage === 'auto') return tabAutoEl;
+    if (activePage === 'registry-midi') return tabRegistryMidiEl;
+    if (activePage === 'nodes') return tabNodesEl;
+    return null;
+  }
+
+  async function updateTabSlider() {
+    await tick();
+    if (!tabsEl) return;
+    const button = getActiveTabEl();
+    if (!button) return;
+    const containerRect = tabsEl.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    tabSlider.set({ x: buttonRect.left - containerRect.left, width: buttonRect.width });
+  }
 
   onMount(() => {
     // Detect if accessing via IP address
@@ -54,6 +100,39 @@
 
     return () => {
       disconnect();
+      stopAutoSave();
+    };
+  });
+
+  onMount(() => {
+    const onResize = () => {
+      void updateTabSlider();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
+
+  $: if (tabsEl && activePage) void updateTabSlider();
+
+  // Restore project once we're connected (parameters are registered after connect)
+  $: if (!projectRestored && $connectionStatus === 'connected') {
+    if (loadLocalProject()) {
+      console.info('[Project] restored from local storage');
+    }
+    projectRestored = true;
+  }
+
+  // Start autosave once connected
+  $: if ($connectionStatus === 'connected' && !autoSaveStarted) {
+    startAutoSave();
+    autoSaveStarted = true;
+  }
+
+  onMount(() => {
+    const handler = () => saveLocalProject('beforeunload');
+    window.addEventListener('beforeunload', handler);
+    return () => {
+      window.removeEventListener('beforeunload', handler);
     };
   });
 
@@ -154,8 +233,9 @@
         <h1 class="title">Fluffy Manager</h1>
 
         <div class="connect-form">
-          <label class="form-label">Server URL</label>
+          <label class="form-label" for="server-url">Server URL</label>
           <input
+            id="server-url"
             type="text"
             class="input"
             bind:value={serverUrl}
@@ -183,31 +263,64 @@
       </div>
     </div>
   {:else}
-    <AppShell>
-      <div slot="sidebar" class="sidebar-content">
-        <ClientList />
-        <div class="sidebar-divider"></div>
-        <PluginControl />
-      </div>
-
-      <div slot="right-sidebar">
-        <SensorDisplay />
-      </div>
-
-      <div class="page-tabs">
+    <AppShell
+      fullBleed={activePage === 'nodes'}
+      collapseHeader={activePage === 'nodes' && $nodeGraphRunning}
+    >
+      <div slot="tabs" class="page-tabs" bind:this={tabsEl}>
+        <div
+          class="page-tabs-slider"
+          aria-hidden="true"
+          style="transform: translate3d({$tabSlider.x}px, 0, 0); width: {$tabSlider.width}px;"
+        />
         <button
+          bind:this={tabDashboardEl}
           class:active={activePage === 'dashboard'}
           on:click={() => (activePage = 'dashboard')}
         >
-          控制台
+          🧰 控制台
         </button>
-        <button class:active={activePage === 'midi'} on:click={() => (activePage = 'midi')}>
-          MIDI Mapper
+        <button
+          bind:this={tabAutoEl}
+          class:active={activePage === 'auto'}
+          on:click={() => (activePage = 'auto')}
+        >
+          🎛️ Auto UI
         </button>
+        <button
+          bind:this={tabRegistryMidiEl}
+          class:active={activePage === 'registry-midi'}
+          on:click={() => (activePage = 'registry-midi')}
+        >
+          🎹 Registry MIDI
+        </button>
+        <button
+          bind:this={tabNodesEl}
+          class:active={activePage === 'nodes'}
+          on:click={() => (activePage = 'nodes')}
+        >
+          📊 Node Graph
+        </button>
+      </div>
+
+      <div slot="headerActions" class="session-pill">
+        <label class="sync-toggle">
+          <input type="checkbox" bind:checked={useSync} />
+          <span>⚡ Global Sync (500ms)</span>
+        </label>
+        <Button variant="ghost" size="sm" on:click={() => streamEnabled.update((v) => !v)}>
+          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
+        </Button>
       </div>
 
       <div class:hide={activePage !== 'dashboard'}>
         <div class="dashboard-grid">
+          <div class="grid-item">
+            <!-- Client selection card (same behavior as sidebar client-list-container) -->
+            <Card>
+              <ClientSelector height={280} />
+            </Card>
+          </div>
           <div class="grid-item">
             <FlashlightControl {useSync} />
           </div>
@@ -224,34 +337,30 @@
             <VibrationControl {useSync} />
           </div>
           <div class="grid-item">
-            <SceneControl {useSync} />
+            <SceneControl {useSync} {serverUrl} />
+          </div>
+          <div class="grid-item">
+            <GeoControl {serverUrl} />
           </div>
         </div>
       </div>
 
-      <div class:hide={activePage !== 'midi'}>
-        <div class="midi-pane">
-          <MidiMapper />
+      <div class:hide={activePage !== 'auto'}>
+        <div class="auto-pane">
+          <AutoControlPanel />
         </div>
       </div>
 
-      <div slot="footer" class="footer-actions">
-        <label class="sync-toggle">
-          <input type="checkbox" bind:checked={useSync} />
-          <span>⚡ Global Sync (500ms)</span>
-        </label>
-        <Button
-          variant="ghost"
-          size="sm"
-          on:click={() => streamEnabled.update((v) => !v)}
-        >
-          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
-        </Button>
+      <div class:hide={activePage !== 'registry-midi'}>
+        <div class="midi-pane">
+          <RegistryMidiPanel />
+        </div>
+      </div>
 
-        <div class="spacer"></div>
-
-        <Button variant="danger" size="sm" on:click={handleDisconnect}>Disconnect</Button>
-        <Button variant="ghost" size="sm" on:click={handleLogout}>Logout</Button>
+      <div class="nodes-page" class:hide={activePage !== 'nodes'}>
+        <div class="nodes-pane">
+          <NodeCanvas />
+        </div>
       </div>
     </AppShell>
   {/if}
@@ -353,19 +462,35 @@
   }
 
   .page-tabs {
+    --tabs-pad: 6px;
+    position: relative;
     display: inline-flex;
     gap: var(--space-sm);
-    margin-bottom: var(--space-md);
-    background: var(--bg-secondary);
-    padding: 6px;
-    border-radius: var(--radius-lg);
+    padding: var(--tabs-pad);
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--border-color);
+    overflow: hidden;
+  }
+
+  .page-tabs-slider {
+    position: absolute;
+    top: var(--tabs-pad);
+    bottom: var(--tabs-pad);
+    left: 0;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+    box-shadow: 0 10px 30px rgba(99, 102, 241, 0.35);
+    pointer-events: none;
+    will-change: transform, width;
   }
 
   .page-tabs button {
+    position: relative;
+    z-index: 1;
     border: none;
     padding: 8px 14px;
-    border-radius: var(--radius-lg);
+    border-radius: 999px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
@@ -373,7 +498,6 @@
   }
 
   .page-tabs button.active {
-    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
     color: white;
   }
 
@@ -381,31 +505,38 @@
     margin-top: var(--space-sm);
   }
 
+  .auto-pane {
+    margin-top: var(--space-sm);
+  }
+
+  .nodes-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .nodes-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
   .hide {
     display: none;
   }
 
-  .sidebar-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-lg);
-    height: 100%;
-  }
-
-  .sidebar-divider {
-    height: 1px;
-    background: var(--border-color);
-  }
-
-  .footer-actions {
-    display: flex;
+  .session-pill {
+    display: inline-flex;
     align-items: center;
-    width: 100%;
-    gap: var(--space-md);
-  }
-
-  .spacer {
-    flex: 1;
+    gap: var(--space-sm);
+    min-height: 38px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(14px);
+    white-space: nowrap;
   }
 
   .sync-toggle {

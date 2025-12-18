@@ -1,33 +1,27 @@
 <script lang="ts">
-  import { state, modulateSound, modulateSoundUpdate } from '$lib/stores/manager';
-  import { controlState, updateControlState } from '$lib/stores/controlState';
+  import { state, modulateSound, modulateSoundUpdate, stopSound } from '$lib/stores/manager';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Input from '$lib/components/ui/Input.svelte';
-  import Slider from '$lib/components/ui/Slider.svelte';
-  import Select from '$lib/components/ui/Select.svelte';
+  import { ParameterControl } from '$lib/components/parameters';
+  import { parameterRegistry, parameterWritable } from '$lib/parameters';
   import { streamEnabled } from '$lib/streaming/streaming';
-  import { stopSound } from '$lib/stores/manager';
 
   export let useSync = true;
   export let syncDelay = 500;
 
-  let modFrequency = 180;
-  let modDuration = 200;
-  let modVolume = 0.7;
-  let modWaveform: 'sine' | 'square' | 'sawtooth' | 'triangle' = 'square';
-  let modDepth = 0;
-  let modLfo = 12;
   let playingUntil = 0;
   let updateTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Register & bind parameters (single source of truth)
+  type SynthWaveform = 'sine' | 'square' | 'sawtooth' | 'triangle';
+  const frequency = parameterWritable(parameterRegistry.get<number>('controls/synth/frequency')!);
+  const duration = parameterWritable(parameterRegistry.get<number>('controls/synth/duration')!);
+  const volume = parameterWritable(parameterRegistry.get<number>('controls/synth/volume')!);
+  const modDepth = parameterWritable(parameterRegistry.get<number>('controls/synth/modDepth')!);
+  const modLfo = parameterWritable(parameterRegistry.get<number>('controls/synth/modLfo')!);
+  const waveform = parameterWritable(parameterRegistry.get<SynthWaveform>('controls/synth/waveform')!);
+
   $: hasSelection = $state.selectedClientIds.length > 0;
-  $: modFrequency = $controlState.modFrequency;
-  $: modDuration = $controlState.modDuration;
-  $: modVolume = $controlState.modVolume;
-  $: modDepth = $controlState.modDepth;
-  $: modLfo = $controlState.modLfo;
-  $: modWaveform = $controlState.modWaveform;
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -35,27 +29,23 @@
   }
 
   function handleModulateSound(toAll = false) {
-    const durMs = Number(modDuration) || 200;
+    const durMs = Number($duration) || 200;
+    const depth = Math.max(0, Math.min(1, Number($modDepth) || 0));
+    const lfo = Number($modLfo) || 12;
+    const freq = Number($frequency) || 180;
+    const vol = clamp01(Number($volume) || 0.7);
     modulateSound(
       {
-        frequency: Number(modFrequency) || 180,
+        frequency: freq,
         duration: durMs,
-        volume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
-        waveform: modWaveform,
-        modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
-        modDepth: modDepth > 0 ? Math.max(0, Math.min(1, modDepth)) : undefined,
+        volume: vol,
+        waveform: $waveform,
+        modFrequency: depth > 0 ? lfo : undefined,
+        modDepth: depth > 0 ? depth : undefined,
       },
       toAll,
       getExecuteAt()
     );
-    updateControlState({
-      modFrequency: Number(modFrequency) || 180,
-      modDuration: durMs,
-      modVolume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
-      modDepth: Math.max(0, Math.min(1, modDepth)) || 0,
-      modLfo: Number(modLfo) || 12,
-      modWaveform,
-    });
     playingUntil = Date.now() + durMs + 200; // basic release buffer
   }
 
@@ -64,17 +54,19 @@
     if (!hasSelection) return;
     const now = Date.now();
     if (now > playingUntil) return; // nothing currently playing
+    const depth = Math.max(0, Math.min(1, Number($modDepth) || 0));
+    const lfo = Number($modLfo) || 12;
 
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
       modulateSoundUpdate(
         {
-          frequency: Number(modFrequency) || 180,
-          volume: Math.max(0, Math.min(1, Number(modVolume) || 0.7)),
-          waveform: modWaveform,
-          modFrequency: modDepth > 0 ? Number(modLfo) || 12 : undefined,
-          modDepth: modDepth > 0 ? Math.max(0, Math.min(1, modDepth)) : undefined,
-          durationMs: Number(modDuration) || 200,
+          frequency: Number($frequency) || 180,
+          volume: clamp01(Number($volume) || 0.7),
+          waveform: $waveform,
+          modFrequency: depth > 0 ? lfo : undefined,
+          modDepth: depth > 0 ? depth : undefined,
+          durationMs: Number($duration) || 200,
         },
         false,
         getExecuteAt()
@@ -85,44 +77,26 @@
   // React to parameter changes while stream mode is on
   $: queueUpdate();
 
-  const waveforms = [
-    { value: 'square', label: 'Square (Buzzy)' },
-    { value: 'sine', label: 'Sine' },
-    { value: 'triangle', label: 'Triangle' },
-    { value: 'sawtooth', label: 'Sawtooth' },
-  ];
+  function clamp01(v: number) {
+    return Math.max(0, Math.min(1, v));
+  }
 </script>
 
 <Card title="🎛️ Synth">
   <div class="control-group">
     <div class="row">
-      <Input
-        type="number"
-        label="Freq (Hz)"
-        bind:value={modFrequency}
-        min={20}
-        max={2000}
-        step={10}
-      />
-      <Input
-        type="number"
-        label="Dur (ms)"
-        bind:value={modDuration}
-        min={20}
-        max={2000}
-        step={10}
-      />
+      <ParameterControl path="controls/synth/frequency" />
+      <ParameterControl path="controls/synth/duration" />
     </div>
 
-    <Slider label="Volume" bind:value={modVolume} min={0} max={1} step={0.05} suffix="" />
-
-    <Select label="Waveform" options={waveforms} bind:value={modWaveform} />
+    <ParameterControl path="controls/synth/volume" />
+    <ParameterControl path="controls/synth/waveform" />
 
     <div class="lfo-section">
-      <Slider label="Wobble Depth" bind:value={modDepth} min={0} max={1} step={0.05} suffix="" />
+      <ParameterControl path="controls/synth/modDepth" />
 
-      {#if modDepth > 0}
-        <Input type="number" label="Wobble Rate (Hz)" bind:value={modLfo} min={1} max={40} />
+      {#if $modDepth > 0}
+        <ParameterControl path="controls/synth/modLfo" />
       {/if}
     </div>
 

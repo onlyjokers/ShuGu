@@ -1,0 +1,14 @@
+{
+  "type": "midi-color-map",
+  "label": "Color Mapping",
+  "category": "MIDI",
+  "inputs": [{ "id": "in", "label": "In", "type": "fuzzy", "defaultValue": 0 }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "color" }],
+  "configSchema": [
+    { "key": "from", "label": "From", "type": "string", "defaultValue": "#6366f1" },
+    { "key": "to", "label": "To", "type": "string", "defaultValue": "#ffffff" },
+    { "key": "invert", "label": "Invert", "type": "boolean", "defaultValue": false }
+  ],
+  "runtime": { "kind": "midi-color-map" }
+}
+

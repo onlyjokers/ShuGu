@@ -1,0 +1,10 @@
+{
+  "type": "manager-select-clients-range",
+  "label": "Select Clients (Range)",
+  "category": "Manager",
+  "inputs": [{ "id": "in", "label": "In", "type": "number", "kind": "sink" }],
+  "outputs": [],
+  "configSchema": [],
+  "runtime": { "kind": "manager-select-clients-range" }
+}
+

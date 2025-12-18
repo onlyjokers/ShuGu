@@ -1,0 +1,49 @@
+{
+  "type": "proc-screen-color",
+  "label": "Screen Color",
+  "category": "Processors",
+  "inputs": [
+    { "id": "primary", "label": "Primary", "type": "color" },
+    { "id": "secondary", "label": "Secondary", "type": "color" },
+    { "id": "waveform", "label": "Wave", "type": "fuzzy" },
+    { "id": "frequencyHz", "label": "Freq", "type": "number", "min": 0, "step": 0.1 },
+    { "id": "maxOpacity", "label": "Max", "type": "number", "min": 0, "max": 1, "step": 0.01 },
+    { "id": "minOpacity", "label": "Min", "type": "number", "min": 0, "max": 1, "step": 0.01 }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    { "key": "primary", "label": "Primary", "type": "string", "defaultValue": "#6366f1" },
+    { "key": "secondary", "label": "Secondary", "type": "string", "defaultValue": "#ffffff" },
+    { "key": "maxOpacity", "label": "Max Opacity", "type": "number", "defaultValue": 1, "min": 0, "max": 1, "step": 0.01 },
+    { "key": "minOpacity", "label": "Min Opacity", "type": "number", "defaultValue": 0, "min": 0, "max": 1, "step": 0.01 },
+    {
+      "key": "waveform",
+      "label": "Waveform",
+      "type": "select",
+      "defaultValue": "sine",
+      "options": [
+        { "value": "sine", "label": "Sine" },
+        { "value": "square", "label": "Square" },
+        { "value": "triangle", "label": "Triangle" },
+        { "value": "sawtooth", "label": "Sawtooth" }
+      ]
+    },
+    { "key": "frequencyHz", "label": "Frequency (Hz)", "type": "number", "defaultValue": 1.5, "min": 0, "step": 0.1 }
+  ],
+  "runtime": {
+    "kind": "command",
+    "command": {
+      "action": "screenColor",
+      "payload": {
+        "mode": { "kind": "literal", "value": "modulate" },
+        "color": { "kind": "string", "inputKey": "primary", "configKey": "primary", "default": "#6366f1" },
+        "secondaryColor": { "kind": "string", "inputKey": "secondary", "configKey": "secondary", "default": "#ffffff" },
+        "opacity": { "kind": "number", "inputKey": "maxOpacity", "configKey": "maxOpacity", "default": 1, "clamp": { "min": 0, "max": 1 } },
+        "minOpacity": { "kind": "number", "inputKey": "minOpacity", "configKey": "minOpacity", "default": 0, "clamp": { "min": 0, "max": 1 } },
+        "maxOpacity": { "kind": "number", "inputKey": "maxOpacity", "configKey": "maxOpacity", "default": 1, "clamp": { "min": 0, "max": 1 } },
+        "frequencyHz": { "kind": "number", "inputKey": "frequencyHz", "configKey": "frequencyHz", "default": 1.5, "clamp": { "min": 0 } },
+        "waveform": { "kind": "enumFromFuzzy", "inputKey": "waveform", "options": ["sine", "square", "triangle", "sawtooth"], "configKey": "waveform", "default": "sine" }
+      }
+    }
+  }
+}

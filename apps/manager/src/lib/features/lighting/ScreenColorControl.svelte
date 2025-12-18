@@ -1,6 +1,7 @@
 <script lang="ts">
   import { state, screenColor } from '$lib/stores/manager';
   import type { ScreenColorPayload } from '@shugu/protocol';
+  import { parameterRegistry, parameterWritable } from '$lib/parameters';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Input from '$lib/components/ui/Input.svelte';
@@ -12,17 +13,29 @@
   export let useSync = true;
   export let syncDelay = 500;
 
-  let selectedColor = '#6366f1';
-  let colorOpacity = 1;
-  // Single unified Modulate model
-  let screenWaveform: 'sine' | 'square' | 'triangle' | 'sawtooth' = 'sine';
-  let screenFrequency = 1.5;
-  let screenMinOpacity = 0;
-  let screenMaxOpacity = 1;
-  let screenSecondaryColor = '#ffffff';
+  const selectedColor = parameterWritable(
+    parameterRegistry.get<string>('controls/screenColor/primary')!
+  );
+  const screenSecondaryColor = parameterWritable(
+    parameterRegistry.get<string>('controls/screenColor/secondary')!
+  );
+  const screenWaveform = parameterWritable(
+    parameterRegistry.get<string>('controls/screenColor/waveform')!
+  );
+  const screenFrequency = parameterWritable(
+    parameterRegistry.get<number>('controls/screenColor/frequencyHz')!
+  );
+  const screenMinOpacity = parameterWritable(
+    parameterRegistry.get<number>('controls/screenColor/minOpacity')!
+  );
+  const screenMaxOpacity = parameterWritable(
+    parameterRegistry.get<number>('controls/screenColor/maxOpacity')!
+  );
+  const durationMs = parameterWritable(
+    parameterRegistry.get<number>('controls/screenColor/durationMs')!
+  );
   let playing = false;
   let updateTimer: ReturnType<typeof setTimeout> | null = null;
-  let durationMs = 2000;
   let stopTimer: ReturnType<typeof setTimeout> | null = null;
   let playingUntil = 0;
 
@@ -43,13 +56,13 @@
   function buildPayload(): ScreenColorPayload {
     return {
       mode: 'modulate',
-      color: selectedColor,
-      secondaryColor: screenSecondaryColor,
-      opacity: screenMaxOpacity,
-      minOpacity: screenMinOpacity,
-      maxOpacity: screenMaxOpacity,
-      frequencyHz: screenFrequency,
-      waveform: screenWaveform,
+      color: $selectedColor,
+      secondaryColor: $screenSecondaryColor,
+      opacity: $screenMaxOpacity,
+      minOpacity: $screenMinOpacity,
+      maxOpacity: $screenMaxOpacity,
+      frequencyHz: $screenFrequency,
+      waveform: $screenWaveform as 'sine' | 'square' | 'triangle' | 'sawtooth',
     };
   }
 
@@ -57,11 +70,11 @@
     screenColor(buildPayload(), undefined, toAll, getExecuteAt());
     playing = true;
     if (stopTimer) clearTimeout(stopTimer);
-    if (durationMs > 0) {
+    if ($durationMs > 0) {
       stopTimer = setTimeout(() => {
         handleClear(toAll);
-      }, durationMs);
-      playingUntil = Date.now() + durationMs;
+      }, $durationMs);
+      playingUntil = Date.now() + $durationMs;
     } else {
       playingUntil = 0;
     }
@@ -82,7 +95,7 @@
   function queueUpdate() {
     if (!$streamEnabled) return;
     if (!hasSelection || !playing) return;
-    if (durationMs > 0 && Date.now() > playingUntil) return;
+    if ($durationMs > 0 && Date.now() > playingUntil) return;
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
       screenColor(buildPayload(), undefined, false, getExecuteAt());
@@ -100,20 +113,20 @@
 <Card title="🎨 Screen Color">
   <div class="control-group">
     <div class="main-controls">
-      <Input type="color" label="Primary" bind:value={selectedColor} />
-      <Input type="color" label="Secondary" bind:value={screenSecondaryColor} />
+      <Input type="color" label="Primary" bind:value={$selectedColor} />
+      <Input type="color" label="Secondary" bind:value={$screenSecondaryColor} />
     </div>
 
     <div class="opacity-row">
-      <Slider label="Max Opacity" bind:value={screenMaxOpacity} step={0.05} max={1} suffix="" />
-      <Slider label="Min Opacity" bind:value={screenMinOpacity} step={0.05} max={1} suffix="" />
+      <Slider label="Max Opacity" bind:value={$screenMaxOpacity} step={0.05} max={1} suffix="" />
+      <Slider label="Min Opacity" bind:value={$screenMinOpacity} step={0.05} max={1} suffix="" />
     </div>
 
     <div class="params-section">
-      <Select label="Waveform" options={waveforms} bind:value={screenWaveform} />
+      <Select label="Waveform" options={waveforms} bind:value={$screenWaveform} />
       <Slider
         label="Frequency"
-        bind:value={screenFrequency}
+        bind:value={$screenFrequency}
         min={0.2}
         max={20}
         step={0.1}
@@ -121,7 +134,7 @@
       />
       <Slider
         label="Dur (ms)"
-        bind:value={durationMs}
+        bind:value={$durationMs}
         min={0}
         max={8000}
         step={50}
@@ -176,11 +189,7 @@
     gap: var(--space-md);
   }
 
-  .row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-md);
-  }
+  /* .row unused */
 
   .button-grid {
     display: grid;

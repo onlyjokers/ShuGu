@@ -5,6 +5,9 @@ import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
 import type { SensorDataMessage, ClientInfo, ScreenColorPayload } from '@shugu/protocol';
 
+import { parameterRegistry } from '../parameters/registry';
+import { registerDefaultControlParameters } from '../parameters/presets';
+
 // SDK instance
 let sdk: ManagerSDK | null = null;
 
@@ -46,6 +49,9 @@ export function connect(config: ManagerSDKConfig): void {
         sdk.disconnect();
     }
 
+    // Seed registry-based control parameters early so MIDI/AutoUI/Project restore can see them.
+    registerDefaultControlParameters();
+
     sdk = new ManagerSDK(config);
 
     // Subscribe to state changes
@@ -71,6 +77,7 @@ export function disconnect(): void {
     sdk?.disconnect();
     sdk = null;
     sensorData.set(new Map());
+    parameterRegistry.clear();
 }
 
 /**

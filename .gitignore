@@ -4,9 +4,17 @@ node_modules
 
 # Build outputs
 dist
+dist2
+dist-user
+dist-local
+dist-writable
+dist-out
+dist-dev*
 .svelte-kit
 .next
 build
+.vite-cache*
+vite-cache*
 
 # Environment
 .env
@@ -36,3 +44,12 @@ coverage
 *.temp
 .tmp.driveupload
 .driveupload
+
+# Security & Secrets
+secrets/
+certs/
+*.pem
+*.key
+
+# Python Cache
+**/__pycache__/

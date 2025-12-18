@@ -3,28 +3,33 @@
  */
 import { writable, derived, get } from 'svelte/store';
 import {
-    ClientSDK,
-    SensorManager,
-    FlashlightController,
-    ScreenController,
-    VibrationController,
-    SoundPlayer,
-    ModulatedSoundPlayer,
-    WakeLockController,
-    type ClientState,
-    type ClientSDKConfig
+  ClientSDK,
+  SensorManager,
+  FlashlightController,
+  ScreenController,
+  VibrationController,
+  SoundPlayer,
+  ModulatedSoundPlayer,
+  WakeLockController,
+  NodeExecutor,
+  type NodeCommand,
+  type ClientState,
+  type ClientSDKConfig,
+  type ClientIdentity,
 } from '@shugu/sdk-client';
 import type {
-    ControlMessage,
-    PluginControlMessage,
-    FlashlightPayload,
-    ScreenColorPayload,
-    VibratePayload,
-    PlaySoundPayload,
-    PlayMediaPayload,
-    ShowImagePayload,
-    ModulateSoundPayload,
-    VisualSceneSwitchPayload
+  ControlMessage,
+  PluginControlMessage,
+  ControlAction,
+  ControlPayload,
+  FlashlightPayload,
+  ScreenColorPayload,
+  VibratePayload,
+  PlaySoundPayload,
+  PlayMediaPayload,
+  ShowImagePayload,
+  ModulateSoundPayload,
+  VisualSceneSwitchPayload,
 } from '@shugu/protocol';
 
 // SDK and controller instances
@@ -36,32 +41,35 @@ let vibrationController: VibrationController | null = null;
 let soundPlayer: SoundPlayer | null = null;
 let modulatedSoundPlayer: ModulatedSoundPlayer | null = null;
 let wakeLockController: WakeLockController | null = null;
+let nodeExecutor: NodeExecutor | null = null;
 
 // Core state store
 export const state = writable<ClientState>({
-    status: 'disconnected',
-    clientId: null,
-    timeSync: {
-        offset: 0,
-        samples: [],
-        maxSamples: 10,
-        initialized: false,
-        lastSyncTime: 0,
-    },
-    error: null,
+  status: 'disconnected',
+  clientId: null,
+  timeSync: {
+    offset: 0,
+    samples: [],
+    maxSamples: 10,
+    initialized: false,
+    lastSyncTime: 0,
+  },
+  error: null,
 });
 
 // Permission states
 export const permissions = writable<{
-    microphone: 'pending' | 'granted' | 'denied';
-    motion: 'pending' | 'granted' | 'denied';
-    camera: 'pending' | 'granted' | 'denied';
-    wakeLock: 'pending' | 'granted' | 'denied';
+  microphone: 'pending' | 'granted' | 'denied';
+  motion: 'pending' | 'granted' | 'denied';
+  camera: 'pending' | 'granted' | 'denied';
+  wakeLock: 'pending' | 'granted' | 'denied';
+  geolocation: 'pending' | 'granted' | 'denied' | 'unavailable' | 'unsupported';
 }>({
-    microphone: 'pending',
-    motion: 'pending',
-    camera: 'pending',
-    wakeLock: 'pending',
+  microphone: 'pending',
+  motion: 'pending',
+  camera: 'pending',
+  wakeLock: 'pending',
+  geolocation: 'pending',
 });
 
 // Latency in ms (smooth average)
@@ -109,327 +117,457 @@ export const imageState = writable<{
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clientId = derived(state, ($state) => $state.clientId);
 
+const DEVICE_ID_STORAGE_KEY = 'shugu-device-id';
+const INSTANCE_ID_STORAGE_KEY = 'shugu-client-instance-id';
+const CLIENT_ID_STORAGE_KEY = 'shugu-client-id';
+
+function createRandomId(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  }
+  return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+function getOrCreateStorageId(storage: Storage, key: string, prefix: string): string {
+  const existing = storage.getItem(key);
+  if (existing && existing.trim()) return existing;
+  const id = createRandomId(prefix);
+  storage.setItem(key, id);
+  return id;
+}
+
+function getOrCreateClientIdentity(): ClientIdentity | null {
+  if (typeof window === 'undefined') return null;
+
+  const deviceId = getOrCreateStorageId(window.localStorage, DEVICE_ID_STORAGE_KEY, 'c_');
+  const instanceId = getOrCreateStorageId(window.sessionStorage, INSTANCE_ID_STORAGE_KEY, 'i_');
+
+  const storedClientId = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  const clientId = storedClientId && storedClientId.trim() ? storedClientId : deviceId;
+  window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+
+  return { deviceId, instanceId, clientId };
+}
+
+function persistAssignedClientId(assignedClientId: string): void {
+  if (typeof window === 'undefined') return;
+  if (!assignedClientId) return;
+  const current = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (current === assignedClientId) return;
+  window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, assignedClientId);
+}
+
 /**
  * Initialize and connect to server
  */
-export async function initialize(config: ClientSDKConfig): Promise<void> {
-    // Initialize SDK
-    sdk = new ClientSDK(config);
+export function initialize(config: ClientSDKConfig, options?: { autoConnect?: boolean }): void {
+  const identity = getOrCreateClientIdentity();
 
-    // Subscribe to state changes
-    sdk.onStateChange((newState) => {
-        state.set(newState);
-    });
+  // Initialize SDK
+  sdk = new ClientSDK({
+    ...config,
+    identity: config.identity ?? identity ?? undefined,
+  });
 
-    // Subscribe to control messages
-    sdk.onControl(handleControlMessage);
-    sdk.onPluginControl(handlePluginControlMessage);
+  // Subscribe to state changes
+  sdk.onStateChange((newState) => {
+    state.set(newState);
+    if (newState.clientId) {
+      persistAssignedClientId(newState.clientId);
+    }
+  });
 
-    // Initialize controllers
-    flashlightController = new FlashlightController();
-    screenController = new ScreenController();
-    vibrationController = new VibrationController();
-    soundPlayer = new SoundPlayer();
-    modulatedSoundPlayer = new ModulatedSoundPlayer();
-    wakeLockController = new WakeLockController();
-    sensorManager = new SensorManager({ throttleMs: 100 });
+  // Subscribe to control messages
+  sdk.onControl(handleControlMessage);
+  sdk.onPluginControl(handlePluginControlMessage);
 
-    // Connect to server
+  // Initialize controllers
+  flashlightController = new FlashlightController();
+  screenController = new ScreenController();
+  vibrationController = new VibrationController();
+  soundPlayer = new SoundPlayer();
+  modulatedSoundPlayer = new ModulatedSoundPlayer();
+  wakeLockController = new WakeLockController();
+  sensorManager = new SensorManager({ throttleMs: 100 });
+  nodeExecutor = new NodeExecutor(
+    sdk,
+    (cmd: NodeCommand) => executeControl(cmd.action, cmd.payload, cmd.executeAt),
+    {
+      canRunCapability: (capability) => {
+        const p = get(permissions);
+        if (capability === 'flashlight') return p.camera === 'granted';
+        if (capability === 'sensors') return p.motion === 'granted' || p.microphone === 'granted';
+        return true;
+      },
+    }
+  );
+
+  if (options?.autoConnect !== false) {
     sdk.connect();
+  }
+}
+
+export function connectToServer(): void {
+  sdk?.connect();
+}
+
+/**
+ * Disconnect socket only (keep SDK + controllers alive).
+ * Useful for treating "background/lock screen" as offline without losing app state.
+ */
+export function disconnectFromServer(): void {
+  sdk?.disconnect();
 }
 
 /**
  * Request all permissions
  */
 export async function requestPermissions(): Promise<void> {
-    // Request microphone
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStream.set(stream);
-        permissions.update(p => ({ ...p, microphone: 'granted' }));
+  // Kick off permission prompts synchronously (before the first await) so iOS can show them.
+  // Some browser APIs require being triggered within the same user gesture stack.
+  const motionPermissionPromise = sensorManager
+    ? sensorManager.requestPermissions()
+    : Promise.resolve({ granted: false, error: 'Sensor manager not initialized' });
 
-        // Initialize sound player with user gesture
-        await soundPlayer?.init();
-    } catch (error) {
-        console.warn('[Permissions] Microphone denied:', error);
-        permissions.update(p => ({ ...p, microphone: 'denied' }));
-    }
+  let microphonePromise: Promise<MediaStream>;
+  if (navigator.mediaDevices?.getUserMedia) {
+    microphonePromise = navigator.mediaDevices.getUserMedia({ audio: true });
+  } else {
+    microphonePromise = Promise.reject(new Error('mediaDevices.getUserMedia is not supported'));
+  }
 
-    // Request motion sensors
-    if (sensorManager) {
-        const result = await sensorManager.requestPermissions();
-        permissions.update(p => ({ ...p, motion: result.granted ? 'granted' : 'denied' }));
-        if (result.granted) {
-            sensorManager.start();
-            setupSensorReporting();
-        }
-    }
+  const soundInitPromise = soundPlayer
+    ? soundPlayer.init().catch((error) => {
+        console.warn('[Permissions] Sound player init failed:', error);
+      })
+    : Promise.resolve();
 
-    // Request wake lock
-    if (wakeLockController) {
-        const success = await wakeLockController.request();
-        permissions.update(p => ({ ...p, wakeLock: success ? 'granted' : 'denied' }));
-    }
+  const [motionResult, microphoneResult] = await Promise.allSettled([
+    motionPermissionPromise,
+    microphonePromise,
+  ]);
 
-    // Initialize flashlight (camera)
-    if (flashlightController) {
-        const success = await flashlightController.init();
-        permissions.update(p => ({ ...p, camera: success ? 'granted' : 'denied' }));
+  // Handle motion sensors
+  if (motionResult.status === 'fulfilled') {
+    permissions.update((p) => ({
+      ...p,
+      motion: motionResult.value.granted ? 'granted' : 'denied',
+    }));
+    if (motionResult.value.granted && sensorManager) {
+      sensorManager.start();
+      setupSensorReporting();
+    } else if (!motionResult.value.granted) {
+      console.warn('[Permissions] Motion/orientation denied:', motionResult.value.error);
     }
+  } else {
+    console.warn(
+      '[Permissions] Motion/orientation permission request failed:',
+      motionResult.reason
+    );
+    permissions.update((p) => ({ ...p, motion: 'denied' }));
+  }
+
+  // Handle microphone
+  if (microphoneResult.status === 'fulfilled') {
+    audioStream.set(microphoneResult.value);
+    permissions.update((p) => ({ ...p, microphone: 'granted' }));
+  } else {
+    console.warn('[Permissions] Microphone denied:', microphoneResult.reason);
+    permissions.update((p) => ({ ...p, microphone: 'denied' }));
+  }
+
+  await soundInitPromise;
+
+  // Request wake lock
+  if (wakeLockController) {
+    const success = await wakeLockController.request();
+    permissions.update((p) => ({ ...p, wakeLock: success ? 'granted' : 'denied' }));
+  }
+
+  // Initialize flashlight (camera)
+  if (flashlightController) {
+    const success = await flashlightController.init();
+    permissions.update((p) => ({ ...p, camera: success ? 'granted' : 'denied' }));
+  }
 }
 
 /**
  * Set up sensor data reporting to server
  */
 function setupSensorReporting(): void {
-    if (!sensorManager) return;
+  if (!sensorManager) return;
 
-    sensorManager.onOrientation((data) => {
-        sdk?.sendSensorData('orientation', data);
-    });
+  sensorManager.onOrientation((data) => {
+    sdk?.sendSensorData('orientation', data);
+  });
 
-    sensorManager.onGyro((data) => {
-        sdk?.sendSensorData('gyro', data);
-    });
+  sensorManager.onGyro((data) => {
+    sdk?.sendSensorData('gyro', data);
+  });
 
-    sensorManager.onAccel((data) => {
-        sdk?.sendSensorData('accel', data);
-    });
+  sensorManager.onAccel((data) => {
+    sdk?.sendSensorData('accel', data);
+  });
 }
 
 /**
  * Handle control messages from manager
  */
 function handleControlMessage(message: ControlMessage): void {
-    const executeAction = (delaySeconds = 0) => {
-        switch (message.action) {
-            case 'flashlight':
-                flashlightController?.setMode(message.payload as FlashlightPayload);
-                break;
+  executeControl(message.action, message.payload, message.executeAt);
+}
 
-            case 'screenColor':
-                screenController?.setColor(message.payload as ScreenColorPayload);
-                break;
-
-            case 'screenBrightness':
-                const brightness = (message.payload as { brightness: number }).brightness;
-                screenController?.setBrightness(brightness);
-                break;
-
-            case 'vibrate':
-                vibrationController?.vibrate(message.payload as VibratePayload);
-                break;
-
-            case 'modulateSound':
-                modulatedSoundPlayer?.play(
-                    message.payload as ModulateSoundPayload,
-                    soundPlayer?.getAudioContext(),
-                    delaySeconds // Use precise audio scheduling
-                );
-                break;
-            case 'modulateSoundUpdate':
-                modulatedSoundPlayer?.update({
-                    frequency: (message.payload as ModulateSoundPayload).frequency,
-                    volume: (message.payload as ModulateSoundPayload).volume,
-                    waveform: (message.payload as ModulateSoundPayload).waveform,
-                    modFrequency: (message.payload as ModulateSoundPayload).modFrequency,
-                    modDepth: (message.payload as ModulateSoundPayload).modDepth,
-                    durationMs: (message.payload as ModulateSoundPayload).duration,
-                });
-                break;
-
-            case 'playSound':
-                soundPlayer?.play(message.payload as PlaySoundPayload, delaySeconds);
-                break;
-
-            case 'playMedia': {
-                const mediaPayload = message.payload as PlayMediaPayload;
-                // Check if it's a video by extension or explicit type
-                const isVideo = mediaPayload.mediaType === 'video' || 
-                    /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(mediaPayload.url);
-                
-                if (isVideo) {
-                    videoState.set({
-                        url: mediaPayload.url,
-                        playing: true,
-                        muted: mediaPayload.muted ?? true,
-                        loop: mediaPayload.loop ?? false,
-                        volume: mediaPayload.volume ?? 1,
-                    });
-                } else {
-                    // Fallback to audio
-                    soundPlayer?.play({
-                        url: mediaPayload.url,
-                        volume: mediaPayload.volume,
-                        loop: mediaPayload.loop,
-                        fadeIn: mediaPayload.fadeIn,
-                    }, delaySeconds);
-                }
-                break;
-            }
-
-            case 'stopMedia':
-                videoState.set({
-                    url: null,
-                    playing: false,
-                    muted: true,
-                    loop: false,
-                    volume: 1,
-                });
-                soundPlayer?.stop();
-                break;
-
-            case 'stopSound':
-                soundPlayer?.stop();
-                modulatedSoundPlayer?.stop();
-                break;
-
-            case 'showImage': {
-                const imagePayload = message.payload as ShowImagePayload;
-                imageState.set({
-                    url: imagePayload.url,
-                    visible: true,
-                    duration: imagePayload.duration,
-                });
-                break;
-            }
-
-            case 'hideImage':
-                imageState.set({
-                    url: null,
-                    visible: false,
-                    duration: undefined,
-                });
-                break;
-
-            case 'visualSceneSwitch':
-                const scenePayload = message.payload as VisualSceneSwitchPayload;
-                currentScene.set(scenePayload.sceneId);
-                break;
-
-            case 'setDataReportingRate':
-                const ratePayload = message.payload as { sensorHz?: number };
-                if (sensorManager && ratePayload.sensorHz) {
-                    sensorManager.setThrottleMs(1000 / ratePayload.sensorHz);
-                }
-                break;
-
-            case 'setSensorState':
-                const sensorStatePayload = message.payload as { active: boolean };
-                if (sensorManager) {
-                    if (sensorStatePayload.active) {
-                        sensorManager.start();
-                    } else {
-                        sensorManager.stop();
-                    }
-                }
-                break;
-
-            case 'asciiMode':
-                asciiEnabled.set((message.payload as { enabled: boolean }).enabled);
-                break;
-
-            case 'asciiResolution':
-                asciiResolution.set((message.payload as { cellSize: number }).cellSize);
-                break;
-            
-            case 'ping':
-                 if (sdk && message.id) {
-                    // Logic handled in ping() method usually 
-                 }
-                 break;
-
-            default:
-                console.log('[Client] Unknown action:', message.action);
-        }
-    };
-
-    if (message.executeAt && sdk) {
-        // Special efficient path for audio: use Web Audio scheduling
-        if (message.action === 'modulateSound' || message.action === 'playSound') {
-            const delayMs = sdk.getDelayUntil(message.executeAt);
-            const delaySeconds = Math.max(0, delayMs / 1000);
-            
-            // Execute immediately but pass the Future Delay to the audio engine
-            // This bypasses setTimeout jitter
-            executeAction(delaySeconds);
-        } else {
-            // Standard scheduling for visual effects (setTimeout is fine)
-            const { cancel, delay } = sdk.scheduleAt(message.executeAt, () => executeAction(0));
-            if (delay < 0) {
-                // Already past
-                executeAction(0);
-            }
-        }
-    } else {
-        executeAction(0);
+function executeControl(action: ControlAction, payload: ControlPayload, executeAt?: number): void {
+  const executeAction = (delaySeconds = 0) => {
+    if (import.meta.env.DEV && typeof window !== 'undefined' && (window as any).__SHUGU_E2E) {
+      const entry = { at: Date.now(), action, payload, executeAt };
+      (window as any).__SHUGU_E2E_LAST_COMMAND = entry;
+      const list = ((window as any).__SHUGU_E2E_COMMANDS ??= []) as any[];
+      list.push(entry);
+      if (list.length > 200) list.splice(0, list.length - 200);
     }
+
+    switch (action) {
+      case 'flashlight':
+        flashlightController?.setMode(payload as FlashlightPayload);
+        break;
+
+      case 'screenColor':
+        screenController?.setColor(payload as ScreenColorPayload);
+        break;
+
+      case 'screenBrightness':
+        {
+          const brightness = (payload as { brightness: number }).brightness;
+          screenController?.setBrightness(brightness);
+        }
+        break;
+
+      case 'vibrate':
+        vibrationController?.vibrate(payload as VibratePayload);
+        break;
+
+      case 'modulateSound':
+        modulatedSoundPlayer?.play(
+          payload as ModulateSoundPayload,
+          soundPlayer?.getAudioContext(),
+          delaySeconds // Use precise audio scheduling
+        );
+        break;
+      case 'modulateSoundUpdate':
+        modulatedSoundPlayer?.update({
+          frequency: (payload as ModulateSoundPayload).frequency,
+          volume: (payload as ModulateSoundPayload).volume,
+          waveform: (payload as ModulateSoundPayload).waveform,
+          modFrequency: (payload as ModulateSoundPayload).modFrequency,
+          modDepth: (payload as ModulateSoundPayload).modDepth,
+          durationMs: (payload as ModulateSoundPayload).duration,
+        });
+        break;
+
+      case 'playSound':
+        soundPlayer?.play(payload as PlaySoundPayload, delaySeconds);
+        break;
+
+      case 'playMedia': {
+        const mediaPayload = payload as PlayMediaPayload;
+        // Check if it's a video by extension or explicit type
+        const isVideo =
+          mediaPayload.mediaType === 'video' ||
+          /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(mediaPayload.url);
+
+        if (isVideo) {
+          videoState.set({
+            url: mediaPayload.url,
+            playing: true,
+            muted: mediaPayload.muted ?? true,
+            loop: mediaPayload.loop ?? false,
+            volume: mediaPayload.volume ?? 1,
+          });
+        } else {
+          // Fallback to audio
+          soundPlayer?.play(
+            {
+              url: mediaPayload.url,
+              volume: mediaPayload.volume,
+              loop: mediaPayload.loop,
+              fadeIn: mediaPayload.fadeIn,
+            },
+            delaySeconds
+          );
+        }
+        break;
+      }
+
+      case 'stopMedia':
+        videoState.set({
+          url: null,
+          playing: false,
+          muted: true,
+          loop: false,
+          volume: 1,
+        });
+        soundPlayer?.stop();
+        break;
+
+      case 'stopSound':
+        soundPlayer?.stop();
+        modulatedSoundPlayer?.stop();
+        break;
+
+      case 'showImage': {
+        const imagePayload = payload as ShowImagePayload;
+        imageState.set({
+          url: imagePayload.url,
+          visible: true,
+          duration: imagePayload.duration,
+        });
+        break;
+      }
+
+      case 'hideImage':
+        imageState.set({
+          url: null,
+          visible: false,
+          duration: undefined,
+        });
+        break;
+
+      case 'visualSceneSwitch':
+        {
+          const scenePayload = payload as VisualSceneSwitchPayload;
+          currentScene.set(scenePayload.sceneId);
+        }
+        break;
+
+      case 'setDataReportingRate':
+        {
+          const ratePayload = payload as { sensorHz?: number };
+          if (sensorManager && ratePayload.sensorHz) {
+            sensorManager.setThrottleMs(1000 / ratePayload.sensorHz);
+          }
+        }
+        break;
+
+      case 'setSensorState':
+        {
+          const sensorStatePayload = payload as { active: boolean };
+          if (sensorManager) {
+            if (sensorStatePayload.active) {
+              sensorManager.start();
+            } else {
+              sensorManager.stop();
+            }
+          }
+        }
+        break;
+
+      case 'asciiMode':
+        asciiEnabled.set((payload as { enabled: boolean }).enabled);
+        break;
+
+      case 'asciiResolution':
+        asciiResolution.set((payload as { cellSize: number }).cellSize);
+        break;
+
+      default:
+        console.log('[Client] Unknown action:', action);
+    }
+  };
+
+  if (executeAt && sdk) {
+    // Special efficient path for audio: use Web Audio scheduling
+    if (action === 'modulateSound' || action === 'playSound') {
+      const delayMs = sdk.getDelayUntil(executeAt);
+      const delaySeconds = Math.max(0, delayMs / 1000);
+
+      // Execute immediately but pass the Future Delay to the audio engine
+      // This bypasses setTimeout jitter
+      executeAction(delaySeconds);
+    } else {
+      // Standard scheduling for visual effects (setTimeout is fine)
+      const { delay } = sdk.scheduleAt(executeAt, () => executeAction(0));
+      if (delay < 0) {
+        // Already past
+        executeAction(0);
+      }
+    }
+  } else {
+    executeAction(0);
+  }
 }
 
 /**
  * Handle plugin control messages
  */
 function handlePluginControlMessage(message: PluginControlMessage): void {
-    console.log('[Client] Plugin control:', message.pluginId, message.command);
-    // Plugin control is handled by AudioPipeline component
+  console.log('[Client] Plugin control:', message.pluginId, message.command);
+  if (message.pluginId === 'node-executor') {
+    nodeExecutor?.handlePluginControl(message);
+    return;
+  }
 }
 
 /**
  * Disconnect and cleanup
  */
 export function disconnect(): void {
-    sdk?.disconnect();
-    sdk = null;
+  sdk?.disconnect();
+  sdk = null;
+  // geolocation is handled by the start gate (page); keep permission state as-is.
 
-    sensorManager?.stop();
-    sensorManager = null;
+  nodeExecutor?.destroy();
+  nodeExecutor = null;
 
-    flashlightController?.destroy();
-    flashlightController = null;
+  sensorManager?.stop();
+  sensorManager = null;
 
-    screenController?.destroy();
-    screenController = null;
+  flashlightController?.destroy();
+  flashlightController = null;
 
-    soundPlayer?.destroy();
-    soundPlayer = null;
+  screenController?.destroy();
+  screenController = null;
 
-    wakeLockController?.release();
-    wakeLockController = null;
+  soundPlayer?.destroy();
+  soundPlayer = null;
 
-    // Stop audio stream
-    const stream = get(audioStream);
-    if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        audioStream.set(null);
-    }
+  wakeLockController?.release();
+  wakeLockController = null;
+
+  // Stop audio stream
+  const stream = get(audioStream);
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop());
+    audioStream.set(null);
+  }
 }
 
 /**
  * Get SDK for plugin access
  */
 export function getSDK(): ClientSDK | null {
-    return sdk;
+  return sdk;
 }
 
 /**
  * Get sound player for audio context access
  */
 export function getSoundPlayer(): SoundPlayer | null {
-    return soundPlayer;
+  return soundPlayer;
 }
 
 /**
  * Measure round-trip latency
  */
 export async function measureLatency(): Promise<number> {
-    if (!sdk) return 0;
-    
-    try {
-        const rtt = await sdk.ping();
-        latency.set(rtt);
-        return rtt;
-    } catch (e) {
-        console.warn('[Client] Latency check failed:', e);
-        return 0;
-    }
+  if (!sdk) return 0;
+
+  try {
+    const rtt = await sdk.ping();
+    latency.set(rtt);
+    return rtt;
+  } catch (e) {
+    console.warn('[Client] Latency check failed:', e);
+    return 0;
+  }
 }

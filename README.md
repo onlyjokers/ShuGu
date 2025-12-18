@@ -3,7 +3,7 @@
 A Web-based multi-device real-time interactive system for live performances, consisting of:
 
 - **Manager**: Desktop control panel for performers
-- **Client**: Mobile web app for audience interaction  
+- **Client**: Mobile web app for audience interaction
 - **Server**: Node.js WebSocket server for message routing
 
 ## Features
@@ -57,35 +57,51 @@ pnpm run build:all
 pnpm run dev:all
 
 # Or start individually:
-pnpm run dev:server   # Server on http://localhost:3001
-pnpm run dev:manager  # Manager on http://localhost:5173
-pnpm run dev:client   # Client on http://localhost:5174
+pnpm run dev:server   # Server on https://localhost:3001 (requires secrets/cert.pem + secrets/key.pem)
+pnpm run dev:manager  # Manager on https://localhost:5173 (self-signed via Vite basicSsl)
+pnpm run dev:client   # Client on https://localhost:5174 (self-signed via Vite basicSsl)
 ```
 
 ### Testing
 
-1. Open Manager in desktop browser: `http://localhost:5173`
-2. Connect to server (default: `http://localhost:3001`)
-3. Open Client on mobile device: `http://<your-ip>:5174`
+1. Open Manager in desktop browser: `https://localhost:5173`
+2. Connect to server (default: `https://localhost:3001`)
+3. Open Client on mobile device: `https://<your-ip>:5174`
 4. Click "进入体验 / Start Experience" on mobile
 5. Approve permission requests
 6. Select connected clients in Manager and send control commands
 
+## Node Executor (client-side loops)
+
+Manager Node Graph can detect a self-loop that includes `Client` + `Client Sensors` and deploy that subgraph to the
+client to run locally (reduces bandwidth and manager CPU).
+
+- Protocol: `PluginControlMessage` (`pluginId: node-executor`, `command: deploy/start/stop/remove`)
+- Safety: capability gating + whitelist + resource limits on the client
+- Monitoring: client reports `node-executor` status/logs back to manager
+- Single source of truth: core runtime/types/registry live in `@shugu/node-core` (manager wraps it; `@shugu/sdk-client` re-exports)
+
+See `docs/node-executor.md` and run:
+
+- `pnpm e2e:node-executor` (Playwright + dev servers)
+- `pnpm e2e:node-executor:offline` (no dev servers / no Playwright)
+
 ## Mobile Browser Compatibility
 
 ### Tested Browsers
+
 - ✅ WeChat in-app browser (Android/iOS)
 - ✅ Safari (iOS 13+)
 - ✅ Chrome (Android)
 
 ### Feature Fallbacks
 
-| Feature | Primary | Fallback |
-|---------|---------|----------|
-| Flashlight | Camera torch API | White screen |
-| Vibration | navigator.vibrate() | Silent fail |
-| Wake Lock | Screen Wake Lock API | User must keep screen on |
-| Motion sensors | DeviceMotion/Orientation | Disabled |
+| Feature        | Primary                  | Fallback                 |
+| -------------- | ------------------------ | ------------------------ |
+| Flashlight     | Camera torch API         | White screen             |
+| Vibration      | navigator.vibrate()      | Silent fail              |
+| Wake Lock      | Screen Wake Lock API     | User must keep screen on |
+| Motion sensors | DeviceMotion/Orientation | Disabled                 |
 
 > **Note**: iOS 13+ requires explicit permission for motion sensors. The permission request must be triggered by a user gesture.
 
@@ -117,14 +133,18 @@ import type { AudioPlugin } from '@shugu/audio-plugins';
 
 export class MyPlugin implements AudioPlugin {
   id = 'my-plugin';
-  
+
   async init(ctx: AudioContext, source: AudioNode) {
     // Setup audio processing
   }
-  
-  start() { /* Begin analysis */ }
-  stop() { /* Stop analysis */ }
-  
+
+  start() {
+    /* Begin analysis */
+  }
+  stop() {
+    /* Stop analysis */
+  }
+
   onFeature(cb: (feature: any) => void) {
     // Register callback for feature output
   }
@@ -138,15 +158,15 @@ import type { VisualScene } from '@shugu/visual-plugins';
 
 export class MyScene implements VisualScene {
   id = 'my-scene';
-  
+
   mount(container: HTMLElement) {
     // Create Three.js scene
   }
-  
+
   unmount() {
     // Cleanup
   }
-  
+
   update(dt: number, context: VisualContext) {
     // Update scene with sensor/audio data
   }

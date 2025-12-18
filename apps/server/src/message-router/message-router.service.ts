@@ -127,9 +127,10 @@ export class MessageRouterService {
             case 'clientIds':
                 return this.clientRegistry.getSocketIds(target.ids);
 
-            case 'group':
+            case 'group': {
                 const clients = this.clientRegistry.getClientsByGroup(target.groupId);
                 return clients.map(c => c.socketId);
+            }
 
             default:
                 return [];

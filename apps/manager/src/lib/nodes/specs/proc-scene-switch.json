@@ -1,0 +1,38 @@
+{
+  "type": "proc-scene-switch",
+  "label": "Visual Scene",
+  "category": "Processors",
+  "inputs": [
+    { "id": "index", "label": "Index", "type": "number", "min": 0, "max": 1, "step": 0.01 }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    {
+      "key": "sceneId",
+      "label": "Scene",
+      "type": "select",
+      "defaultValue": "box-scene",
+      "options": [
+        { "value": "box-scene", "label": "3D Box" },
+        { "value": "mel-scene", "label": "Mel Spectrogram" }
+      ]
+    }
+  ],
+  "runtime": {
+    "kind": "command",
+    "command": {
+      "action": "visualSceneSwitch",
+      "payload": {
+        "sceneId": {
+          "kind": "enumFromThreshold",
+          "inputKey": "index",
+          "threshold": 0.5,
+          "whenTrue": "mel-scene",
+          "whenFalse": "box-scene",
+          "configKey": "sceneId",
+          "default": "box-scene"
+        }
+      }
+    }
+  }
+}

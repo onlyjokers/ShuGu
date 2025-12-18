@@ -40,15 +40,26 @@ export class EventsGateway
         // Get role from query params
         const role = (client.handshake.query.role as ConnectionRole) || 'client';
         const userAgent = client.handshake.headers['user-agent'];
+        const auth = client.handshake.auth as Record<string, unknown> | undefined;
 
         console.log(`[Gateway] Connection: ${client.id} as ${role}`);
 
         // Register the connection
-        const clientId = this.clientRegistry.registerConnection(
+        const { clientId, replacedSocketId } = this.clientRegistry.registerConnection(
             client.id,
             role,
-            userAgent
+            userAgent,
+            {
+                deviceId: typeof auth?.deviceId === 'string' ? auth.deviceId : undefined,
+                instanceId: typeof auth?.instanceId === 'string' ? auth.instanceId : undefined,
+                clientId: typeof auth?.clientId === 'string' ? auth.clientId : undefined,
+            }
         );
+
+        if (replacedSocketId) {
+            const oldSocket = this.server.sockets.sockets.get(replacedSocketId);
+            oldSocket?.disconnect(true);
+        }
 
         // Send registration confirmation
         this.messageRouter.sendRegistrationConfirmation(client.id, clientId);

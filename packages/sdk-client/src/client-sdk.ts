@@ -4,7 +4,6 @@ import {
     ControlMessage,
     PluginControlMessage,
     SystemMessage,
-    SensorDataMessage,
     MediaMetaMessage,
     SOCKET_EVENTS,
     isControlMessage,
@@ -36,6 +35,36 @@ export interface ClientState {
 
 export type MessageHandler<T = Message> = (message: T) => void;
 
+export type LatestSensorData = {
+    sensorType: SensorType;
+    payload: SensorPayload;
+    /**
+     * Local time when the sensor data was produced/sent (ms).
+     */
+    clientTimestamp: number;
+    /**
+     * Best-effort server time approximation when produced (ms).
+     */
+    serverTimestamp: number;
+};
+
+export interface ClientIdentity {
+    /**
+     * Stable ID for a physical device (persist this in localStorage on the client app).
+     * Used by the server as the base when generating a unique clientId (e.g. `c_xxx`, `c_xxx_1`).
+     */
+    deviceId: string;
+    /**
+     * Stable ID for a browser tab/session (persist this in sessionStorage on the client app).
+     * Used to "take over" the same clientId on refresh/reconnect without creating duplicates.
+     */
+    instanceId: string;
+    /**
+     * Optional preferred clientId (persist per-tab, e.g. sessionStorage). Server may override to avoid collisions.
+     */
+    clientId?: string;
+}
+
 /**
  * Configuration for ClientSDK
  */
@@ -45,26 +74,39 @@ export interface ClientSDKConfig {
     reconnectionAttempts?: number;
     reconnectionDelay?: number;
     timeSyncInterval?: number;
+    identity?: ClientIdentity;
 }
+
+type ClientSDKInternalConfig = {
+    serverUrl: string;
+    autoReconnect: boolean;
+    reconnectionAttempts: number;
+    reconnectionDelay: number;
+    timeSyncInterval: number;
+    identity?: ClientIdentity;
+};
 
 /**
  * Client SDK for managing Socket.io connection and real-time communication
  */
 export class ClientSDK {
     private socket: Socket | null = null;
-    private config: Required<ClientSDKConfig>;
+    private config: ClientSDKInternalConfig;
     private state: ClientState;
     private stateListeners: Set<(state: ClientState) => void> = new Set();
     private messageHandlers: Map<string, Set<MessageHandler>> = new Map();
     private timeSyncIntervalId: ReturnType<typeof setInterval> | null = null;
+    private latestSensorData: LatestSensorData | null = null;
 
     constructor(config: ClientSDKConfig) {
         this.config = {
             serverUrl: config.serverUrl,
             autoReconnect: config.autoReconnect ?? true,
-            reconnectionAttempts: config.reconnectionAttempts ?? 10,
+            // Default to unlimited retries; the experience client should survive flaky networks.
+            reconnectionAttempts: config.reconnectionAttempts ?? Number.POSITIVE_INFINITY,
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
+            identity: config.identity,
         };
 
         this.state = {
@@ -79,12 +121,20 @@ export class ClientSDK {
      * Connect to the server
      */
     connect(): void {
-        if (this.socket?.connected) return;
+        if (this.socket) {
+            if (this.socket.connected) return;
+            this.updateState({ status: 'connecting', error: null });
+            this.socket.connect();
+            return;
+        }
 
         this.updateState({ status: 'connecting', error: null });
 
+        const auth = this.config.identity ?? undefined;
+
         this.socket = io(this.config.serverUrl, {
             query: { role: 'client' },
+            auth,
             // Use polling first for better mobile compatibility, then upgrade to websocket
             transports: ['polling', 'websocket'],
             // Increase timeouts for mobile networks
@@ -93,7 +143,9 @@ export class ClientSDK {
             reconnection: this.config.autoReconnect,
             reconnectionAttempts: this.config.reconnectionAttempts,
             reconnectionDelay: this.config.reconnectionDelay,
-            reconnectionDelayMax: 5000,
+            // Keep retries steady at reconnectionDelay (no exponential backoff / jitter).
+            reconnectionDelayMax: this.config.reconnectionDelay,
+            randomizationFactor: 0,
             // Force new connection
             forceNew: true,
         });
@@ -169,7 +221,21 @@ export class ClientSDK {
     /**
      * Send sensor data to server
      */
-    sendSensorData(sensorType: SensorType, payload: SensorPayload): void {
+    sendSensorData(
+        sensorType: SensorType,
+        payload: SensorPayload,
+        options?: { trackLatest?: boolean }
+    ): void {
+        const clientTimestamp = Date.now();
+        if (options?.trackLatest !== false) {
+            this.latestSensorData = {
+                sensorType,
+                payload,
+                clientTimestamp,
+                serverTimestamp: getServerTime(this.state.timeSync),
+            };
+        }
+
         if (!this.socket?.connected || !this.state.clientId) return;
 
         const message = createSensorDataMessage(
@@ -178,6 +244,14 @@ export class ClientSDK {
             payload
         );
         this.socket.emit(SOCKET_EVENTS.MSG, message);
+    }
+
+    /**
+     * Latest locally produced sensor message (best-effort snapshot).
+     * Useful for client-side execution (e.g. node-executor) even when offline.
+     */
+    getLatestSensorData(): LatestSensorData | null {
+        return this.latestSensorData ? { ...this.latestSensorData } : null;
     }
 
     /**
@@ -220,7 +294,18 @@ export class ClientSDK {
         this.socket.on('disconnect', (reason) => {
             console.log('[SDK Client] Disconnected:', reason);
             this.stopTimeSync();
-            this.updateState({ status: 'disconnected' });
+
+            // socket.io does not auto-reconnect if the server explicitly disconnected us.
+            if (this.config.autoReconnect && reason !== 'io client disconnect') {
+                this.updateState({ status: 'reconnecting', clientId: null });
+
+                if (reason === 'io server disconnect') {
+                    this.socket?.connect();
+                }
+                return;
+            }
+
+            this.updateState({ status: 'disconnected', clientId: null });
         });
 
         this.socket.on('connect_error', (error) => {
@@ -275,8 +360,16 @@ export class ClientSDK {
         switch (message.action) {
             case 'clientRegistered':
                 if (message.payload.clientId) {
-                    this.updateState({ clientId: message.payload.clientId });
-                    console.log('[SDK Client] Registered as:', message.payload.clientId);
+                    const assignedClientId = message.payload.clientId;
+                    this.updateState({ clientId: assignedClientId });
+                    console.log('[SDK Client] Registered as:', assignedClientId);
+
+                    // Persist the server-assigned clientId into auth so reconnects keep the same ID.
+                    if (this.socket && this.config.identity) {
+                        this.config.identity = { ...this.config.identity, clientId: assignedClientId };
+                        const existingAuth = (this.socket.auth ?? {}) as Record<string, unknown>;
+                        this.socket.auth = { ...existingAuth, clientId: assignedClientId };
+                    }
                 }
                 break;
         }

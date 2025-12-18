@@ -16,6 +16,18 @@ module.exports = {
         es2022: true,
         node: true
     },
+    overrides: [
+        {
+            files: ['*.svelte'],
+            parser: 'svelte-eslint-parser',
+            parserOptions: {
+                parser: '@typescript-eslint/parser',
+                extraFileExtensions: ['.svelte'],
+                sourceType: 'module',
+                ecmaVersion: 2022
+            }
+        }
+    ],
     rules: {
         '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
         '@typescript-eslint/no-explicit-any': 'warn',

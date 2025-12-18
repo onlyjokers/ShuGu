@@ -4,11 +4,11 @@
     "private": true,
     "description": "Mobile client for interactive art system",
     "scripts": {
-        "dev": "vite dev --port 5174 --host",
+        "dev": "vite dev --port 5174",
         "build": "vite build",
         "preview": "vite preview",
         "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-        "lint": "eslint src --ext .ts,.svelte",
+        "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.{ts,svelte}\"",
         "clean": "rm -rf .svelte-kit build"
     },
     "devDependencies": {
