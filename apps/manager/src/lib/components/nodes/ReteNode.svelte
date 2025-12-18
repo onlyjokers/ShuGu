@@ -3,7 +3,14 @@
   import type { ClassicScheme, SvelteArea2D } from 'rete-svelte-plugin/svelte/presets/classic/types';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
 
-  type NodeExtraData = { width?: number; height?: number; localLoop?: boolean; deployedLoop?: boolean };
+  type NodeExtraData = {
+    width?: number;
+    height?: number;
+    localLoop?: boolean;
+    deployedLoop?: boolean;
+    groupDisabled?: boolean;
+    groupSelected?: boolean;
+  };
 
   function sortByIndex<K, I extends undefined | { index?: number }>(entries: [K, I][]) {
     entries.sort((a, b) => ((a[1] && a[1].index) || 0) - ((b[1] && b[1].index) || 0));
@@ -27,6 +34,8 @@
   $: isActive = Boolean((data as any).active);
   $: activeInputs = new Set<string>((((data as any).activeInputs ?? []) as string[]).map(String));
   $: activeOutputs = new Set<string>((((data as any).activeOutputs ?? []) as string[]).map(String));
+  $: isGroupDisabled = Boolean((data as any).groupDisabled);
+  $: isGroupSelected = Boolean((data as any).groupSelected);
 
   // Live Port Values
   // Values are derived from NodeEngine runtime outputs and graph connections.
@@ -158,7 +167,7 @@
 </script>
 
 <div
-  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isActive ? 'active' : ''}"
+  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isActive ? 'active' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"
@@ -355,6 +364,24 @@
   .node.active {
     outline: 2px solid rgba(250, 204, 21, 0.55);
     outline-offset: 0;
+  }
+
+  .node.group-selected {
+    outline: 2px solid rgba(59, 130, 246, 0.55);
+    outline-offset: 0;
+  }
+
+  .node.group-disabled {
+    opacity: 0.42;
+    filter: grayscale(0.78) saturate(0.35);
+  }
+
+  .node.group-disabled .title {
+    color: rgba(226, 232, 240, 0.7);
+  }
+
+  .node.group-disabled .port-label {
+    color: rgba(226, 232, 240, 0.55);
   }
 
   .port-row.active {

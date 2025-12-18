@@ -22,6 +22,8 @@
 - Favor small, pure functions inside `packages/*`; avoid side-effects in module scope.
 - Run `pnpm format` before pushing; Prettier config is repo-wide.
 - Remember to comment when adding new features.
+- When creating a new file, write the purpose/role of the file at the top
+- When making drastic changes to a feature, file, some obsolete features, file comments you need to rewrite
 
 ## Testing Guidelines
 - Add focused unit tests alongside code (e.g., `*.spec.ts`) when introducing protocol or DSP changes.

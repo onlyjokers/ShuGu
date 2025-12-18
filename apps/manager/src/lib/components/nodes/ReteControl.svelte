@@ -40,6 +40,37 @@
     }
   }
 
+  function normalizeNumberInput(event: Event) {
+    if (!(data instanceof ClassicPreset.InputControl)) return;
+    if (data.type !== 'number') return;
+    if ((data as any).readonly) return;
+
+    const target = event.target as HTMLInputElement;
+    const raw = target.value;
+    if (raw === '') return;
+
+    const num = Number(raw);
+    const current = typeof (data as any).value === 'number' ? (data as any).value : 0;
+
+    if (!Number.isFinite(num)) {
+      target.value = String(current);
+      return;
+    }
+
+    let next = num;
+    const min = (data as any).min;
+    const max = (data as any).max;
+    if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
+    if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
+
+    // Force a canonical display string (e.g. "000" -> "0", "01.0" -> "1").
+    const canonical = String(next);
+    if (target.value !== canonical) target.value = canonical;
+
+    // Ensure the underlying control value matches the canonical/clamped value.
+    data.setValue(next);
+  }
+
   function changeSelect(event: Event) {
     const target = event.target as HTMLSelectElement;
     data?.setValue?.(target.value);
@@ -172,6 +203,7 @@
       disabled={data.readonly}
       on:pointerdown|stopPropagation
       on:input={changeInput}
+      on:blur={normalizeNumberInput}
     />
   </div>
 {:else if data?.controlType === 'select'}

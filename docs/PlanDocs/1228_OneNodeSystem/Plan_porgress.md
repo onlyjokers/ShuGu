@@ -100,3 +100,33 @@ This file tracks the implementation progress for `docs/PlanDocs/1228_OneNodeSyst
     - `pnpm lint`
     - `pnpm --filter @shugu/node-core run test`
     - `pnpm e2e:node-executor:offline`
+
+- Follow-up: Split the oversized Manager Node Graph canvas UI into smaller components for maintainability:
+  - New folder `apps/manager/src/lib/components/nodes/node-canvas/` with:
+    - `NodeCanvasToolbar.svelte` (toolbar + menu)
+    - `ExecutorLogsPanel.svelte`
+    - `NodePickerOverlay.svelte`
+    - `GroupFramesOverlay.svelte`
+    - `LoopFramesOverlay.svelte`
+    - `MarqueeOverlay.svelte`
+    - `NodeCanvasMinimap.svelte`
+  - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte` now focuses on orchestration + minimal base styles (Rete overrides stay here).
+  - Commands run:
+    - `pnpm --filter @shugu/manager exec tsc -p tsconfig.json --noEmit`
+    - `pnpm lint`
+    - `pnpm e2e:node-executor`
+
+- Follow-up: Fixed Node Group creation/disassemble interactions:
+  - Clicking “Create node group” no longer gets intercepted by the canvas pointerdown handler (exclude `.marquee-actions` from marquee targets).
+  - Group frames now include a “Disassemble” action to ungroup nodes (re-enables nodes if they were disabled by that group).
+  - Commands run:
+    - `pnpm --filter @shugu/manager exec tsc -p tsconfig.json --noEmit`
+
+- Follow-up: Improved Node Group UX (rename, loop-aware grouping, multi-drag):
+  - Group header shows editable name + node count, and group/loop action buttons use capsule styling.
+  - Creating a group expands to include whole loops when the selection intersects a loop, and group bounds wrap loop frames.
+  - Group creation pushes non-member nodes out of the group bounds with an ease-out animation.
+  - Dragging a node into a group frame auto-adds it to that group; marquee selection now supports multi-drag (move selected nodes together).
+  - Commands run:
+    - `pnpm --filter @shugu/manager exec tsc -p tsconfig.json --noEmit`
+    - `pnpm e2e:node-executor`

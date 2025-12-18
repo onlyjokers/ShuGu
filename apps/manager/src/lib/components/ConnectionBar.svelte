@@ -1,45 +1,12 @@
 <script lang="ts">
   import { connectionStatus, timeOffset } from '$lib/stores/manager';
-  import { formatTime } from '@shugu/ui-kit';
-  import { onDestroy } from 'svelte';
-
-  let displayLocalTime = Date.now();
-  let displayServerTime = Date.now();
-  let interval: ReturnType<typeof setInterval> | null = null;
-
-  function tick() {
-    displayLocalTime = Date.now();
-    displayServerTime = Date.now() + $timeOffset;
-  }
-
-  function startTicker() {
-    if (interval) return;
-    tick();
-    interval = setInterval(tick, 250);
-  }
-
-  function stopTicker() {
-    if (!interval) return;
-    clearInterval(interval);
-    interval = null;
-  }
-
-  $: if ($connectionStatus === 'connected') {
-    startTicker();
-  } else {
-    stopTicker();
-  }
-
-  onDestroy(stopTicker);
 </script>
 
 <div class="connection-bar">
-  <div class="status-indicator">
-    <span class="status-dot {$connectionStatus}"></span>
+  <span class="status-dot {$connectionStatus}"></span>
+  {#if $connectionStatus !== 'connected'}
     <span class="status-text">
-      {#if $connectionStatus === 'connected'}
-        Connected
-      {:else if $connectionStatus === 'connecting'}
+      {#if $connectionStatus === 'connecting'}
         Connecting...
       {:else if $connectionStatus === 'reconnecting'}
         Reconnecting...
@@ -49,18 +16,10 @@
         Disconnected
       {/if}
     </span>
-  </div>
-  
+  {/if}
+
   {#if $connectionStatus === 'connected'}
     <div class="time-display">
-      <div class="time-pill">
-        <span class="time-label">Local</span>
-        <span class="time-value">{formatTime(displayLocalTime)}</span>
-      </div>
-      <div class="time-pill">
-        <span class="time-label">Server</span>
-        <span class="time-value">{formatTime(displayServerTime)}</span>
-      </div>
       <div class="time-pill">
         <span class="time-label">Offset</span>
         <span class="time-value">{$timeOffset > 0 ? '+' : ''}{$timeOffset.toFixed(0)}ms</span>
@@ -73,18 +32,15 @@
   .connection-bar {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-md);
-    padding: 6px 10px;
-    max-width: 100%;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .status-indicator {
-    display: inline-flex;
-    align-items: center;
     gap: var(--space-sm);
+    min-height: 38px;
+    padding: 8px 12px;
+    max-width: 100%;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(14px);
     white-space: nowrap;
   }
 
@@ -111,7 +67,7 @@
     background: var(--color-error);
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
   }
-  
+
   .status-text {
     font-weight: 500;
     font-size: var(--text-sm);
@@ -129,10 +85,10 @@
     display: inline-flex;
     align-items: baseline;
     gap: 6px;
-    padding: 4px 8px;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-color);
-    background: rgba(0, 0, 0, 0.18);
+    padding: 0;
+    border-radius: 0;
+    border: none;
+    background: transparent;
   }
 
   .time-label {

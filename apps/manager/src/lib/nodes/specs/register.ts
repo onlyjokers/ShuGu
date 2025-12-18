@@ -406,8 +406,14 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
 
           const min = Number(config.min ?? 0);
           const max = Number(config.max ?? 1);
-          const invert = Boolean(config.invert);
-          const round = Boolean(config.round);
+          const invert =
+            typeof (inputs as any).invert === 'boolean'
+              ? Boolean((inputs as any).invert)
+              : Boolean(config.invert);
+          const round =
+            typeof (inputs as any).round === 'boolean'
+              ? Boolean((inputs as any).round)
+              : Boolean(config.round);
 
           const mapped = mapRangeWithOptions(value, min, max, invert);
           return { out: round ? Math.round(mapped) : mapped };

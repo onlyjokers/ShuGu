@@ -1,9 +1,11 @@
 <script lang="ts">
   import '@shugu/ui-kit/styles';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { spring } from 'svelte/motion';
   import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { streamEnabled } from '$lib/streaming/streaming';
+  import { nodeEngine } from '$lib/nodes';
   import {
     loadLocalProject,
     saveLocalProject,
@@ -35,13 +37,46 @@
   let password = '';
   let rememberLogin = false;
 
-  let activePage: 'dashboard' | 'auto' | 'registry-midi' | 'nodes' = 'dashboard';
+  type WorkspaceTab = 'dashboard' | 'auto' | 'registry-midi' | 'nodes';
+  let activePage: WorkspaceTab = 'dashboard';
+  const nodeGraphRunning = nodeEngine.isRunning;
+
+  let tabsEl: HTMLDivElement | null = null;
+  let tabDashboardEl: HTMLButtonElement | null = null;
+  let tabAutoEl: HTMLButtonElement | null = null;
+  let tabRegistryMidiEl: HTMLButtonElement | null = null;
+  let tabNodesEl: HTMLButtonElement | null = null;
+  const tabSlider = spring(
+    { x: 0, width: 0 },
+    {
+      stiffness: 0.18,
+      damping: 0.72,
+    }
+  );
 
   let projectRestored = false;
   let autoSaveStarted = false;
 
   // Global Sync State
   let useSync = true;
+
+  function getActiveTabEl(): HTMLButtonElement | null {
+    if (activePage === 'dashboard') return tabDashboardEl;
+    if (activePage === 'auto') return tabAutoEl;
+    if (activePage === 'registry-midi') return tabRegistryMidiEl;
+    if (activePage === 'nodes') return tabNodesEl;
+    return null;
+  }
+
+  async function updateTabSlider() {
+    await tick();
+    if (!tabsEl) return;
+    const button = getActiveTabEl();
+    if (!button) return;
+    const containerRect = tabsEl.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    tabSlider.set({ x: buttonRect.left - containerRect.left, width: buttonRect.width });
+  }
 
   onMount(() => {
     // Detect if accessing via IP address
@@ -68,6 +103,16 @@
       stopAutoSave();
     };
   });
+
+  onMount(() => {
+    const onResize = () => {
+      void updateTabSlider();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
+
+  $: if (tabsEl && activePage) void updateTabSlider();
 
   // Restore project once we're connected (parameters are registered after connect)
   $: if (!projectRestored && $connectionStatus === 'connected') {
@@ -218,26 +263,54 @@
       </div>
     </div>
   {:else}
-    <AppShell>
-      <div class="page-tabs">
+    <AppShell
+      fullBleed={activePage === 'nodes'}
+      collapseHeader={activePage === 'nodes' && $nodeGraphRunning}
+    >
+      <div slot="tabs" class="page-tabs" bind:this={tabsEl}>
+        <div
+          class="page-tabs-slider"
+          aria-hidden="true"
+          style="transform: translate3d({$tabSlider.x}px, 0, 0); width: {$tabSlider.width}px;"
+        />
         <button
+          bind:this={tabDashboardEl}
           class:active={activePage === 'dashboard'}
           on:click={() => (activePage = 'dashboard')}
         >
-          控制台
+          🧰 控制台
         </button>
-        <button class:active={activePage === 'auto'} on:click={() => (activePage = 'auto')}>
+        <button
+          bind:this={tabAutoEl}
+          class:active={activePage === 'auto'}
+          on:click={() => (activePage = 'auto')}
+        >
           🎛️ Auto UI
         </button>
         <button
+          bind:this={tabRegistryMidiEl}
           class:active={activePage === 'registry-midi'}
           on:click={() => (activePage = 'registry-midi')}
         >
           🎹 Registry MIDI
         </button>
-        <button class:active={activePage === 'nodes'} on:click={() => (activePage = 'nodes')}>
+        <button
+          bind:this={tabNodesEl}
+          class:active={activePage === 'nodes'}
+          on:click={() => (activePage = 'nodes')}
+        >
           📊 Node Graph
         </button>
+      </div>
+
+      <div slot="headerActions" class="session-pill">
+        <label class="sync-toggle">
+          <input type="checkbox" bind:checked={useSync} />
+          <span>⚡ Global Sync (500ms)</span>
+        </label>
+        <Button variant="ghost" size="sm" on:click={() => streamEnabled.update((v) => !v)}>
+          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
+        </Button>
       </div>
 
       <div class:hide={activePage !== 'dashboard'}>
@@ -288,21 +361,6 @@
         <div class="nodes-pane">
           <NodeCanvas />
         </div>
-      </div>
-
-      <div slot="footer" class="footer-actions">
-        <label class="sync-toggle">
-          <input type="checkbox" bind:checked={useSync} />
-          <span>⚡ Global Sync (500ms)</span>
-        </label>
-        <Button variant="ghost" size="sm" on:click={() => streamEnabled.update((v) => !v)}>
-          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
-        </Button>
-
-        <div class="spacer"></div>
-
-        <Button variant="danger" size="sm" on:click={handleDisconnect}>Disconnect</Button>
-        <Button variant="ghost" size="sm" on:click={handleLogout}>Logout</Button>
       </div>
     </AppShell>
   {/if}
@@ -404,19 +462,35 @@
   }
 
   .page-tabs {
+    --tabs-pad: 6px;
+    position: relative;
     display: inline-flex;
     gap: var(--space-sm);
-    margin-bottom: var(--space-md);
-    background: var(--bg-secondary);
-    padding: 6px;
-    border-radius: var(--radius-lg);
+    padding: var(--tabs-pad);
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.6);
     border: 1px solid var(--border-color);
+    overflow: hidden;
+  }
+
+  .page-tabs-slider {
+    position: absolute;
+    top: var(--tabs-pad);
+    bottom: var(--tabs-pad);
+    left: 0;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+    box-shadow: 0 10px 30px rgba(99, 102, 241, 0.35);
+    pointer-events: none;
+    will-change: transform, width;
   }
 
   .page-tabs button {
+    position: relative;
+    z-index: 1;
     border: none;
     padding: 8px 14px;
-    border-radius: var(--radius-lg);
+    border-radius: 999px;
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
@@ -424,7 +498,6 @@
   }
 
   .page-tabs button.active {
-    background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
     color: white;
   }
 
@@ -452,15 +525,18 @@
     display: none;
   }
 
-  .footer-actions {
-    display: flex;
+  .session-pill {
+    display: inline-flex;
     align-items: center;
-    width: 100%;
-    gap: var(--space-md);
-  }
-
-  .spacer {
-    flex: 1;
+    gap: var(--space-sm);
+    min-height: 38px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(14px);
+    white-space: nowrap;
   }
 
   .sync-toggle {

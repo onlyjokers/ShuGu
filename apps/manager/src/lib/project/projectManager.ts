@@ -2,6 +2,8 @@ import { browser } from '$app/environment';
 import { nodeEngine } from '$lib/nodes';
 import type { GraphState } from '$lib/nodes/types';
 import { parameterRegistry } from '$lib/parameters/registry';
+import { minimapPreferences, type MinimapPreferences } from './uiState';
+import { get } from 'svelte/store';
 
 const STORAGE_KEY = 'shugu-project-v1';
 
@@ -10,6 +12,9 @@ interface ProjectSnapshot {
   savedAt: number;
   graph: GraphState;
   parameters: ReturnType<typeof parameterRegistry.snapshot>;
+  ui?: {
+    minimap?: MinimapPreferences;
+  };
 }
 
 function safeGetStorage(): Storage | null {
@@ -28,6 +33,7 @@ function buildSnapshot(): ProjectSnapshot {
     savedAt: Date.now(),
     graph: nodeEngine.exportGraph(),
     parameters: parameterRegistry.snapshot(),
+    ui: { minimap: get(minimapPreferences) },
   };
 }
 
@@ -72,6 +78,21 @@ export function loadLocalProject(): boolean {
         }
       }
     }
+
+    const mini = snapshot?.ui?.minimap;
+    if (
+      mini &&
+      typeof mini === 'object' &&
+      typeof (mini as any).x === 'number' &&
+      typeof (mini as any).y === 'number' &&
+      typeof (mini as any).size === 'number'
+    ) {
+      minimapPreferences.set({
+        x: Number((mini as any).x),
+        y: Number((mini as any).y),
+        size: Number((mini as any).size),
+      });
+    }
     return true;
   } catch (err) {
     console.warn('[ProjectManager] Failed to load project', err);
@@ -80,6 +101,7 @@ export function loadLocalProject(): boolean {
 }
 
 let unsubscribeGraph: (() => void) | null = null;
+let unsubscribeUi: (() => void) | null = null;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 
 export function startAutoSave(intervalMs = 1000): void {
@@ -100,6 +122,9 @@ export function startAutoSave(intervalMs = 1000): void {
   unsubscribeGraph?.();
   unsubscribeGraph = nodeEngine.graphState.subscribe(() => schedule());
 
+  unsubscribeUi?.();
+  unsubscribeUi = minimapPreferences.subscribe(() => schedule());
+
   intervalHandle && clearInterval(intervalHandle);
   intervalHandle = setInterval(() => saveLocalProject('interval'), intervalMs * 5);
 }
@@ -107,6 +132,8 @@ export function startAutoSave(intervalMs = 1000): void {
 export function stopAutoSave(): void {
   unsubscribeGraph?.();
   unsubscribeGraph = null;
+  unsubscribeUi?.();
+  unsubscribeUi = null;
   if (intervalHandle) {
     clearInterval(intervalHandle);
     intervalHandle = null;

@@ -455,7 +455,10 @@ export class NodeRuntime {
 
     // Compute pass
     for (const node of this.executionOrder) {
-      if (this.isNodeEnabled && !this.isNodeEnabled(node.id)) continue;
+      if (this.isNodeEnabled && !this.isNodeEnabled(node.id)) {
+        node.outputValues = {};
+        continue;
+      }
       const def = this.registry.get(node.type);
       if (!def) continue;
 

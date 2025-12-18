@@ -5,21 +5,20 @@ import { chromium } from 'playwright';
 
 const ROOT = process.cwd();
 
-const SERVER_PORT = 3001;
-const MANAGER_PORT = 5173;
-const CLIENT_PORT = 5174;
-
-const SERVER_ORIGIN = `https://localhost:${SERVER_PORT}`;
-const MANAGER_ORIGIN = `https://localhost:${MANAGER_PORT}`;
-const CLIENT_ORIGIN = `https://localhost:${CLIENT_PORT}`;
-
 const CLIENT_ID = 'c_e2e';
 const MANAGER_USER = 'Eureka';
 
-function spawnService(label, args) {
+function spawnService(label, args, extraEnv = {}) {
   const proc = spawn('pnpm', args, {
     cwd: ROOT,
-    env: { ...process.env, FORCE_COLOR: '1', SHUGU_E2E: '1', SHUGU_DEV_HOST: '127.0.0.1' },
+    env: {
+      ...process.env,
+      ...extraEnv,
+      FORCE_COLOR: '1',
+      SHUGU_E2E: '1',
+      SHUGU_DEV_HOST: '127.0.0.1',
+    },
+    detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -34,6 +33,25 @@ function spawnService(label, args) {
   });
 
   return proc;
+}
+
+function killProcess(proc, signal) {
+  if (!proc || proc.exitCode !== null) return;
+
+  try {
+    if (process.platform !== 'win32' && typeof proc.pid === 'number') {
+      process.kill(-proc.pid, signal);
+      return;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    proc.kill(signal);
+  } catch {
+    // ignore
+  }
 }
 
 function waitForPort(port, { host = '127.0.0.1', timeoutMs = 60_000 } = {}) {
@@ -56,6 +74,48 @@ function waitForPort(port, { host = '127.0.0.1', timeoutMs = 60_000 } = {}) {
     };
     attempt();
   });
+}
+
+function waitForExit(proc, { timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve) => {
+    if (!proc || proc.exitCode !== null) {
+      resolve();
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      killProcess(proc, 'SIGKILL');
+      resolve();
+    }, timeoutMs);
+
+    proc.once('exit', () => {
+      clearTimeout(timeoutId);
+      resolve();
+    });
+  });
+}
+
+async function canListen(port, host) {
+  return await new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function findAvailablePort(startPort, reservedPorts, { host = '127.0.0.1', maxAttempts = 50 } = {}) {
+  for (let port = startPort; port < startPort + maxAttempts; port += 1) {
+    if (reservedPorts.has(port)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (await canListen(port, host)) {
+      reservedPorts.add(port);
+      return port;
+    }
+  }
+  throw new Error(`unable to find free port from ${startPort} (attempts=${maxAttempts})`);
 }
 
 function loopGraph({ clientId, primary }) {
@@ -125,26 +185,48 @@ function loopGraph({ clientId, primary }) {
   };
 }
 
+function nonLoopGraph({ clientId, primary }) {
+  const graph = loopGraph({ clientId, primary });
+  // Break the cycle: remove the command edge back into the Client sink.
+  graph.connections = graph.connections.filter((c) => c.id !== 'conn-e2e-screen-to-client');
+  return graph;
+}
+
 async function assert(condition, message) {
   if (condition) return;
   throw new Error(message);
 }
 
 async function main() {
+  const reservedPorts = new Set();
+  const serverPort = await findAvailablePort(3001, reservedPorts);
+  const managerPort = await findAvailablePort(5173, reservedPorts);
+  const clientPort = await findAvailablePort(5174, reservedPorts);
+
+  const SERVER_ORIGIN = `https://localhost:${serverPort}`;
+  const MANAGER_ORIGIN = `https://localhost:${managerPort}`;
+  const CLIENT_ORIGIN = `https://localhost:${clientPort}`;
+
   const procs = [
-    spawnService('server', ['dev:server']),
-    spawnService('manager', ['dev:manager']),
-    spawnService('client', ['dev:client']),
+    spawnService('server', ['--filter', '@shugu/server', 'run', 'dev'], { PORT: String(serverPort) }),
+    spawnService(
+      'manager',
+      ['--filter', '@shugu/manager', 'exec', 'vite', 'dev', '--port', String(managerPort), '--strictPort'],
+      {}
+    ),
+    spawnService(
+      'client',
+      ['--filter', '@shugu/client', 'exec', 'vite', 'dev', '--port', String(clientPort), '--strictPort'],
+      {}
+    ),
   ];
 
   const cleanup = async () => {
     for (const p of procs) {
-      try {
-        p.kill('SIGTERM');
-      } catch {
-        // ignore
-      }
+      killProcess(p, 'SIGTERM');
     }
+
+    await Promise.all(procs.map((p) => waitForExit(p, { timeoutMs: 12_000 })));
   };
 
   process.on('SIGINT', () => cleanup().finally(() => process.exit(130)));
@@ -152,9 +234,9 @@ async function main() {
 
   try {
     await Promise.all([
-      waitForPort(SERVER_PORT),
-      waitForPort(MANAGER_PORT),
-      waitForPort(CLIENT_PORT),
+      waitForPort(serverPort),
+      waitForPort(managerPort),
+      waitForPort(clientPort),
     ]);
 
     const browser = await chromium.launch({ headless: true });
@@ -206,7 +288,7 @@ async function main() {
 
     const graphV1 = loopGraph({ clientId: CLIENT_ID, primary: '#6366f1' });
     await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV1);
-    await managerPage.waitForSelector('.loop-controls', { timeout: 10_000 });
+    await managerPage.waitForSelector('.loop-frame', { timeout: 10_000 });
     await managerPage.waitForFunction(
       () => document.querySelectorAll('.node.local-loop').length > 0,
       null,
@@ -215,7 +297,7 @@ async function main() {
       }
     );
 
-    await managerPage.getByRole('button', { name: /Deploy Loop/ }).click();
+    await managerPage.getByRole('button', { name: /^Deploy$/ }).click();
     await managerPage.waitForSelector('text=Stop Loop', { timeout: 10_000 });
     await managerPage.waitForFunction(
       () => document.querySelectorAll('.node.deployed-loop').length > 0,
@@ -252,9 +334,9 @@ async function main() {
     // Update graph (same node ids) and redeploy.
     const graphV2 = loopGraph({ clientId: CLIENT_ID, primary: '#ff0000' });
     await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV2);
-    await managerPage.waitForSelector('.loop-controls', { timeout: 10_000 });
+    await managerPage.waitForSelector('.loop-frame', { timeout: 10_000 });
 
-    await managerPage.getByRole('button', { name: /Deploy Loop/ }).click();
+    await managerPage.getByRole('button', { name: /^Deploy$/ }).click();
     await managerPage.waitForSelector('text=Stop Loop', { timeout: 10_000 });
 
     const redeployCount = await clientPage.evaluate(
@@ -276,10 +358,20 @@ async function main() {
       `expected updated primary color, got ${String(updated?.payload?.color)}`
     );
 
-    await managerPage.getByRole('button', { name: /Remove/ }).click();
-    await managerPage.waitForSelector('text=Deploy Loop', { timeout: 10_000 });
+    // Break the local loop: the manager should auto stop + remove the deployed loop on client.
+    const graphV3 = nonLoopGraph({ clientId: CLIENT_ID, primary: '#ff0000' });
+    await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV3);
+    await managerPage.waitForFunction(() => document.querySelectorAll('.loop-frame').length === 0, null, {
+      timeout: 10_000,
+    });
 
-    console.log('[e2e] ✅ node-executor loop deploy/stop/redeploy/remove OK');
+    await managerPage.waitForTimeout(400);
+    const breakCount = await clientPage.evaluate(() => (window.__SHUGU_E2E_COMMANDS || []).length);
+    await managerPage.waitForTimeout(800);
+    const breakAfter = await clientPage.evaluate(() => (window.__SHUGU_E2E_COMMANDS || []).length);
+    await assert(breakAfter === breakCount, 'expected no new commands after breaking the loop');
+
+    console.log('[e2e] ✅ node-executor loop deploy/stop/redeploy/auto-remove OK');
 
     await browser.close();
   } catch (error) {

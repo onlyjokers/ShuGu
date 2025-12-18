@@ -30,6 +30,7 @@ class NodeEngineClass {
   // Nodes that are offloaded to the client runtime (skip execution + sinks on manager)
   private offloadedNodeIds = new Set<string>();
   private deployedLoopIds = new Set<string>();
+  private disabledNodeIds = new Set<string>();
 
   // Stores for UI observation
   public graphState: Writable<GraphState> = writable({ nodes: [], connections: [] });
@@ -43,7 +44,8 @@ class NodeEngineClass {
   constructor() {
     this.runtime = new NodeRuntime(nodeRegistry, {
       tickIntervalMs: TICK_INTERVAL,
-      isNodeEnabled: (nodeId) => !this.offloadedNodeIds.has(nodeId),
+      isNodeEnabled: (nodeId) =>
+        !this.offloadedNodeIds.has(nodeId) && !this.disabledNodeIds.has(nodeId),
       onTick: ({ time }) => {
         this.tickTime.set(time);
       },
@@ -213,6 +215,7 @@ class NodeEngineClass {
     this.runtime.clear();
     this.offloadedNodeIds.clear();
     this.deployedLoopIds.clear();
+    this.disabledNodeIds.clear();
     this.syncGraphState();
     this.updateLocalLoops();
 
@@ -240,6 +243,7 @@ class NodeEngineClass {
     this.runtime.loadGraph(sanitized);
     this.offloadedNodeIds.clear();
     this.deployedLoopIds.clear();
+    this.disabledNodeIds.clear();
     this.syncGraphState();
     this.updateLocalLoops();
 
@@ -249,6 +253,25 @@ class NodeEngineClass {
 
   exportGraph(): GraphState {
     return get(this.graphState);
+  }
+
+  // ========== Group / Disable Nodes ==========
+
+  setNodesDisabled(nodeIds: string[], disabled: boolean): void {
+    const ids = Array.isArray(nodeIds) ? nodeIds : [];
+    for (const id of ids) {
+      if (!id) continue;
+      if (disabled) this.disabledNodeIds.add(id);
+      else this.disabledNodeIds.delete(id);
+    }
+  }
+
+  clearDisabledNodes(): void {
+    this.disabledNodeIds.clear();
+  }
+
+  getDisabledNodeIds(): string[] {
+    return Array.from(this.disabledNodeIds);
   }
 
   // ========== Local Loop Detection / Export ==========
@@ -474,4 +497,3 @@ class NodeEngineClass {
 
 // Singleton instance
 export const nodeEngine = new NodeEngineClass();
-
