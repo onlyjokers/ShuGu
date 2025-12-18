@@ -8,8 +8,13 @@ async function bootstrap() {
   const keyCandidates = [
     path.join(process.cwd(), 'secrets/privkey.pem'),
     path.join(process.cwd(), 'secrets/key.pem'),
+    path.join(process.cwd(), '../../secrets/privkey.pem'),
+    path.join(process.cwd(), '../../secrets/key.pem'),
   ];
-  const certCandidates = [path.join(process.cwd(), 'secrets/cert.pem')];
+  const certCandidates = [
+    path.join(process.cwd(), 'secrets/cert.pem'),
+    path.join(process.cwd(), '../../secrets/cert.pem'),
+  ];
   const keyPath = keyCandidates.find((p) => fs.existsSync(p));
   const certPath = certCandidates.find((p) => fs.existsSync(p));
   let httpsOptions: any = undefined;
