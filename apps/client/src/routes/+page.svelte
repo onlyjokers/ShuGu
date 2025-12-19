@@ -471,13 +471,15 @@
     // Request fullscreen while the click gesture is still active to maximize success.
     tryFullscreen('click');
 
-    try {
-      await enableAudio();
-    } catch (error) {
-      console.warn('[Client] Tone audio enable failed', error);
-    }
-
     if (BYPASS_GEO_GATE) {
+      // Kick off permission prompts within the same user gesture.
+      const permissionsPromise = requestPermissions().catch((error) => {
+        console.warn('[Client] Permission request failed', error);
+      });
+      const audioPromise = enableAudio().catch((error) => {
+        console.warn('[Client] Tone audio enable failed', error);
+      });
+
       permissions.update((p) => ({ ...p, geolocation: 'granted' }));
       gateState = 'idle';
       gateTitle = '';
@@ -486,7 +488,14 @@
       hasStarted = true;
       initialize({ serverUrl }, { autoConnect: true });
       if (document.visibilityState === 'visible') connectToServer();
+      await Promise.allSettled([permissionsPromise, audioPromise]);
       return;
+    }
+
+    try {
+      await enableAudio();
+    } catch (error) {
+      console.warn('[Client] Tone audio enable failed', error);
     }
 
     if (gateInFlight) return;
