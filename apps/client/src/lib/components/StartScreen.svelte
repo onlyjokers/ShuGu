@@ -168,38 +168,8 @@
     ctx.fillStyle = 'rgba(214, 201, 192, 0.7)';
     ctx.fillText(subtitle, width / 2, height * 0.38);
 
-    // ASCII button box
-    const bw = buttonRect.w;
-    const bh = buttonRect.h;
-    const bx = buttonRect.x;
-    const by = buttonRect.y;
-    const borderColor = 'rgba(255, 228, 210, 0.75)';
-    ctx.fillStyle = borderColor;
-    ctx.font = `${Math.max(12, Math.round(charH * 1.1))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
-    const dash = '=';
-    const pipe = '|';
-    const corner = '+';
-    const blocksX = Math.max(6, Math.floor(bw / charW));
-    const blocksY = Math.max(3, Math.floor(bh / charH));
-
-    for (let i = 0; i < blocksX; i++) {
-      const x = bx + (i + 0.5) * charW;
-      ctx.fillText(dash, x, by + charH * 0.6);
-      ctx.fillText(dash, x, by + blocksY * charH - charH * 0.4);
-    }
-    for (let j = 0; j < blocksY; j++) {
-      const y = by + (j + 0.5) * charH;
-      ctx.fillText(pipe, bx + charW * 0.4, y);
-      ctx.fillText(pipe, bx + blocksX * charW - charW * 0.4, y);
-    }
-    ctx.fillText(corner, bx + charW * 0.4, by + charH * 0.6);
-    ctx.fillText(corner, bx + blocksX * charW - charW * 0.4, by + charH * 0.6);
-    ctx.fillText(corner, bx + charW * 0.4, by + blocksY * charH - charH * 0.4);
-    ctx.fillText(corner, bx + blocksX * charW - charW * 0.4, by + blocksY * charH - charH * 0.4);
-
-    ctx.fillStyle = 'rgba(255, 228, 210, 0.9)';
-    ctx.font = `${Math.max(14, Math.round(charH * 1.2))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
-    ctx.fillText(buttonLabel, bx + bw / 2, by + bh / 2 + charH * 0.05);
+    // ASCII button boxes
+    drawAsciiButton(ctx, buttonRect, buttonLabel, charW, charH);
 
     // Hint text - move to bottom
     ctx.font = `${Math.max(10, Math.round(charH * 0.95))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
@@ -266,6 +236,46 @@
     n = (n ^ (n >> 13)) * 1274126177;
     n ^= n >> 16;
     return (n >>> 0) / 0xffffffff;
+  }
+
+  function drawAsciiButton(
+    ctx: CanvasRenderingContext2D,
+    rect: { x: number; y: number; w: number; h: number },
+    label: string,
+    charW: number,
+    charH: number
+  ) {
+    const bw = rect.w;
+    const bh = rect.h;
+    const bx = rect.x;
+    const by = rect.y;
+    const borderColor = 'rgba(255, 228, 210, 0.75)';
+    ctx.fillStyle = borderColor;
+    ctx.font = `${Math.max(12, Math.round(charH * 1.05))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
+    const dash = '=';
+    const pipe = '|';
+    const corner = '+';
+    const blocksX = Math.max(6, Math.floor(bw / charW));
+    const blocksY = Math.max(3, Math.floor(bh / charH));
+
+    for (let i = 0; i < blocksX; i++) {
+      const x = bx + (i + 0.5) * charW;
+      ctx.fillText(dash, x, by + charH * 0.6);
+      ctx.fillText(dash, x, by + blocksY * charH - charH * 0.4);
+    }
+    for (let j = 0; j < blocksY; j++) {
+      const y = by + (j + 0.5) * charH;
+      ctx.fillText(pipe, bx + charW * 0.4, y);
+      ctx.fillText(pipe, bx + blocksX * charW - charW * 0.4, y);
+    }
+    ctx.fillText(corner, bx + charW * 0.4, by + charH * 0.6);
+    ctx.fillText(corner, bx + blocksX * charW - charW * 0.4, by + charH * 0.6);
+    ctx.fillText(corner, bx + charW * 0.4, by + blocksY * charH - charH * 0.4);
+    ctx.fillText(corner, bx + blocksX * charW - charW * 0.4, by + blocksY * charH - charH * 0.4);
+
+    ctx.fillStyle = 'rgba(255, 228, 210, 0.9)';
+    ctx.font = `${Math.max(14, Math.round(charH * 1.1))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
+    ctx.fillText(label, bx + bw / 2, by + bh / 2 + charH * 0.05);
   }
 </script>
 

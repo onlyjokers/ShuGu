@@ -12,6 +12,7 @@ import { NodeRuntime } from '@shugu/node-core';
 
 import type { Connection, GraphState, NodeInstance } from './types';
 import { nodeRegistry } from './registry';
+import { getSelectOptionsForInput } from './selection-options';
 import { parameterRegistry } from '../parameters/registry';
 
 export type LocalLoop = {
@@ -122,6 +123,49 @@ class NodeEngineClass {
     // Don't sync graph state for position-only changes (performance)
   }
 
+  private applySelectionMapOptions(state: GraphState): GraphState {
+    const nodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const connections = Array.isArray(state.connections) ? state.connections : [];
+    const selectionNodes = new Set(
+      nodes.filter((node) => node.type === 'midi-select-map').map((node) => String(node.id))
+    );
+
+    if (selectionNodes.size === 0 || connections.length === 0) return state;
+
+    const nodeById = new Map(nodes.map((node) => [String(node.id), node]));
+    const nextOptionsByNodeId = new Map<string, string[]>();
+
+    for (const c of connections) {
+      const sourceId = String(c.sourceNodeId);
+      if (!selectionNodes.has(sourceId)) continue;
+      const target = nodeById.get(String(c.targetNodeId));
+      if (!target) continue;
+      const options = getSelectOptionsForInput(target.type, String(c.targetPortId)) ?? [];
+      nextOptionsByNodeId.set(sourceId, options);
+    }
+
+    if (nextOptionsByNodeId.size === 0) return state;
+
+    const optionsEqual = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((value, idx) => value === b[idx]);
+
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      const nextOptions = nextOptionsByNodeId.get(String(node.id));
+      if (!nextOptions) return node;
+      const raw = Array.isArray((node.config as any)?.options) ? ((node.config as any).options as unknown[]) : [];
+      const currentOptions = raw.map((value) => String(value)).filter((value) => value !== '');
+      if (optionsEqual(currentOptions, nextOptions)) return node;
+      changed = true;
+      return {
+        ...node,
+        config: { ...(node.config ?? {}), options: nextOptions },
+      };
+    });
+
+    return changed ? { ...state, nodes: nextNodes } : state;
+  }
+
   addConnection(connection: Connection): boolean {
     const snapshot = this.runtime.exportGraph();
 
@@ -156,10 +200,10 @@ class NodeEngineClass {
       return false;
     }
 
-    const next: GraphState = {
+    const next: GraphState = this.applySelectionMapOptions({
       nodes: snapshot.nodes,
       connections: [...snapshot.connections, connection],
-    };
+    });
 
     // Validate cycles without mutating the live runtime first.
     try {
@@ -181,10 +225,10 @@ class NodeEngineClass {
 
   removeConnection(connectionId: string): void {
     const snapshot = this.runtime.exportGraph();
-    const next: GraphState = {
+    const next: GraphState = this.applySelectionMapOptions({
       nodes: snapshot.nodes,
       connections: snapshot.connections.filter((c) => c.id !== connectionId),
-    };
+    });
 
     this.runtime.loadGraph(next);
     this.syncGraphState();
@@ -240,7 +284,8 @@ class NodeEngineClass {
       connections: [...(state.connections ?? [])],
     };
 
-    this.runtime.loadGraph(sanitized);
+    const prepared = this.applySelectionMapOptions(sanitized);
+    this.runtime.loadGraph(prepared);
     this.offloadedNodeIds.clear();
     this.deployedLoopIds.clear();
     this.disabledNodeIds.clear();
@@ -365,6 +410,15 @@ class NodeEngineClass {
       if (type === 'proc-flashlight') return 'flashlight';
       if (type === 'proc-screen-color') return 'screen';
       if (type === 'proc-synth-update') return 'sound';
+      if (type === 'tone-osc') return 'sound';
+      if (type === 'tone-delay') return 'sound';
+      if (type === 'tone-resonator') return 'sound';
+      if (type === 'tone-pitch') return 'sound';
+      if (type === 'tone-reverb') return 'sound';
+      if (type === 'tone-granular') return 'sound';
+      if (type === 'tone-player') return 'sound';
+      if (type === 'play-media') return 'sound';
+      if (type === 'load-media-sound') return 'sound';
       if (type === 'proc-scene-switch') return 'visual';
       return null;
     };
@@ -457,6 +511,15 @@ class NodeEngineClass {
       'proc-screen-color',
       'proc-synth-update',
       'proc-scene-switch',
+      'tone-osc',
+      'tone-delay',
+      'tone-resonator',
+      'tone-pitch',
+      'tone-reverb',
+      'tone-granular',
+      'tone-player',
+      'play-media',
+      'load-media-sound',
     ]);
 
     const nodes: GraphState['nodes'] = [];

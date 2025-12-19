@@ -3,7 +3,7 @@
   "label": "Synth (Update)",
   "category": "Processors",
   "inputs": [
-    { "id": "waveform", "label": "Wave", "type": "fuzzy" },
+    { "id": "waveform", "label": "Wave", "type": "string" },
     { "id": "frequency", "label": "Freq", "type": "number", "min": 0, "step": 1 },
     { "id": "volume", "label": "Vol", "type": "number", "min": 0, "max": 1, "step": 0.01 },
     { "id": "modDepth", "label": "Depth", "type": "number", "min": 0, "max": 1, "step": 0.01 },

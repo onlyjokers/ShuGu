@@ -1,0 +1,19 @@
+{
+  "__purpose": "Manager node spec for loading a local audio file into a data URL (load-media-sound).",
+  "type": "load-media-sound",
+  "label": "Load Media Sound",
+  "category": "Audio",
+  "inputs": [],
+  "outputs": [{ "id": "url", "label": "URL", "type": "string" }],
+  "configSchema": [
+    {
+      "key": "url",
+      "label": "Audio File",
+      "type": "file",
+      "defaultValue": "",
+      "accept": "audio/*",
+      "buttonLabel": "Load Audio"
+    }
+  ],
+  "runtime": { "kind": "load-media-sound" }
+}

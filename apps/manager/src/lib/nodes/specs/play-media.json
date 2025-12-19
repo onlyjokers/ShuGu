@@ -1,0 +1,31 @@
+{
+  "__purpose": "Manager node spec for emitting media playback commands (play-media).",
+  "type": "play-media",
+  "label": "Play Media",
+  "category": "Audio",
+  "inputs": [
+    { "id": "audioUrl", "label": "Audio", "type": "string" },
+    { "id": "imageUrl", "label": "Image", "type": "string" },
+    { "id": "videoUrl", "label": "Video", "type": "string" },
+    { "id": "trigger", "label": "Trigger", "type": "number" }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    { "key": "audioUrl", "label": "Audio URL", "type": "string", "defaultValue": "" },
+    { "key": "imageUrl", "label": "Image URL", "type": "string", "defaultValue": "" },
+    { "key": "videoUrl", "label": "Video URL", "type": "string", "defaultValue": "" },
+    { "key": "volume", "label": "Volume", "type": "number", "defaultValue": 1, "min": 0, "max": 1, "step": 0.01 },
+    { "key": "loop", "label": "Loop", "type": "boolean", "defaultValue": false },
+    { "key": "fadeIn", "label": "Fade In (ms)", "type": "number", "defaultValue": 0, "min": 0, "step": 10 },
+    { "key": "muted", "label": "Video Muted", "type": "boolean", "defaultValue": true },
+    {
+      "key": "imageDuration",
+      "label": "Image Duration (ms)",
+      "type": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "step": 100
+    }
+  ],
+  "runtime": { "kind": "play-media" }
+}

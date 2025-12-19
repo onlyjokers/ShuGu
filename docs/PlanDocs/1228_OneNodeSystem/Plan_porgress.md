@@ -130,3 +130,17 @@ This file tracks the implementation progress for `docs/PlanDocs/1228_OneNodeSyst
   - Commands run:
     - `pnpm --filter @shugu/manager exec tsc -p tsconfig.json --noEmit`
     - `pnpm e2e:node-executor`
+
+- Follow-up: Made Group membership explicit via “Add Node” mode + added loop-frame push-out:
+  - Group frames no longer auto-absorb nodes on drop; user must enable “Add Node” on a specific group, then drop nodes inside to add them.
+  - When “Add Node” is not enabled, dropping nodes inside any group frame bounces them out (same push-out animation as group creation).
+  - When a new loop is detected and framed, unrelated nodes inside the loop frame are pushed out (matching group creation behavior).
+  - Commands run:
+    - `pnpm --filter @shugu/manager run check`
+
+- Follow-up: Aligned Loop/Group frame constraints + improved Group editing UX:
+  - Loop frames now enforce “no unrelated nodes inside” on every drag-drop (not only when the loop is first detected).
+  - Replaced “Add Node” with “Edit Group”: in edit mode the group frame bounds are frozen (won’t follow nodes while dragging); dropping nodes inside/outside adds/removes membership.
+  - Added a temporary toast pill at the top of the group frame when membership changes (e.g. “Add X to Group Y” / “Remove X from Group Y”).
+  - Commands run:
+    - `pnpm --filter @shugu/manager run check`

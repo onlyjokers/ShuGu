@@ -1,0 +1,25 @@
+{
+  "__purpose": "Manager node spec for Tone.js Player source (tone-player).",
+  "type": "tone-player",
+  "label": "Tone Player",
+  "category": "Audio",
+  "inputs": [
+    { "id": "url", "label": "URL", "type": "string" },
+    { "id": "trigger", "label": "Trigger", "type": "number", "defaultValue": 0 },
+    { "id": "playbackRate", "label": "Rate", "type": "number", "defaultValue": 1 },
+    { "id": "detune", "label": "Detune", "type": "number", "defaultValue": 0 },
+    { "id": "volume", "label": "Volume", "type": "number", "defaultValue": 1 }
+  ],
+  "outputs": [{ "id": "value", "label": "Value", "type": "number" }],
+  "configSchema": [
+    { "key": "url", "label": "Audio URL", "type": "string", "defaultValue": "" },
+    { "key": "loop", "label": "Loop", "type": "boolean", "defaultValue": false },
+    { "key": "autostart", "label": "Autostart", "type": "boolean", "defaultValue": false },
+    { "key": "playbackRate", "label": "Rate", "type": "number", "defaultValue": 1 },
+    { "key": "detune", "label": "Detune", "type": "number", "defaultValue": 0 },
+    { "key": "volume", "label": "Volume", "type": "number", "defaultValue": 1 },
+    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
+  ],
+  "runtime": { "kind": "tone-player" }
+}

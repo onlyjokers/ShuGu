@@ -157,6 +157,34 @@
   let midiSource: any = null;
   let midiIsLearning = false;
 
+  let fileInput: HTMLInputElement | null = null;
+  let fileName = '';
+  let fileDisplayLabel = '';
+
+  function openFilePicker() {
+    if (data?.readonly) return;
+    fileInput?.click?.();
+  }
+
+  function handleFileChange(event: Event) {
+    if (data?.readonly) return;
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    fileName = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      data?.setValue?.(result);
+    };
+    reader.onerror = () => {
+      console.warn('[file-picker] Failed to read file');
+    };
+    reader.readAsDataURL(file);
+  }
+
   function formatMidiEvent(event: MidiEvent | null): string {
     if (!event) return '—';
     const channel = `ch${event.channel + 1}`;
@@ -172,6 +200,11 @@
     midiSource = node?.config?.source ?? null;
     midiIsLearning = Boolean($midiLearnModeStore.active && $midiLearnModeStore.nodeId === midiNodeId);
   }
+
+  $: fileDisplayLabel =
+    data?.controlType === 'file-picker'
+      ? fileName || (typeof data?.value === 'string' && data.value ? 'Loaded' : 'No file')
+      : '';
 
   function toggleMidiLearn(nodeId: string) {
     void midiService.init();
@@ -237,6 +270,33 @@
         <span class="toggle-label">{data.label}</span>
       {/if}
     </label>
+  </div>
+{:else if data?.controlType === 'file-picker'}
+  <div class="file-picker {isInline ? 'inline' : ''}">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+    <div class="file-row">
+      <button
+        type="button"
+        class="file-btn"
+        disabled={data.readonly}
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={openFilePicker}
+      >
+        {data.buttonLabel || 'Choose file'}
+      </button>
+      <div class="file-name">{fileDisplayLabel}</div>
+    </div>
+    <input
+      class="file-input"
+      type="file"
+      accept={data.accept}
+      bind:this={fileInput}
+      disabled={data.readonly}
+      on:pointerdown|stopPropagation
+      on:change={handleFileChange}
+    />
   </div>
 {:else if data?.controlType === 'client-picker'}
   <div class="client-picker">
@@ -439,6 +499,51 @@
 
   .client-picker {
     padding: 6px 8px 10px;
+  }
+
+  .file-picker {
+    padding: 6px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .file-btn {
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.5);
+    color: rgba(255, 255, 255, 0.88);
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .file-btn:hover {
+    border-color: rgba(99, 102, 241, 0.5);
+  }
+
+  .file-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .file-name {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.62);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  .file-input {
+    display: none;
   }
 
   .client-empty {

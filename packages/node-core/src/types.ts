@@ -39,12 +39,22 @@ export interface NodePort {
 export interface ConfigField {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source' | 'client-picker';
+  type:
+    | 'string'
+    | 'number'
+    | 'boolean'
+    | 'select'
+    | 'param-path'
+    | 'midi-source'
+    | 'client-picker'
+    | 'file';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
   min?: number;
   max?: number;
   step?: number;
+  accept?: string;
+  buttonLabel?: string;
 }
 
 export interface ProcessContext {
@@ -93,4 +103,3 @@ export interface GraphState {
   nodes: NodeInstance[];
   connections: Connection[];
 }
-

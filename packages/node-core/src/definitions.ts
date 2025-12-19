@@ -56,6 +56,17 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createMathNode());
   registry.register(createLFONode());
   registry.register(createNumberNode());
+  // Tone.js audio nodes (client runtime overrides these definitions).
+  registry.register(createToneOscNode());
+  registry.register(createToneDelayNode());
+  registry.register(createToneResonatorNode());
+  registry.register(createTonePitchNode());
+  registry.register(createToneReverbNode());
+  registry.register(createToneGranularNode());
+  registry.register(createTonePlayerNode());
+  // Media playback helpers.
+  registry.register(createLoadMediaSoundNode());
+  registry.register(createPlayMediaNode());
   registry.register(createFlashlightProcessorNode());
   registry.register(createScreenColorProcessorNode());
   registry.register(createSynthUpdateProcessorNode());
@@ -312,6 +323,371 @@ function createNumberNode(): NodeDefinition {
   };
 }
 
+function createToneOscNode(): NodeDefinition {
+  return {
+    type: 'tone-osc',
+    label: 'Tone Osc',
+    category: 'Audio',
+    inputs: [
+      { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
+      { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
+    ],
+    outputs: [{ id: 'value', label: 'Out', type: 'number' }],
+    configSchema: [
+      {
+        key: 'waveform',
+        label: 'Waveform',
+        type: 'select',
+        defaultValue: 'sine',
+        options: [
+          { value: 'sine', label: 'Sine' },
+          { value: 'square', label: 'Square' },
+          { value: 'triangle', label: 'Triangle' },
+          { value: 'sawtooth', label: 'Sawtooth' },
+        ],
+      },
+      {
+        key: 'bus',
+        label: 'Bus',
+        type: 'string',
+        defaultValue: 'main',
+      },
+      {
+        key: 'enabled',
+        label: 'Enabled',
+        type: 'boolean',
+        defaultValue: false,
+      },
+      {
+        key: 'loop',
+        label: 'Loop (pattern)',
+        type: 'string',
+        defaultValue: '',
+      },
+    ],
+    process: (inputs, config) => {
+      const ampInput = Number(inputs.amplitude ?? 0);
+      const enabled = Boolean(config.enabled ?? false);
+      const value = enabled ? ampInput : 0;
+      return { value };
+    },
+  };
+}
+
+function createToneDelayNode(): NodeDefinition {
+  return {
+    type: 'tone-delay',
+    label: 'Tone Delay',
+    category: 'Audio',
+    inputs: [
+      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
+      { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
+      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [
+      { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
+      { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
+      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'order', label: 'Order', type: 'number', defaultValue: 10 },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+    ],
+    process: (inputs) => ({ out: (inputs.in as number) ?? 0 }),
+  };
+}
+
+function createToneResonatorNode(): NodeDefinition {
+  return {
+    type: 'tone-resonator',
+    label: 'Tone Resonator',
+    category: 'Audio',
+    inputs: [
+      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
+      { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
+      { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
+      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [
+      { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
+      { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
+      { key: 'dampening', label: 'Dampening (Hz)', type: 'number', defaultValue: 3000 },
+      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'order', label: 'Order', type: 'number', defaultValue: 20 },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+    ],
+    process: (inputs) => ({ out: (inputs.in as number) ?? 0 }),
+  };
+}
+
+function createTonePitchNode(): NodeDefinition {
+  return {
+    type: 'tone-pitch',
+    label: 'Tone Pitch',
+    category: 'Audio',
+    inputs: [
+      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
+      { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
+      { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
+      { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
+      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [
+      { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
+      { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
+      { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
+      { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
+      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'order', label: 'Order', type: 'number', defaultValue: 30 },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+    ],
+    process: (inputs) => ({ out: (inputs.in as number) ?? 0 }),
+  };
+}
+
+function createToneReverbNode(): NodeDefinition {
+  return {
+    type: 'tone-reverb',
+    label: 'Tone Reverb',
+    category: 'Audio',
+    inputs: [
+      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
+      { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
+      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [
+      { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
+      { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
+      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'order', label: 'Order', type: 'number', defaultValue: 40 },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+    ],
+    process: (inputs) => ({ out: (inputs.in as number) ?? 0 }),
+  };
+}
+
+function createToneGranularNode(): NodeDefinition {
+  return {
+    type: 'tone-granular',
+    label: 'Tone Granular',
+    category: 'Audio',
+    inputs: [
+      { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
+      { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
+    ],
+    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    configSchema: [
+      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
+      { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
+      { key: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+    ],
+    process: (inputs, config) => {
+      const volume = typeof inputs.volume === 'number' ? (inputs.volume as number) : Number(config.volume ?? 0.6);
+      return { value: volume };
+    },
+  };
+}
+
+const playMediaTriggerState = new Map<string, boolean>();
+const playMediaCommandCache = new Map<string, { signature: string; cmd: NodeCommand | null }>();
+
+function createLoadMediaSoundNode(): NodeDefinition {
+  return {
+    type: 'load-media-sound',
+    label: 'Load Media Sound',
+    category: 'Audio',
+    inputs: [],
+    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
+    configSchema: [
+      {
+        key: 'url',
+        label: 'Audio File',
+        type: 'file',
+        defaultValue: '',
+        accept: 'audio/*',
+        buttonLabel: 'Load Audio',
+      },
+    ],
+    process: (_inputs, config) => {
+      const url = typeof config.url === 'string' ? String(config.url) : '';
+      return { url };
+    },
+  };
+}
+
+function createPlayMediaNode(): NodeDefinition {
+  const resolveUrl = (inputs: Record<string, unknown>, config: Record<string, unknown>, key: string): string => {
+    const fromInput = inputs[key];
+    if (typeof fromInput === 'string' && fromInput.trim()) return fromInput.trim();
+    const fromConfig = config[key];
+    if (typeof fromConfig === 'string' && fromConfig.trim()) return fromConfig.trim();
+    return '';
+  };
+
+  return {
+    type: 'play-media',
+    label: 'Play Media',
+    category: 'Audio',
+    inputs: [
+      { id: 'audioUrl', label: 'Audio', type: 'string' },
+      { id: 'imageUrl', label: 'Image', type: 'string' },
+      { id: 'videoUrl', label: 'Video', type: 'string' },
+      { id: 'trigger', label: 'Trigger', type: 'number' },
+    ],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [
+      { key: 'audioUrl', label: 'Audio URL', type: 'string', defaultValue: '' },
+      { key: 'imageUrl', label: 'Image URL', type: 'string', defaultValue: '' },
+      { key: 'videoUrl', label: 'Video URL', type: 'string', defaultValue: '' },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { key: 'fadeIn', label: 'Fade In (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
+      { key: 'muted', label: 'Video Muted', type: 'boolean', defaultValue: true },
+      { key: 'imageDuration', label: 'Image Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 100 },
+    ],
+    process: (inputs, config, context) => {
+      const triggerRaw = inputs.trigger;
+      const hasTrigger = triggerRaw !== undefined && triggerRaw !== null;
+      const triggerActive =
+        typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);
+
+      if (hasTrigger) {
+        const prev = playMediaTriggerState.get(context.nodeId) ?? false;
+        playMediaTriggerState.set(context.nodeId, triggerActive);
+        if (!triggerActive || prev) return {};
+      }
+      const forceSend = hasTrigger;
+
+      const imageUrl = resolveUrl(inputs, config, 'imageUrl');
+      const videoUrl = resolveUrl(inputs, config, 'videoUrl');
+      const audioUrl = resolveUrl(inputs, config, 'audioUrl');
+
+      const volumeRaw = Number(config.volume ?? 1);
+      const volume = Number.isFinite(volumeRaw) ? Math.max(0, Math.min(1, volumeRaw)) : 1;
+      const loop = Boolean(config.loop ?? false);
+      const fadeInRaw = Number(config.fadeIn ?? 0);
+      const fadeIn = Number.isFinite(fadeInRaw) ? Math.max(0, fadeInRaw) : 0;
+      const muted = Boolean(config.muted ?? true);
+      const imageDurationRaw = Number(config.imageDuration ?? 0);
+      const imageDuration =
+        Number.isFinite(imageDurationRaw) && imageDurationRaw > 0 ? imageDurationRaw : undefined;
+
+      let cmd: NodeCommand | null = null;
+
+      if (imageUrl) {
+        cmd = {
+          action: 'showImage',
+          payload: {
+            url: imageUrl,
+            duration: imageDuration,
+          },
+        };
+      } else if (videoUrl) {
+        cmd = {
+          action: 'playMedia',
+          payload: {
+            url: videoUrl,
+            mediaType: 'video',
+            volume,
+            loop,
+            fadeIn,
+            muted,
+          },
+        };
+      } else if (audioUrl) {
+        cmd = {
+          action: 'playMedia',
+          payload: {
+            url: audioUrl,
+            mediaType: 'audio',
+            volume,
+            loop,
+            fadeIn,
+          },
+        };
+      }
+
+      if (!cmd) {
+        playMediaCommandCache.set(context.nodeId, { signature: '', cmd: null });
+        return { cmd: null };
+      }
+
+      const signature = (() => {
+        try {
+          return JSON.stringify(cmd);
+        } catch {
+          return String(cmd.action ?? '');
+        }
+      })();
+
+      if (forceSend) {
+        playMediaCommandCache.set(context.nodeId, { signature, cmd });
+        return { cmd };
+      }
+
+      const cached = playMediaCommandCache.get(context.nodeId);
+      if (!cached || cached.signature !== signature) {
+        playMediaCommandCache.set(context.nodeId, { signature, cmd });
+        return { cmd };
+      }
+
+      // Reuse the cached command object to avoid deepEqual JSON stringify on large payloads.
+      return { cmd: cached.cmd };
+    },
+  };
+}
+
+function createTonePlayerNode(): NodeDefinition {
+  return {
+    type: 'tone-player',
+    label: 'Tone Player',
+    category: 'Audio',
+    inputs: [
+      { id: 'url', label: 'URL', type: 'string' },
+      { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
+    ],
+    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    configSchema: [
+      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
+      { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { key: 'autostart', label: 'Autostart', type: 'boolean', defaultValue: false },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+    ],
+    process: (inputs, config) => {
+      const volume =
+        typeof inputs.volume === 'number' ? (inputs.volume as number) : Number(config.volume ?? 1);
+      return { value: volume };
+    },
+  };
+}
+
 const FLASHLIGHT_MODE_OPTIONS = [
   { value: 'off', label: 'Off' },
   { value: 'on', label: 'On' },
@@ -324,7 +700,7 @@ function createFlashlightProcessorNode(): NodeDefinition {
     label: 'Flashlight',
     category: 'Processors',
     inputs: [
-      { id: 'mode', label: 'Mode', type: 'fuzzy' },
+      { id: 'mode', label: 'Mode', type: 'string' },
       { id: 'frequencyHz', label: 'Freq', type: 'number' },
       { id: 'dutyCycle', label: 'Duty', type: 'number' },
     ],
@@ -344,6 +720,10 @@ function createFlashlightProcessorNode(): NodeDefinition {
       const fallbackMode = String(config.mode ?? 'blink');
       const mode = (() => {
         const v = inputs.mode;
+        if (typeof v === 'string' && v) {
+          const options = FLASHLIGHT_MODE_OPTIONS.map((o) => o.value);
+          return options.includes(v) ? v : fallbackMode;
+        }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackMode;
         const options = FLASHLIGHT_MODE_OPTIONS.map((o) => o.value);
         const clamped = Math.max(0, Math.min(1, v));
@@ -388,7 +768,7 @@ function createScreenColorProcessorNode(): NodeDefinition {
     inputs: [
       { id: 'primary', label: 'Primary', type: 'color' },
       { id: 'secondary', label: 'Secondary', type: 'color' },
-      { id: 'waveform', label: 'Wave', type: 'fuzzy' },
+      { id: 'waveform', label: 'Wave', type: 'string' },
       { id: 'frequencyHz', label: 'Freq', type: 'number' },
       { id: 'maxOpacity', label: 'Max', type: 'number' },
       { id: 'minOpacity', label: 'Min', type: 'number' },
@@ -424,6 +804,10 @@ function createScreenColorProcessorNode(): NodeDefinition {
       const fallbackWaveform = String(config.waveform ?? 'sine');
       const waveform = (() => {
         const v = inputs.waveform;
+        if (typeof v === 'string' && v) {
+          const options = SCREEN_WAVEFORM_OPTIONS.map((o) => o.value);
+          return options.includes(v) ? v : fallbackWaveform;
+        }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
         const options = SCREEN_WAVEFORM_OPTIONS.map((o) => o.value);
         const clamped = Math.max(0, Math.min(1, v));
@@ -467,7 +851,7 @@ function createSynthUpdateProcessorNode(): NodeDefinition {
     label: 'Synth (Update)',
     category: 'Processors',
     inputs: [
-      { id: 'waveform', label: 'Wave', type: 'fuzzy' },
+      { id: 'waveform', label: 'Wave', type: 'string' },
       { id: 'frequency', label: 'Freq', type: 'number' },
       { id: 'volume', label: 'Vol', type: 'number' },
       { id: 'modDepth', label: 'Depth', type: 'number' },
@@ -509,6 +893,10 @@ function createSynthUpdateProcessorNode(): NodeDefinition {
       const fallbackWaveform = String(config.waveform ?? 'square');
       const waveform = (() => {
         const v = inputs.waveform;
+        if (typeof v === 'string' && v) {
+          const options = SYNTH_WAVEFORM_OPTIONS.map((o) => o.value);
+          return options.includes(v) ? v : fallbackWaveform;
+        }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
         const options = SYNTH_WAVEFORM_OPTIONS.map((o) => o.value);
         const clamped = Math.max(0, Math.min(1, v));

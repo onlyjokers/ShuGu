@@ -1,0 +1,26 @@
+{
+  "__purpose": "Manager node spec for Tone.js pitch shift effect.",
+  "type": "tone-pitch",
+  "label": "Tone Pitch",
+  "category": "Audio",
+  "inputs": [
+    { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
+    { "id": "pitch", "label": "Pitch (st)", "type": "number", "defaultValue": 0 },
+    { "id": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 },
+    { "id": "delayTime", "label": "Delay (s)", "type": "number", "defaultValue": 0 },
+    { "id": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0 },
+    { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
+  ],
+  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "configSchema": [
+    { "key": "pitch", "label": "Pitch (st)", "type": "number", "defaultValue": 0 },
+    { "key": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 },
+    { "key": "delayTime", "label": "Delay (s)", "type": "number", "defaultValue": 0 },
+    { "key": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0 },
+    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 },
+    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
+    { "key": "order", "label": "Order", "type": "number", "defaultValue": 30 },
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
+  ],
+  "runtime": { "kind": "tone-pitch" }
+}

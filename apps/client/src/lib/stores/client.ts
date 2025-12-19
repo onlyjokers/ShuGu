@@ -12,6 +12,7 @@ import {
   ModulatedSoundPlayer,
   WakeLockController,
   NodeExecutor,
+  enableToneAudio,
   type NodeCommand,
   type ClientState,
   type ClientSDKConfig,
@@ -86,6 +87,14 @@ export const asciiResolution = writable<number>(11);
 
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
+
+const AUDIO_ENABLED_STORAGE_KEY = 'shugu-audio-enabled';
+const storedAudioEnabled =
+  typeof window !== 'undefined' &&
+  window.localStorage.getItem(AUDIO_ENABLED_STORAGE_KEY) === 'true';
+
+// Tone.js audio enablement state (requires user gesture to flip to true).
+export const audioEnabled = writable<boolean>(storedAudioEnabled);
 
 // Video playback state
 export const videoState = writable<{
@@ -197,6 +206,12 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
         const p = get(permissions);
         if (capability === 'flashlight') return p.camera === 'granted';
         if (capability === 'sensors') return p.motion === 'granted' || p.microphone === 'granted';
+        if (capability === 'sound') {
+          const hasAudioContext =
+            typeof window !== 'undefined' &&
+            Boolean((window as any).AudioContext || (window as any).webkitAudioContext);
+          return hasAudioContext && get(audioEnabled);
+        }
         return true;
       },
     }
@@ -289,6 +304,22 @@ export async function requestPermissions(): Promise<void> {
     const success = await flashlightController.init();
     permissions.update((p) => ({ ...p, camera: success ? 'granted' : 'denied' }));
   }
+}
+
+function persistAudioEnabled(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(AUDIO_ENABLED_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+/**
+ * Enable Tone.js audio (must be called from a user gesture).
+ */
+export async function enableAudio(): Promise<{ enabled: boolean; error?: string } | null> {
+  const result = await enableToneAudio();
+  if (!result) return null;
+  audioEnabled.set(result.enabled);
+  persistAudioEnabled(result.enabled);
+  return result;
 }
 
 /**

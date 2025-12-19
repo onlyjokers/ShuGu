@@ -83,6 +83,39 @@ export class ClientPickerControl extends ClassicPreset.Control {
   }
 }
 
+export class FilePickerControl extends ClassicPreset.Control {
+  controlType = 'file-picker' as const;
+  label?: string;
+  value: string;
+  accept?: string;
+  buttonLabel?: string;
+  readonly: boolean;
+  private onChange?: (value: string) => void;
+
+  constructor(opts: {
+    label?: string;
+    initial?: string;
+    accept?: string;
+    buttonLabel?: string;
+    readonly?: boolean;
+    change?: (value: string) => void;
+  }) {
+    super();
+    this.label = opts.label;
+    this.value = opts.initial ?? '';
+    this.accept = opts.accept;
+    this.buttonLabel = opts.buttonLabel;
+    this.readonly = Boolean(opts.readonly);
+    this.onChange = opts.change;
+  }
+
+  setValue(value: string): void {
+    if (this.readonly) return;
+    this.value = value;
+    this.onChange?.(value);
+  }
+}
+
 export class ClientSensorValueControl extends ClassicPreset.Control {
   controlType = 'client-sensor-value' as const;
   nodeId: string;

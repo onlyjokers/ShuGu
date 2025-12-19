@@ -1,0 +1,29 @@
+{
+  "__purpose": "Manager node spec for Tone.js oscillator (tone-osc).",
+  "type": "tone-osc",
+  "label": "Tone Osc",
+  "category": "Audio",
+  "inputs": [
+    { "id": "frequency", "label": "Freq", "type": "number", "defaultValue": 440 },
+    { "id": "amplitude", "label": "Amp", "type": "number", "defaultValue": 1 }
+  ],
+  "outputs": [{ "id": "value", "label": "Out", "type": "number" }],
+  "configSchema": [
+    {
+      "key": "waveform",
+      "label": "Waveform",
+      "type": "select",
+      "defaultValue": "sine",
+      "options": [
+        { "value": "sine", "label": "Sine" },
+        { "value": "square", "label": "Square" },
+        { "value": "triangle", "label": "Triangle" },
+        { "value": "sawtooth", "label": "Sawtooth" }
+      ]
+    },
+    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false },
+    { "key": "loop", "label": "Loop (pattern)", "type": "string", "defaultValue": "" }
+  ],
+  "runtime": { "kind": "tone-osc" }
+}

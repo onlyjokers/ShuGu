@@ -1,0 +1,158 @@
+{
+  "__purpose": "Node graph template focused on loading a local audio file, playing it with Tone.Player, and modulating via Tone FX (bus=media).",
+  "nodes": [
+    {
+      "id": "node-client",
+      "type": "client-object",
+      "position": { "x": 60, "y": 160 },
+      "config": { "clientId": "" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-sensors",
+      "type": "proc-client-sensors",
+      "position": { "x": 60, "y": 320 },
+      "config": {},
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-load-media",
+      "type": "load-media-sound",
+      "position": { "x": 320, "y": 160 },
+      "config": { "url": "" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-player",
+      "type": "tone-player",
+      "position": { "x": 560, "y": 160 },
+      "config": {
+        "url": "",
+        "loop": true,
+        "autostart": false,
+        "playbackRate": 1,
+        "detune": 0,
+        "volume": 1,
+        "bus": "media",
+        "enabled": true
+      },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-delay",
+      "type": "tone-delay",
+      "position": { "x": 820, "y": 160 },
+      "config": { "time": 0.25, "feedback": 0.35, "wet": 0.2, "bus": "media", "order": 10, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-resonator",
+      "type": "tone-resonator",
+      "position": { "x": 1040, "y": 160 },
+      "config": { "delayTime": 0.08, "resonance": 0.6, "dampening": 3000, "wet": 0.3, "bus": "media", "order": 20, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-pitch",
+      "type": "tone-pitch",
+      "position": { "x": 1260, "y": 160 },
+      "config": { "pitch": 0, "windowSize": 0.1, "delayTime": 0, "feedback": 0, "wet": 0.2, "bus": "media", "order": 30, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-reverb",
+      "type": "tone-reverb",
+      "position": { "x": 1480, "y": 160 },
+      "config": { "decay": 1.6, "preDelay": 0.01, "wet": 0.25, "bus": "media", "order": 40, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-screen",
+      "type": "proc-screen-color",
+      "position": { "x": 1700, "y": 160 },
+      "config": {
+        "primary": "#6366f1",
+        "secondary": "#ffffff",
+        "maxOpacity": 1,
+        "minOpacity": 0,
+        "waveform": "sine",
+        "frequencyHz": 1.5
+      },
+      "inputValues": {},
+      "outputValues": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn-client-sensors",
+      "sourceNodeId": "node-client",
+      "sourcePortId": "out",
+      "targetNodeId": "node-sensors",
+      "targetPortId": "client"
+    },
+    {
+      "id": "conn-load-media-player",
+      "sourceNodeId": "node-load-media",
+      "sourcePortId": "url",
+      "targetNodeId": "node-tone-player",
+      "targetPortId": "url"
+    },
+    {
+      "id": "conn-sensors-volume",
+      "sourceNodeId": "node-sensors",
+      "sourcePortId": "micVol",
+      "targetNodeId": "node-tone-player",
+      "targetPortId": "volume"
+    },
+    {
+      "id": "conn-player-delay",
+      "sourceNodeId": "node-tone-player",
+      "sourcePortId": "value",
+      "targetNodeId": "node-tone-delay",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-delay-resonator",
+      "sourceNodeId": "node-tone-delay",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-resonator",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-resonator-pitch",
+      "sourceNodeId": "node-tone-resonator",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-pitch",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-pitch-reverb",
+      "sourceNodeId": "node-tone-pitch",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-reverb",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-reverb-screen",
+      "sourceNodeId": "node-tone-reverb",
+      "sourcePortId": "out",
+      "targetNodeId": "node-screen",
+      "targetPortId": "frequencyHz"
+    },
+    {
+      "id": "conn-screen-client",
+      "sourceNodeId": "node-screen",
+      "sourcePortId": "cmd",
+      "targetNodeId": "node-client",
+      "targetPortId": "in"
+    }
+  ]
+}

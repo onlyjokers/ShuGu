@@ -1,0 +1,22 @@
+{
+  "__purpose": "Manager node spec for Tone.js reverb effect.",
+  "type": "tone-reverb",
+  "label": "Tone Reverb",
+  "category": "Audio",
+  "inputs": [
+    { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
+    { "id": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6 },
+    { "id": "preDelay", "label": "PreDelay (s)", "type": "number", "defaultValue": 0.01 },
+    { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
+  ],
+  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "configSchema": [
+    { "key": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6 },
+    { "key": "preDelay", "label": "PreDelay (s)", "type": "number", "defaultValue": 0.01 },
+    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 },
+    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
+    { "key": "order", "label": "Order", "type": "number", "defaultValue": 40 },
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
+  ],
+  "runtime": { "kind": "tone-reverb" }
+}

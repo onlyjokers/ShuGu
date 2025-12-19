@@ -1,0 +1,24 @@
+{
+  "__purpose": "Manager node spec for Tone.js resonator (comb filter) effect.",
+  "type": "tone-resonator",
+  "label": "Tone Resonator",
+  "category": "Audio",
+  "inputs": [
+    { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
+    { "id": "delayTime", "label": "Delay (s)", "type": "number", "defaultValue": 0.08 },
+    { "id": "resonance", "label": "Resonance", "type": "number", "defaultValue": 0.6 },
+    { "id": "dampening", "label": "Dampening", "type": "number", "defaultValue": 3000 },
+    { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.4 }
+  ],
+  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "configSchema": [
+    { "key": "delayTime", "label": "Delay (s)", "type": "number", "defaultValue": 0.08 },
+    { "key": "resonance", "label": "Resonance", "type": "number", "defaultValue": 0.6 },
+    { "key": "dampening", "label": "Dampening (Hz)", "type": "number", "defaultValue": 3000 },
+    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.4 },
+    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
+    { "key": "order", "label": "Order", "type": "number", "defaultValue": 20 },
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
+  ],
+  "runtime": { "kind": "tone-resonator" }
+}

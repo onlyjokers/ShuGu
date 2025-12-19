@@ -30,6 +30,7 @@
         "@shugu/sdk-client": "workspace:*",
         "@shugu/ui-kit": "workspace:*",
         "@shugu/visual-plugins": "workspace:*",
+        "tone": "^14.8.49",
         "three": "^0.160.0"
     },
     "type": "module"

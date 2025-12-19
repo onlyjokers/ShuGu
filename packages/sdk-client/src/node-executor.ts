@@ -3,6 +3,7 @@ import type { ClientSDK } from './client-sdk.js';
 import { NodeRegistry, NodeRuntime } from '@shugu/node-core';
 import { registerDefaultNodeDefinitions, type NodeCommand } from './node-definitions.js';
 import type { GraphState } from './node-types.js';
+import { registerToneClientDefinitions, type ToneAdapterHandle } from './tone-adapter.js';
 
 export type NodeExecutorDeployPayload = {
   graph: Pick<GraphState, 'nodes' | 'connections'>;
@@ -45,6 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class NodeExecutor {
   private registry = new NodeRegistry();
   private runtime: NodeRuntime;
+  private toneAdapter: ToneAdapterHandle | null = null;
   private loopId: string | null = null;
   private lastError: string | null = null;
   private running = false;
@@ -107,6 +109,8 @@ export class NodeExecutor {
       getLatestSensor: () => this.sdk.getLatestSensorData(),
       executeCommand: (cmd) => this.executeCommand(cmd),
     });
+    // Client-only Tone.js implementations override the shared node-core definitions.
+    this.toneAdapter = registerToneClientDefinitions(this.registry, { sdk: this.sdk });
 
     this.runtime = new NodeRuntime(this.registry, {
       onTick: ({ durationMs }) => {
@@ -171,6 +175,7 @@ export class NodeExecutor {
   destroy(): void {
     this.runtime.stop();
     this.runtime.clear();
+    this.clearToneNodes();
     this.loopId = null;
     this.running = false;
     this.lastError = null;
@@ -261,6 +266,24 @@ export class NodeExecutor {
       );
     }
 
+    // Only keep Tone instances for audio nodes present in the next graph.
+    const toneNodeIds = new Set(
+      parsed.graph.nodes
+        .filter((node) =>
+          [
+            'tone-osc',
+            'tone-delay',
+            'tone-resonator',
+            'tone-pitch',
+            'tone-reverb',
+            'tone-granular',
+            'tone-player',
+          ].includes(node.type)
+        )
+        .map((node) => node.id)
+    );
+    this.toneAdapter?.syncActiveNodes(toneNodeIds);
+
     this.runtime.stop();
     this.runtime.clear();
     this.runtime.setTickIntervalMs(clampedTick);
@@ -309,6 +332,7 @@ export class NodeExecutor {
     this.runtime.stop();
     this.runtime.clear();
     this.runtime.clearOverrides();
+    this.clearToneNodes();
     this.loopId = null;
     this.running = false;
     this.lastError = null;
@@ -395,5 +419,9 @@ export class NodeExecutor {
     } catch {
       // ignore
     }
+  }
+
+  private clearToneNodes(): void {
+    this.toneAdapter?.disposeAll();
   }
 }

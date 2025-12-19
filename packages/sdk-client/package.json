@@ -24,7 +24,8 @@
     "dependencies": {
         "@shugu/node-core": "workspace:*",
         "@shugu/protocol": "workspace:*",
-        "socket.io-client": "^4.7.2"
+        "socket.io-client": "^4.7.2",
+        "tone": "^14.8.49"
     },
     "devDependencies": {
         "typescript": "^5.3.0"

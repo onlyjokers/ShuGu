@@ -4,9 +4,10 @@
   import Button from '$lib/components/ui/Button.svelte';
 
   export let frames: any[] = [];
-  export let addModeGroupId: string | null = null;
+  export let editModeGroupId: string | null = null;
+  export let toast: { groupId: string; message: string } | null = null;
   export let onToggleDisabled: (groupId: string) => void = () => undefined;
-  export let onToggleAddMode: (groupId: string) => void = () => undefined;
+  export let onToggleEditMode: (groupId: string) => void = () => undefined;
   export let onDisassemble: (groupId: string) => void = () => undefined;
   export let onRename: (groupId: string, name: string) => void = () => undefined;
 
@@ -38,9 +39,10 @@
   <div class="group-frame-layer">
     {#each frames as frame (frame.group.id)}
       {@const group = frame.group}
-      {@const isAdding = addModeGroupId === group.id}
+      {@const isEditing = editModeGroupId === group.id}
+      {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
       <div
-        class="group-frame {group.disabled ? 'disabled' : ''} {isAdding ? 'adding' : ''}"
+        class="group-frame {group.disabled ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
         style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
       >
         <div class="group-frame-header" on:pointerdown|stopPropagation>
@@ -73,11 +75,11 @@
           {/if}
           <div class="group-frame-actions">
             <Button
-              variant={isAdding ? 'primary' : 'ghost'}
+              variant={isEditing ? 'primary' : 'ghost'}
               size="sm"
-              on:click={() => onToggleAddMode(group.id)}
+              on:click={() => onToggleEditMode(group.id)}
             >
-              {isAdding ? 'Adding…' : 'Add Node'}
+              {isEditing ? 'Editing…' : 'Edit Group'}
             </Button>
             <Button variant="ghost" size="sm" on:click={() => onDisassemble(group.id)}>
               Disassemble
@@ -91,6 +93,12 @@
             </Button>
           </div>
         </div>
+
+        {#if toastMessage}
+          <div class="group-frame-toast" aria-live="polite">
+            {toastMessage}
+          </div>
+        {/if}
       </div>
     {/each}
   </div>
@@ -123,11 +131,11 @@
       0 18px 64px rgba(148, 163, 184, 0.06);
   }
 
-  .group-frame.adding {
+  .group-frame.editing {
     animation: group-frame-pulse 1.4s ease-in-out infinite;
   }
 
-  .group-frame.disabled.adding {
+  .group-frame.disabled.editing {
     animation-name: group-frame-pulse-disabled;
   }
 
@@ -193,6 +201,26 @@
 
   .group-frame-actions :global(.btn) {
     border-radius: 999px;
+  }
+
+  .group-frame-toast {
+    position: absolute;
+    top: 46px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(2, 6, 23, 0.58);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    white-space: nowrap;
+    max-width: min(520px, calc(100% - 48px));
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   @keyframes group-frame-pulse {

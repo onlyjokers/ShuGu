@@ -19,11 +19,10 @@ Manager 的 Node Graph 节点通过本目录下的 `*.json` 自动注册。
 - `number`, `math`, `lfo`
 - `param-get`, `param-set`
 - `client-object`, `proc-client-sensors`
-- `midi-fuzzy`, `midi-boolean`, `midi-map`, `midi-color-map`
+- `midi-fuzzy`, `midi-boolean`, `midi-map`, `midi-select-map`, `midi-color-map`
 
 ## 新增节点
 
 1. 在本目录新增一个 `*.json`
 2. 填写上述字段（至少需要 `type/label/category/inputs/outputs/configSchema/runtime`）
 3. 重启 `pnpm dev:manager`（或重新 build）即可在 Add 菜单中出现
-

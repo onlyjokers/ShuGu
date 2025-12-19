@@ -12,6 +12,7 @@
     currentScene,
     asciiEnabled,
     asciiResolution,
+    enableAudio,
   } from '$lib/stores/client';
   import StartScreen from '$lib/components/StartScreen.svelte';
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
@@ -458,6 +459,12 @@
 
     // Request fullscreen while the click gesture is still active to maximize success.
     tryFullscreen('click');
+
+    try {
+      await enableAudio();
+    } catch (error) {
+      console.warn('[Client] Tone audio enable failed', error);
+    }
 
     if (gateInFlight) return;
     gateInFlight = runGeoGate().finally(() => {

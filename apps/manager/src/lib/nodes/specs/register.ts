@@ -84,9 +84,19 @@ type NodeRuntime =
   | { kind: 'number' }
   | { kind: 'math' }
   | { kind: 'lfo' }
+  | { kind: 'tone-osc' }
+  | { kind: 'tone-delay' }
+  | { kind: 'tone-resonator' }
+  | { kind: 'tone-pitch' }
+  | { kind: 'tone-reverb' }
+  | { kind: 'tone-granular' }
+  | { kind: 'tone-player' }
+  | { kind: 'play-media' }
+  | { kind: 'load-media-sound' }
   | { kind: 'midi-fuzzy' }
   | { kind: 'midi-boolean' }
   | { kind: 'midi-map' }
+  | { kind: 'midi-select-map' }
   | { kind: 'midi-color-map' }
   | { kind: 'manager-select-clients-range' }
   | { kind: 'manager-select-clients-object' }
@@ -139,6 +149,15 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['number', pick('number')],
     ['math', pick('math')],
     ['lfo', pick('lfo')],
+    ['tone-osc', pick('tone-osc')],
+    ['tone-delay', pick('tone-delay')],
+    ['tone-resonator', pick('tone-resonator')],
+    ['tone-pitch', pick('tone-pitch')],
+    ['tone-reverb', pick('tone-reverb')],
+    ['tone-granular', pick('tone-granular')],
+    ['tone-player', pick('tone-player')],
+    ['play-media', pick('play-media')],
+    ['load-media-sound', pick('load-media-sound')],
   ]);
 })();
 
@@ -179,6 +198,9 @@ function getEnumFromFuzzy(inputs: Record<string, unknown>, config: Record<string
     typeof fallback === 'string' && fallback ? fallback : typeof mapping.default === 'string' ? mapping.default : '';
 
   const raw = inputs[mapping.inputKey];
+  if (typeof raw === 'string' && raw) {
+    if (options.includes(raw)) return raw;
+  }
   if (!isFiniteNumber(raw) || options.length === 0) {
     if (fallbackStr && options.includes(fallbackStr)) return fallbackStr;
     return fallbackStr || options[0] || '';
@@ -323,7 +345,26 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
     case 'proc-client-sensors':
     case 'number':
     case 'math':
-    case 'lfo': {
+    case 'lfo':
+    case 'tone-osc':
+    case 'tone-player':
+    case 'play-media':
+    case 'load-media-sound': {
+      const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
+      if (!impl) {
+        throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
+      }
+      return {
+        ...base,
+        process: impl.process,
+        ...(impl.onSink ? { onSink: impl.onSink } : {}),
+      };
+    }
+    case 'tone-delay':
+    case 'tone-resonator':
+    case 'tone-pitch':
+    case 'tone-reverb':
+    case 'tone-granular': {
       const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
       if (!impl) {
         throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
@@ -417,6 +458,27 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
 
           const mapped = mapRangeWithOptions(value, min, max, invert);
           return { out: round ? Math.round(mapped) : mapped };
+        },
+      };
+    }
+    case 'midi-select-map': {
+      const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+
+      return {
+        ...base,
+        process: (inputs, config) => {
+          const value = typeof inputs.in === 'number' ? (inputs.in as number) : null;
+          if (value === null || !Number.isFinite(value)) return { out: null };
+
+          const invert = Boolean(config.invert);
+          const rawOptions = Array.isArray((config as any).options) ? ((config as any).options as unknown[]) : [];
+          const options = rawOptions.map((opt) => String(opt)).filter((opt) => opt !== '');
+
+          const t = clamp01(invert ? 1 - value : value);
+          if (options.length === 0) return { out: null };
+
+          const idx = Math.min(options.length - 1, Math.floor(t * options.length));
+          return { out: options[idx] ?? null };
         },
       };
     }

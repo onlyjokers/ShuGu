@@ -43,6 +43,7 @@
     BooleanControl,
     ClientPickerControl,
     ClientSensorValueControl,
+    FilePickerControl,
     MidiLearnControl,
     SelectControl,
   } from './rete-controls';
@@ -343,7 +344,11 @@
   type GroupFrame = { group: NodeGroup; left: number; top: number; width: number; height: number };
   let nodeGroups: NodeGroup[] = [];
   let groupFrames: GroupFrame[] = [];
-  let addNodeModeGroupId: string | null = null;
+  let editModeGroupId: string | null = null;
+  // Frozen group bounds in graph coordinates while in edit mode (so the frame doesn't "follow" node movement).
+  let editModeGroupBounds: { left: number; top: number; right: number; bottom: number } | null = null;
+  let groupEditToast: { groupId: string; message: string } | null = null;
+  let groupEditToastTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Shift+drag marquee selection for creating groups.
   let isMarqueeDragging = false;
@@ -776,6 +781,37 @@
     } as any);
   }
 
+  function stopAllDeployedLoops() {
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    const loopById = new Map(localLoops.map((loop) => [loop.id, loop]));
+    const nextClientMap = new Map(deployedLoopClientIdByLoopId);
+
+    for (const loopId of deployedLoopIds) {
+      const loop = loopById.get(loopId);
+      const clientId =
+        nextClientMap.get(loopId) ?? (loop ? getLoopClientId(loop) : '');
+      if (!clientId) continue;
+      stopAndRemoveLoopById(loopId, clientId);
+      nodeEngine.markLoopDeployed(loopId, false);
+      nextClientMap.delete(loopId);
+    }
+
+    deployedLoopClientIdByLoopId = nextClientMap;
+  }
+
+  function stopAllClientEffects() {
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    sdk.stopSound(true);
+    sdk.stopMedia(true);
+    sdk.hideImage(true);
+    sdk.flashlight('off', undefined, true);
+    sdk.screenColor({ color: '#000000', opacity: 0, mode: 'solid' }, true);
+  }
+
   function removeLoop(loop: LocalLoop) {
     const clientId = getLoopClientId(loop);
     if (!clientId) return;
@@ -803,6 +839,24 @@
     if (toDisable.length > 0) nodeEngine.setNodesDisabled(toDisable, true);
     if (toEnable.length > 0) nodeEngine.setNodesDisabled(toEnable, false);
     scheduleGroupHighlight();
+  }
+
+  function clearGroupEditToast() {
+    groupEditToast = null;
+    if (groupEditToastTimeout) {
+      clearTimeout(groupEditToastTimeout);
+      groupEditToastTimeout = null;
+    }
+  }
+
+  function showGroupEditToast(groupId: string, message: string) {
+    if (!groupId) return;
+    groupEditToast = { groupId, message };
+    if (groupEditToastTimeout) clearTimeout(groupEditToastTimeout);
+    groupEditToastTimeout = setTimeout(() => {
+      groupEditToast = null;
+      groupEditToastTimeout = null;
+    }, 1400);
   }
 
   function computeGroupFrameBounds(group: NodeGroup, t: AreaTransform): NodeBounds | null {
@@ -836,6 +890,23 @@
       top: bounds.top - paddingTop,
       right: bounds.right + paddingX,
       bottom: bounds.bottom + paddingBottom,
+    };
+  }
+
+  function computeLoopFrameBounds(loop: LocalLoop, t: AreaTransform): NodeBounds | null {
+    // Keep in sync with computeLoopFrames() so push-out matches the visual loop frame.
+    const paddingX = 56;
+    const paddingTop = 64;
+    const paddingBottom = 64;
+
+    const base = unionBounds(loop.nodeIds ?? [], t);
+    if (!base) return null;
+
+    return {
+      left: base.left - paddingX,
+      top: base.top - paddingTop,
+      right: base.right + paddingX,
+      bottom: base.bottom + paddingBottom,
     };
   }
 
@@ -927,114 +998,135 @@
     animateNodeTranslations(updates);
   }
 
-  // Group membership is explicit. A node can only be added to a group when the user enables
-  // "Add Node" for that group, then drops the node inside the group frame. Otherwise, nodes
-  // are pushed out of group bounds (same behavior as group creation push-out).
-  function handleDroppedNodesForGroups(nodeIds: string[]) {
+  // Frame constraints:
+  // - Loop frames always exclude unrelated nodes (push-out on drop).
+  // - Group membership can be edited only when "Edit Group" is enabled for that group; in edit mode, the
+  //   group frame is frozen (so it doesn't follow node movement) and dropping nodes inside/outside adds/removes
+  //   membership with a temporary toast. Outside edit mode, non-member nodes dropped inside groups get pushed out.
+  function handleDroppedNodesAfterDrag(nodeIds: string[]) {
     if (!nodeIds.length) return;
-    if (nodeGroups.length === 0) return;
     if (isProgrammaticTranslate()) return;
 
     const t = readAreaTransform();
     if (!t) return;
 
-    const groupsWithBounds = nodeGroups
-      .map((group) => {
-        const bounds = computeGroupFrameBounds(group, t);
-        if (!bounds) return null;
-        const area = Math.max(1, (bounds.right - bounds.left) * (bounds.bottom - bounds.top));
-        return { group, bounds, area };
-      })
-      .filter(Boolean) as { group: NodeGroup; bounds: NodeBounds; area: number }[];
-
-    if (groupsWithBounds.length === 0) return;
-
-    const activeGroup = addNodeModeGroupId
-      ? nodeGroups.find((g) => g.id === addNodeModeGroupId) ?? null
-      : null;
-    const activeBounds = activeGroup ? computeGroupFrameBounds(activeGroup, t) : null;
-
-    const additionsByGroupId = new Map<string, Set<string>>();
-    const pushOutByGroupId = new Map<string, NodeBounds>();
-
-    for (const nodeId of nodeIds) {
-      const b = readNodeBounds(String(nodeId), t);
-      if (!b) continue;
+    const nodeCenterCache = new Map<string, { cx: number; cy: number }>();
+    const getNodeCenter = (nodeId: string) => {
+      const id = String(nodeId);
+      const cached = nodeCenterCache.get(id);
+      if (cached) return cached;
+      const b = readNodeBounds(id, t);
+      if (!b) return null;
       const cx = (b.left + b.right) / 2;
       const cy = (b.top + b.bottom) / 2;
+      const v = { cx, cy };
+      nodeCenterCache.set(id, v);
+      return v;
+    };
 
-      if (
-        activeGroup &&
-        activeBounds &&
-        cx > activeBounds.left &&
-        cx < activeBounds.right &&
-        cy > activeBounds.top &&
-        cy < activeBounds.bottom
-      ) {
-        const alreadyMember = (activeGroup.nodeIds ?? []).some((id) => String(id) === String(nodeId));
-        if (alreadyMember) continue;
-        const set = additionsByGroupId.get(activeGroup.id) ?? new Set<string>();
-        set.add(String(nodeId));
-        additionsByGroupId.set(activeGroup.id, set);
-        continue;
-      }
+    // 1) Loop frames: always push unrelated nodes out when a drag ends inside/near the loop.
+    for (const loop of localLoops) {
+      const bounds = computeLoopFrameBounds(loop, t);
+      if (!bounds) continue;
+      const loopNodeSet = new Set((loop.nodeIds ?? []).map((id) => String(id)));
 
-      const containing = groupsWithBounds
-        .filter(
-          (g) =>
-            cx > g.bounds.left &&
-            cx < g.bounds.right &&
-            cy > g.bounds.top &&
-            cy < g.bounds.bottom
-        )
-        .sort((a, b) => a.area - b.area);
-      const target = containing[0];
-      if (!target) continue;
-
-      const group = target.group;
-      const member = (group.nodeIds ?? []).some((id) => String(id) === String(nodeId));
-      if (member) continue;
-
-      // Only allow entering a group if its Add Node mode is enabled.
-      if (addNodeModeGroupId && group.id === addNodeModeGroupId) {
-        const set = additionsByGroupId.get(group.id) ?? new Set<string>();
-        set.add(String(nodeId));
-        additionsByGroupId.set(group.id, set);
-        continue;
-      }
-
-      pushOutByGroupId.set(group.id, target.bounds);
-    }
-
-    if (additionsByGroupId.size > 0) {
-      const addedToDisabled: string[] = [];
-      nodeGroups = nodeGroups.map((g) => {
-        const addSet = additionsByGroupId.get(g.id);
-        if (!addSet || addSet.size === 0) return g;
-        const prev = new Set((g.nodeIds ?? []).map(String));
-        const next = new Set([...prev, ...Array.from(addSet).map(String)]);
-        if (next.size === prev.size) return g;
-        if (g.disabled) {
-          for (const id of addSet) if (!prev.has(String(id))) addedToDisabled.push(String(id));
+      let shouldEnforce = false;
+      for (const movedId of nodeIds) {
+        const id = String(movedId);
+        if (loopNodeSet.has(id)) {
+          shouldEnforce = true;
+          break;
         }
-        const nextNodeIds = Array.from(next);
-        return { ...g, nodeIds: nextNodeIds };
-      });
-
-      if (addedToDisabled.length > 0) {
-        recomputeGroupDisabledNodes(nodeGroups);
-        stopDeployedLoopsIntersecting(addedToDisabled.map(String));
+        const c = getNodeCenter(id);
+        if (!c) continue;
+        if (c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom) {
+          shouldEnforce = true;
+          break;
+        }
       }
+      if (!shouldEnforce) continue;
 
-      requestLoopFramesUpdate();
+      pushNodesOutOfBounds(bounds, loopNodeSet);
     }
 
-    if (pushOutByGroupId.size > 0) {
-      for (const [groupId, bounds] of pushOutByGroupId.entries()) {
-        const group = nodeGroups.find((g) => g.id === groupId);
-        if (!group) continue;
-        pushNodesOutOfBounds(bounds, new Set((group.nodeIds ?? []).map(String)));
+    // 2) Group edit mode: add/remove membership based on the frozen bounds.
+    if (editModeGroupId && editModeGroupBounds) {
+      const group = nodeGroups.find((g) => g.id === editModeGroupId) ?? null;
+      if (group) {
+        const bounds: NodeBounds = {
+          left: editModeGroupBounds.left * t.k + t.tx,
+          top: editModeGroupBounds.top * t.k + t.ty,
+          right: editModeGroupBounds.right * t.k + t.tx,
+          bottom: editModeGroupBounds.bottom * t.k + t.ty,
+        };
+
+        const nextSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
+        const added: string[] = [];
+        const removed: string[] = [];
+
+        for (const movedId of nodeIds) {
+          const id = String(movedId);
+          const c = getNodeCenter(id);
+          if (!c) continue;
+          const inside =
+            c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom;
+
+          if (inside && !nextSet.has(id)) {
+            nextSet.add(id);
+            added.push(id);
+            const node = graphState.nodes.find((n) => String(n.id) === id);
+            const nodeName = node ? nodeLabel(node) : id;
+            showGroupEditToast(group.id, `Add ${nodeName} to ${group.name ?? 'Group'}`);
+          }
+
+          if (!inside && nextSet.has(id)) {
+            nextSet.delete(id);
+            removed.push(id);
+            const node = graphState.nodes.find((n) => String(n.id) === id);
+            const nodeName = node ? nodeLabel(node) : id;
+            showGroupEditToast(group.id, `Remove ${nodeName} from ${group.name ?? 'Group'}`);
+          }
+        }
+
+        if (added.length > 0 || removed.length > 0) {
+          nodeGroups = nodeGroups.map((g) =>
+            g.id === group.id ? { ...g, nodeIds: Array.from(nextSet) } : g
+          );
+          recomputeGroupDisabledNodes(nodeGroups);
+          requestLoopFramesUpdate();
+
+          if (group.disabled && added.length > 0) {
+            stopDeployedLoopsIntersecting(added.map(String));
+          }
+        }
       }
+    }
+
+    // 3) Group frames (non-edit): push unrelated nodes out on drop.
+    for (const group of nodeGroups) {
+      if (editModeGroupId === group.id) continue;
+
+      const bounds = computeGroupFrameBounds(group, t);
+      if (!bounds) continue;
+      const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
+
+      let shouldEnforce = false;
+      for (const movedId of nodeIds) {
+        const id = String(movedId);
+        if (groupNodeSet.has(id)) {
+          shouldEnforce = true;
+          break;
+        }
+        const c = getNodeCenter(id);
+        if (!c) continue;
+        if (c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom) {
+          shouldEnforce = true;
+          break;
+        }
+      }
+      if (!shouldEnforce) continue;
+
+      pushNodesOutOfBounds(bounds, groupNodeSet);
     }
   }
 
@@ -1096,7 +1188,11 @@
   function disassembleGroup(groupId: string) {
     if (!groupId) return;
     if (!nodeGroups.some((g) => g.id === groupId)) return;
-    if (addNodeModeGroupId === groupId) addNodeModeGroupId = null;
+    if (editModeGroupId === groupId) {
+      editModeGroupId = null;
+      editModeGroupBounds = null;
+      clearGroupEditToast();
+    }
     nodeGroups = nodeGroups.filter((g) => g.id !== groupId);
     recomputeGroupDisabledNodes(nodeGroups);
     requestLoopFramesUpdate();
@@ -1111,10 +1207,38 @@
     requestLoopFramesUpdate();
   }
 
-  function toggleGroupAddNodeMode(groupId: string) {
+  function toggleGroupEditMode(groupId: string) {
     if (!groupId) return;
-    if (!nodeGroups.some((g) => g.id === groupId)) return;
-    addNodeModeGroupId = addNodeModeGroupId === groupId ? null : groupId;
+    const group = nodeGroups.find((g) => g.id === groupId) ?? null;
+    if (!group) return;
+
+    if (editModeGroupId === groupId) {
+      editModeGroupId = null;
+      editModeGroupBounds = null;
+      clearGroupEditToast();
+      requestLoopFramesUpdate();
+      return;
+    }
+
+    const t = readAreaTransform();
+    if (t) {
+      const b = computeGroupFrameBounds(group, t);
+      if (b) {
+        editModeGroupBounds = {
+          left: (b.left - t.tx) / t.k,
+          top: (b.top - t.ty) / t.k,
+          right: (b.right - t.tx) / t.k,
+          bottom: (b.bottom - t.ty) / t.k,
+        };
+      } else {
+        editModeGroupBounds = null;
+      }
+    } else {
+      editModeGroupBounds = null;
+    }
+
+    editModeGroupId = groupId;
+    clearGroupEditToast();
     requestLoopFramesUpdate();
   }
 
@@ -1210,12 +1334,13 @@
         input.type === 'number' || input.type === 'string' || input.type === 'boolean';
       const isSink = input.kind === 'sink';
       const configField = configFieldByKey.get(input.id);
+      const isSelectConfig = configField?.type === 'select';
       const configValue = instance.config?.[input.id];
       const current = instance.inputValues?.[input.id];
       const derivedDefault = hasDefault ? input.defaultValue : configField?.defaultValue;
       const hasInitial =
         current !== undefined || configValue !== undefined || derivedDefault !== undefined;
-      if (hasInitial && isPrimitive && !isSink) {
+      if (hasInitial && isPrimitive && !isSink && !isSelectConfig) {
         if (input.type === 'number') {
           const min =
             typeof input.min === 'number'
@@ -1428,6 +1553,20 @@
               value: p.path,
               label: `${p.label} (${p.path})`,
             })),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              sendNodeOverride(instance.id, 'config', key, value);
+            },
+          })
+        );
+      } else if (field.type === 'file') {
+        node.addControl(
+          key,
+          new FilePickerControl({
+            label: field.label,
+            initial: typeof current === 'string' ? current : '',
+            accept: field.accept,
+            buttonLabel: field.buttonLabel,
             change: (value) => {
               nodeEngine.updateNodeConfig(instance.id, { [key]: value });
               sendNodeOverride(instance.id, 'config', key, value);
@@ -2193,6 +2332,21 @@
 
     const frames: GroupFrame[] = [];
     for (const group of nodeGroups) {
+      if (editModeGroupId === group.id && editModeGroupBounds) {
+        const left = editModeGroupBounds.left * t.k + t.tx;
+        const top = editModeGroupBounds.top * t.k + t.ty;
+        const right = editModeGroupBounds.right * t.k + t.tx;
+        const bottom = editModeGroupBounds.bottom * t.k + t.ty;
+        frames.push({
+          group,
+          left,
+          top,
+          width: right - left,
+          height: bottom - top,
+        });
+        continue;
+      }
+
       const base = unionBounds(group.nodeIds, t);
       if (!base) continue;
 
@@ -2562,7 +2716,7 @@
                 : [];
           multiDragLeaderId = null;
           multiDragLeaderLastPos = null;
-          handleDroppedNodesForGroups(movedNodeIds);
+          handleDroppedNodesAfterDrag(movedNodeIds);
         }
         if (
           ctx?.type === 'translated' ||
@@ -2651,6 +2805,8 @@
   function handleToggleEngine() {
     if ($isRunningStore) {
       nodeEngine.stop();
+      stopAllClientEffects();
+      stopAllDeployedLoops();
     } else {
       nodeEngine.start();
     }
@@ -2662,7 +2818,9 @@
       nodeGroups = [];
       groupFrames = [];
       groupDisabledNodeIds = new Set();
-      addNodeModeGroupId = null;
+      editModeGroupId = null;
+      editModeGroupBounds = null;
+      clearGroupEditToast();
       clearGroupSelection();
       scheduleGroupHighlight();
     }
@@ -2739,7 +2897,9 @@
     nodeGroups = [];
     groupFrames = [];
     groupDisabledNodeIds = new Set();
-    addNodeModeGroupId = null;
+    editModeGroupId = null;
+    editModeGroupBounds = null;
+    clearGroupEditToast();
     clearGroupSelection();
     scheduleGroupHighlight();
   }
@@ -2943,6 +3103,8 @@
 
     loopsUnsub = localLoopsStore?.subscribe((loops) => {
       const nextLoops = Array.isArray(loops) ? loops : [];
+      const prevLoopIds = new Set(localLoops.map((l) => l.id));
+      const addedLoops = nextLoops.filter((l) => !prevLoopIds.has(l.id));
 
       // If a previously deployed loop disappears (e.g. user breaks the cycle), stop + remove it on client.
       const nextIds = new Set(nextLoops.map((l) => l.id));
@@ -2968,6 +3130,19 @@
       localLoops = nextLoops;
       recomputeLoopHighlightSets();
       requestLoopFramesUpdate();
+
+      // When a new loop frame is established, push unrelated nodes out of the loop bounds
+      // (same behavior as group creation push-out).
+      if (addedLoops.length > 0) {
+        const t = readAreaTransform();
+        if (t) {
+          for (const loop of addedLoops) {
+            const bounds = computeLoopFrameBounds(loop, t);
+            if (!bounds) continue;
+            pushNodesOutOfBounds(bounds, new Set((loop.nodeIds ?? []).map((id) => String(id))));
+          }
+        }
+      }
     });
 
     deployedLoopsUnsub = deployedLoopsStore?.subscribe((ids) => {
@@ -3268,6 +3443,16 @@
         Boolean((el as any)?.isContentEditable);
       if (isEditing) return;
 
+      // If a marquee multi-selection exists, delete all selected nodes together.
+      if (groupSelectionNodeIds.size > 0) {
+        event.preventDefault();
+        for (const id of groupSelectionNodeIds) {
+          nodeEngine.removeNode(id);
+        }
+        clearGroupSelection();
+        return;
+      }
+
       if (!selectedNodeId) return;
       event.preventDefault();
       nodeEngine.removeNode(selectedNodeId);
@@ -3295,6 +3480,7 @@
     sensorUnsub?.();
     midiUnsub?.();
     if (midiHighlightTimeout) clearTimeout(midiHighlightTimeout);
+    if (groupEditToastTimeout) clearTimeout(groupEditToastTimeout);
     for (const entry of deployPendingByLoopId.values()) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
     }
@@ -3404,9 +3590,10 @@
 
     <GroupFramesOverlay
       frames={groupFrames}
-      addModeGroupId={addNodeModeGroupId}
+      editModeGroupId={editModeGroupId}
+      toast={groupEditToast}
       onToggleDisabled={toggleGroupDisabled}
-      onToggleAddMode={toggleGroupAddNodeMode}
+      onToggleEditMode={toggleGroupEditMode}
       onDisassemble={disassembleGroup}
       onRename={renameGroup}
     />

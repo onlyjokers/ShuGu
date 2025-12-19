@@ -10,6 +10,7 @@
  * - Helpers to instantiate bindings into the NodeEngine
  */
 import { nodeEngine, nodeRegistry } from '$lib/nodes';
+import { getSelectOptionsForInput } from '$lib/nodes/selection-options';
 import type { Connection, GraphState, NodeInstance } from '$lib/nodes/types';
 import { parameterRegistry } from '$lib/parameters/registry';
 import type { MidiSource } from './midi-node-bridge';
@@ -138,7 +139,7 @@ export function detectMidiBindings(graph: GraphState): DetectedMidiBinding[] {
 
   const bindings: DetectedMidiBinding[] = [];
 
-  for (const mapNode of nodes.filter((n) => String(n.type) === 'midi-map')) {
+  for (const mapNode of nodes.filter((n) => ['midi-map', 'midi-select-map'].includes(String(n.type)))) {
     const mapNodeId = String(mapNode.id);
     const incoming = (incomingByNode.get(mapNodeId) ?? []).filter((c) => String(c.targetPortId) === 'in');
     const outgoing = (outgoingByNode.get(mapNodeId) ?? []).filter((c) => String(c.sourcePortId) === 'out');
@@ -312,7 +313,20 @@ export function instantiateMidiBinding(template: MidiBindingTemplateV1, opts: In
   const targetPos = { x: anchor.x + 520, y: anchor.y };
 
   const midiNodeId = instantiateNode('midi-fuzzy', midiPos, { source: template.source ?? null });
-  const mapNodeId = instantiateNode('midi-map', mapPos, { ...template.mapping });
+  let mapNodeType = 'midi-map';
+  let mapConfig: Record<string, unknown> = { ...template.mapping };
+
+  if (template.target.kind === 'node-input') {
+    const def = nodeRegistry.get(template.target.nodeType);
+    const port = def?.inputs?.find((p) => p.id === template.target.inputId);
+    const options = getSelectOptionsForInput(template.target.nodeType, template.target.inputId);
+    if (port?.type === 'fuzzy' && options && options.length > 0) {
+      mapNodeType = 'midi-select-map';
+      mapConfig = { ...template.mapping, options };
+    }
+  }
+
+  const mapNodeId = instantiateNode(mapNodeType, mapPos, mapConfig);
 
   let targetNodeId = '';
   let targetPortId = '';

@@ -1,0 +1,250 @@
+{
+  "__purpose": "Node graph template showcasing Tone.js osc + delay/resonator/pitch/reverb + granular source plus Play Media + Load Media Sound.",
+  "nodes": [
+    {
+      "id": "node-client",
+      "type": "client-object",
+      "position": { "x": 60, "y": 140 },
+      "config": { "clientId": "" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-sensors",
+      "type": "proc-client-sensors",
+      "position": { "x": 360, "y": 140 },
+      "config": {},
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-lfo",
+      "type": "lfo",
+      "position": { "x": 360, "y": 320 },
+      "config": { "waveform": "sine" },
+      "inputValues": { "frequency": 0.6, "amplitude": 220, "offset": 220 },
+      "outputValues": {}
+    },
+    {
+      "id": "node-amp",
+      "type": "number",
+      "position": { "x": 360, "y": 460 },
+      "config": { "value": 0.25 },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-osc",
+      "type": "tone-osc",
+      "position": { "x": 680, "y": 240 },
+      "config": { "waveform": "sine", "enabled": true, "bus": "main", "loop": "" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-mix",
+      "type": "math",
+      "position": { "x": 820, "y": 360 },
+      "config": { "operation": "+" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-delay",
+      "type": "tone-delay",
+      "position": { "x": 920, "y": 220 },
+      "config": { "time": 0.25, "feedback": 0.35, "wet": 0.2, "bus": "main", "order": 10, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-resonator",
+      "type": "tone-resonator",
+      "position": { "x": 1120, "y": 220 },
+      "config": { "delayTime": 0.08, "resonance": 0.6, "dampening": 3000, "wet": 0.3, "bus": "main", "order": 20, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-pitch",
+      "type": "tone-pitch",
+      "position": { "x": 1320, "y": 220 },
+      "config": { "pitch": 0, "windowSize": 0.1, "delayTime": 0, "feedback": 0, "wet": 0.2, "bus": "main", "order": 30, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-reverb",
+      "type": "tone-reverb",
+      "position": { "x": 1520, "y": 220 },
+      "config": { "decay": 1.6, "preDelay": 0.01, "wet": 0.25, "bus": "main", "order": 40, "enabled": true },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-tone-granular",
+      "type": "tone-granular",
+      "position": { "x": 680, "y": 420 },
+      "config": {
+        "url": "https://tonejs.github.io/audio/berklee/gong_1.mp3",
+        "loop": true,
+        "playbackRate": 1,
+        "detune": 0,
+        "grainSize": 0.2,
+        "overlap": 0.1,
+        "volume": 0.4,
+        "bus": "main",
+        "enabled": false
+      },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-load-media",
+      "type": "load-media-sound",
+      "position": { "x": 680, "y": 600 },
+      "config": { "url": "" },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-play-media",
+      "type": "play-media",
+      "position": { "x": 920, "y": 600 },
+      "config": {
+        "audioUrl": "",
+        "imageUrl": "",
+        "videoUrl": "",
+        "volume": 1,
+        "loop": false,
+        "fadeIn": 0,
+        "muted": true,
+        "imageDuration": 0
+      },
+      "inputValues": {},
+      "outputValues": {}
+    },
+    {
+      "id": "node-screen",
+      "type": "proc-screen-color",
+      "position": { "x": 1720, "y": 220 },
+      "config": {
+        "primary": "#6366f1",
+        "secondary": "#ffffff",
+        "maxOpacity": 1,
+        "minOpacity": 0,
+        "waveform": "sine",
+        "frequencyHz": 1.5
+      },
+      "inputValues": {},
+      "outputValues": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn-client-sensors",
+      "sourceNodeId": "node-client",
+      "sourcePortId": "out",
+      "targetNodeId": "node-sensors",
+      "targetPortId": "client"
+    },
+    {
+      "id": "conn-sensors-lfo",
+      "sourceNodeId": "node-sensors",
+      "sourcePortId": "accelX",
+      "targetNodeId": "node-lfo",
+      "targetPortId": "frequency"
+    },
+    {
+      "id": "conn-lfo-osc",
+      "sourceNodeId": "node-lfo",
+      "sourcePortId": "value",
+      "targetNodeId": "node-tone-osc",
+      "targetPortId": "frequency"
+    },
+    {
+      "id": "conn-amp-osc",
+      "sourceNodeId": "node-amp",
+      "sourcePortId": "value",
+      "targetNodeId": "node-tone-osc",
+      "targetPortId": "amplitude"
+    },
+    {
+      "id": "conn-osc-delay",
+      "sourceNodeId": "node-tone-osc",
+      "sourcePortId": "value",
+      "targetNodeId": "node-mix",
+      "targetPortId": "a"
+    },
+    {
+      "id": "conn-granular-mix",
+      "sourceNodeId": "node-tone-granular",
+      "sourcePortId": "value",
+      "targetNodeId": "node-mix",
+      "targetPortId": "b"
+    },
+    {
+      "id": "conn-mix-delay",
+      "sourceNodeId": "node-mix",
+      "sourcePortId": "result",
+      "targetNodeId": "node-tone-delay",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-delay-resonator",
+      "sourceNodeId": "node-tone-delay",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-resonator",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-resonator-pitch",
+      "sourceNodeId": "node-tone-resonator",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-pitch",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-pitch-reverb",
+      "sourceNodeId": "node-tone-pitch",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-reverb",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-reverb-screen",
+      "sourceNodeId": "node-tone-reverb",
+      "sourcePortId": "out",
+      "targetNodeId": "node-screen",
+      "targetPortId": "frequencyHz"
+    },
+    {
+      "id": "conn-granular-gate",
+      "sourceNodeId": "node-tone-reverb",
+      "sourcePortId": "out",
+      "targetNodeId": "node-tone-granular",
+      "targetPortId": "gate"
+    },
+    {
+      "id": "conn-load-media-play",
+      "sourceNodeId": "node-load-media",
+      "sourcePortId": "url",
+      "targetNodeId": "node-play-media",
+      "targetPortId": "audioUrl"
+    },
+    {
+      "id": "conn-screen-client",
+      "sourceNodeId": "node-screen",
+      "sourcePortId": "cmd",
+      "targetNodeId": "node-client",
+      "targetPortId": "in"
+    },
+    {
+      "id": "conn-play-media-client",
+      "sourceNodeId": "node-play-media",
+      "sourcePortId": "cmd",
+      "targetNodeId": "node-client",
+      "targetPortId": "in"
+    }
+  ]
+}

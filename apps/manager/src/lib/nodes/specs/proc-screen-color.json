@@ -5,7 +5,7 @@
   "inputs": [
     { "id": "primary", "label": "Primary", "type": "color" },
     { "id": "secondary", "label": "Secondary", "type": "color" },
-    { "id": "waveform", "label": "Wave", "type": "fuzzy" },
+    { "id": "waveform", "label": "Wave", "type": "string" },
     { "id": "frequencyHz", "label": "Freq", "type": "number", "min": 0, "step": 0.1 },
     { "id": "maxOpacity", "label": "Max", "type": "number", "min": 0, "max": 1, "step": 0.01 },
     { "id": "minOpacity", "label": "Min", "type": "number", "min": 0, "max": 1, "step": 0.01 }
