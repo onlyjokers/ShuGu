@@ -451,7 +451,7 @@ function createOscInstance(
   ensureMasterGain();
 
   const bus = getOrCreateBus(busName);
-  const osc = new toneModule.Oscillator({ frequency, type: waveform });
+  const osc = new toneModule.Oscillator({ frequency, type: waveform } as any);
   const gain = new toneModule.Gain({ gain: amplitude });
   osc.connect(gain);
   gain.connect(bus.input);
@@ -801,7 +801,7 @@ function createPlayerInstance(
         }
       }
     },
-  });
+  } as any);
 
   player.connect(gain);
   gain.connect(bus.input);

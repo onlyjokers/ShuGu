@@ -332,7 +332,7 @@ function createToneOscNode(): NodeDefinition {
       { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
       { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       {
         key: 'waveform',
@@ -380,12 +380,12 @@ function createToneDelayNode(): NodeDefinition {
     label: 'Tone Delay',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
@@ -404,13 +404,13 @@ function createToneResonatorNode(): NodeDefinition {
     label: 'Tone Resonator',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
@@ -430,14 +430,14 @@ function createTonePitchNode(): NodeDefinition {
     label: 'Tone Pitch',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
@@ -458,12 +458,12 @@ function createToneReverbNode(): NodeDefinition {
     label: 'Tone Reverb',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
@@ -489,7 +489,7 @@ function createToneGranularNode(): NodeDefinition {
       { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
@@ -669,7 +669,7 @@ function createTonePlayerNode(): NodeDefinition {
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
@@ -722,7 +722,7 @@ function createFlashlightProcessorNode(): NodeDefinition {
         const v = inputs.mode;
         if (typeof v === 'string' && v) {
           const options = FLASHLIGHT_MODE_OPTIONS.map((o) => o.value);
-          return options.includes(v) ? v : fallbackMode;
+          return (options as string[]).includes(v) ? v : fallbackMode;
         }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackMode;
         const options = FLASHLIGHT_MODE_OPTIONS.map((o) => o.value);
@@ -806,7 +806,7 @@ function createScreenColorProcessorNode(): NodeDefinition {
         const v = inputs.waveform;
         if (typeof v === 'string' && v) {
           const options = SCREEN_WAVEFORM_OPTIONS.map((o) => o.value);
-          return options.includes(v) ? v : fallbackWaveform;
+          return (options as string[]).includes(v) ? v : fallbackWaveform;
         }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
         const options = SCREEN_WAVEFORM_OPTIONS.map((o) => o.value);
@@ -895,7 +895,7 @@ function createSynthUpdateProcessorNode(): NodeDefinition {
         const v = inputs.waveform;
         if (typeof v === 'string' && v) {
           const options = SYNTH_WAVEFORM_OPTIONS.map((o) => o.value);
-          return options.includes(v) ? v : fallbackWaveform;
+          return (options as string[]).includes(v) ? v : fallbackWaveform;
         }
         if (typeof v !== 'number' || !Number.isFinite(v)) return fallbackWaveform;
         const options = SYNTH_WAVEFORM_OPTIONS.map((o) => o.value);
