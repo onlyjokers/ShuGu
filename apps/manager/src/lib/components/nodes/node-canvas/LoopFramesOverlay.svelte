@@ -8,6 +8,7 @@
   export let executorStatusByClient: Map<string, any> = new Map();
   export let showExecutorLogs = false;
   export let logsClientId = '';
+  export let isRunning = false;
 
   export let onToggleLogs: (loop: any) => void = () => undefined;
   export let onStop: (loop: any) => void = () => undefined;
@@ -71,7 +72,7 @@
               <Button
                 variant="primary"
                 size="sm"
-                disabled={!clientId || isLoopDeploying(loop.id) || loopHasDisabledNodes(loop)}
+                disabled={!isRunning || isLoopDeploying(loop.id) || loopHasDisabledNodes(loop)}
                 on:click={() => onDeploy(loop)}
               >
                 {isLoopDeploying(loop.id) ? '… Deploying' : 'Deploy'}

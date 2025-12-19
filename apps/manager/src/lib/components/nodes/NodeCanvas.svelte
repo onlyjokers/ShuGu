@@ -728,6 +728,7 @@
   }
 
   function deployLoop(loop: LocalLoop) {
+    if (!$isRunningStore) return;
     const clientId = getLoopClientId(loop);
     if (!clientId) {
       alert('Select a client in the Client node before deploying.');
@@ -738,10 +739,6 @@
       alert('Manager SDK not connected.');
       return;
     }
-
-    const caps = loop.requiredCapabilities?.length ? loop.requiredCapabilities.join(', ') : 'none';
-    const ok = confirm(`Deploy local loop to client ${clientId}?\n\nrequiredCapabilities: ${caps}`);
-    if (!ok) return;
 
     try {
       const payload = nodeEngine.exportGraphForLoop(loop.id) as any;
@@ -787,11 +784,15 @@
 
     const loopById = new Map(localLoops.map((loop) => [loop.id, loop]));
     const nextClientMap = new Map(deployedLoopClientIdByLoopId);
+    const pendingLoopIds = Array.from(deployPendingByLoopId.keys());
+    const loopIds = new Set<string>([...deployedLoopIds, ...pendingLoopIds]);
 
-    for (const loopId of deployedLoopIds) {
+    for (const loopId of loopIds) {
       const loop = loopById.get(loopId);
       const clientId =
-        nextClientMap.get(loopId) ?? (loop ? getLoopClientId(loop) : '');
+        nextClientMap.get(loopId) ??
+        deployPendingByLoopId.get(loopId)?.clientId ??
+        (loop ? getLoopClientId(loop) : '');
       if (!clientId) continue;
       stopAndRemoveLoopById(loopId, clientId);
       nodeEngine.markLoopDeployed(loopId, false);
@@ -799,6 +800,7 @@
     }
 
     deployedLoopClientIdByLoopId = nextClientMap;
+    deployPendingByLoopId = new Map();
   }
 
   function stopAllClientEffects() {
@@ -3605,6 +3607,7 @@
       {executorStatusByClient}
       {showExecutorLogs}
       {logsClientId}
+      isRunning={$isRunningStore}
       onToggleLogs={toggleLoopLogs}
       onStop={stopLoop}
       onDeploy={deployLoop}
