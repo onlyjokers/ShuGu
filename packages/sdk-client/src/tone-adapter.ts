@@ -1,7 +1,7 @@
 /**
  * Purpose: Tone.js-backed audio runtime for node graph (oscillator + effects + granular).
  */
-import type { NodeRegistry, ProcessContext } from '@shugu/node-core';
+import type { Connection, NodeInstance, NodeRegistry, ProcessContext } from '@shugu/node-core';
 import type { ClientSDK } from './client-sdk.js';
 
 type ToneModule = typeof import('tone');
@@ -25,7 +25,11 @@ type ToneAdapterDeps = {
 type ToneAdapterHandle = {
   disposeNode: (nodeId: string) => void;
   disposeAll: () => void;
-  syncActiveNodes: (activeNodeIds: Set<string>) => void;
+  syncActiveNodes: (
+    activeNodeIds: Set<string>,
+    nodes: NodeInstance[],
+    connections: Connection[]
+  ) => void;
 };
 
 type TransportStartState = {
@@ -48,6 +52,7 @@ type EffectWrapper = {
 };
 
 type ToneEffectKind = 'tone-delay' | 'tone-reverb' | 'tone-pitch' | 'tone-resonator';
+type ToneNodeKind = ToneEffectKind | 'tone-osc' | 'tone-granular' | 'tone-player';
 
 type ToneEffectInstance = {
   nodeId: string;
@@ -55,6 +60,7 @@ type ToneEffectInstance = {
   bus: string;
   order: number;
   enabled: boolean;
+  wiredExternally: boolean;
   wrapper: EffectWrapper;
   lastParams: Record<string, number | string | boolean | null>;
   pendingGenerate?: boolean;
@@ -100,6 +106,30 @@ type TonePlayerInstance = {
 const DEFAULT_RAMP_SECONDS = 0.05;
 const DEFAULT_STEP_SECONDS = 0.25;
 const DEFAULT_BUS = 'main';
+const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
+  'tone-osc',
+  'tone-delay',
+  'tone-resonator',
+  'tone-pitch',
+  'tone-reverb',
+  'tone-granular',
+  'tone-player',
+]);
+const AUDIO_INPUT_PORTS = new Map<ToneNodeKind, string[]>([
+  ['tone-delay', ['in']],
+  ['tone-resonator', ['in']],
+  ['tone-pitch', ['in']],
+  ['tone-reverb', ['in']],
+]);
+const AUDIO_OUTPUT_PORTS = new Map<ToneNodeKind, string[]>([
+  ['tone-osc', ['value']],
+  ['tone-delay', ['out']],
+  ['tone-resonator', ['out']],
+  ['tone-pitch', ['out']],
+  ['tone-reverb', ['out']],
+  ['tone-granular', ['value']],
+  ['tone-player', ['value']],
+]);
 
 let toneModule: ToneModule | null = null;
 let toneLoadPromise: Promise<ToneModule> | null = null;
@@ -113,6 +143,10 @@ const effectInstances = new Map<string, ToneEffectInstance>();
 const granularInstances = new Map<string, ToneGranularInstance>();
 const playerInstances = new Map<string, TonePlayerInstance>();
 const buses = new Map<string, ToneBus>();
+let latestGraphNodesById = new Map<string, NodeInstance>();
+let latestAudioConnections: Connection[] = [];
+let latestExplicitNodeIds = new Set<string>();
+let latestExplicitEffectIds = new Set<string>();
 
 function toNumber(value: unknown, fallback: number): number {
   const num = typeof value === 'string' ? Number(value) : Number(value);
@@ -141,6 +175,181 @@ function loopKeyOf(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function isAudioNodeKind(type: string): type is ToneNodeKind {
+  return AUDIO_NODE_KINDS.has(type as ToneNodeKind);
+}
+
+function isEffectKind(type: string): type is ToneEffectKind {
+  return (
+    type === 'tone-delay' ||
+    type === 'tone-reverb' ||
+    type === 'tone-pitch' ||
+    type === 'tone-resonator'
+  );
+}
+
+function isAudioConnection(conn: Connection, nodesById: Map<string, NodeInstance>): boolean {
+  const source = nodesById.get(conn.sourceNodeId);
+  const target = nodesById.get(conn.targetNodeId);
+  if (!source || !target) return false;
+  if (!isAudioNodeKind(source.type) || !isAudioNodeKind(target.type)) return false;
+  const sourcePorts = AUDIO_OUTPUT_PORTS.get(source.type);
+  const targetPorts = AUDIO_INPUT_PORTS.get(target.type);
+  if (!sourcePorts || !targetPorts) return false;
+  return sourcePorts.includes(conn.sourcePortId) && targetPorts.includes(conn.targetPortId);
+}
+
+function updateAudioGraphSnapshot(nodes: NodeInstance[], connections: Connection[]): void {
+  latestGraphNodesById = new Map(nodes.map((node) => [node.id, node]));
+  const nextConnections = Array.isArray(connections) ? connections : [];
+  latestAudioConnections = nextConnections.filter((conn) =>
+    isAudioConnection(conn, latestGraphNodesById)
+  );
+
+  latestExplicitNodeIds = new Set();
+  latestExplicitEffectIds = new Set();
+  for (const conn of latestAudioConnections) {
+    latestExplicitNodeIds.add(conn.sourceNodeId);
+    latestExplicitNodeIds.add(conn.targetNodeId);
+    const source = latestGraphNodesById.get(conn.sourceNodeId);
+    const target = latestGraphNodesById.get(conn.targetNodeId);
+    if (source && isEffectKind(source.type)) latestExplicitEffectIds.add(source.id);
+    if (target && isEffectKind(target.type)) latestExplicitEffectIds.add(target.id);
+  }
+}
+
+function getAudioOutputNode(nodeId: string): any | null {
+  const osc = oscInstances.get(nodeId);
+  if (osc?.gain) return osc.gain;
+  const granular = granularInstances.get(nodeId);
+  if (granular?.gain) return granular.gain;
+  const player = playerInstances.get(nodeId);
+  if (player?.gain) return player.gain;
+  const effect = effectInstances.get(nodeId);
+  if (effect?.wrapper?.output) return effect.wrapper.output;
+  return null;
+}
+
+function getAudioInputNode(nodeId: string): any | null {
+  const effect = effectInstances.get(nodeId);
+  if (effect?.wrapper?.input) return effect.wrapper.input;
+  return null;
+}
+
+function reconnectSourcesToBus(): void {
+  if (!toneModule) return;
+  for (const inst of oscInstances.values()) {
+    const bus = getOrCreateBus(inst.bus);
+    try {
+      inst.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      inst.gain.connect(bus.input);
+    } catch {
+      // ignore
+    }
+  }
+  for (const inst of granularInstances.values()) {
+    const bus = getOrCreateBus(inst.bus);
+    try {
+      inst.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      inst.gain.connect(bus.input);
+    } catch {
+      // ignore
+    }
+  }
+  for (const inst of playerInstances.values()) {
+    const bus = getOrCreateBus(inst.bus);
+    try {
+      inst.gain.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      inst.gain.connect(bus.input);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// Rebuild explicit audio connections from the last deployed graph snapshot.
+function applyGraphWiring(): boolean {
+  if (!toneModule || !audioEnabled) return false;
+  if (latestAudioConnections.length === 0) return true;
+
+  for (const inst of effectInstances.values()) {
+    inst.wiredExternally = latestExplicitEffectIds.has(inst.nodeId);
+  }
+
+  for (const bus of buses.keys()) {
+    rebuildBusChain(bus);
+  }
+
+  let missing = false;
+  const outgoingCounts = new Map<string, number>();
+
+  for (const nodeId of latestExplicitNodeIds) {
+    const output = getAudioOutputNode(nodeId);
+    if (!output) {
+      missing = true;
+      continue;
+    }
+    try {
+      output.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+
+  for (const conn of latestAudioConnections) {
+    const output = getAudioOutputNode(conn.sourceNodeId);
+    const input = getAudioInputNode(conn.targetNodeId);
+    if (!output || !input) {
+      missing = true;
+      continue;
+    }
+    try {
+      output.connect(input);
+      outgoingCounts.set(conn.sourceNodeId, (outgoingCounts.get(conn.sourceNodeId) ?? 0) + 1);
+    } catch (error) {
+      missing = true;
+      console.warn('[tone-adapter] audio connect failed', error);
+    }
+  }
+
+  ensureMasterGain();
+  for (const nodeId of latestExplicitNodeIds) {
+    if ((outgoingCounts.get(nodeId) ?? 0) > 0) continue;
+    const output = getAudioOutputNode(nodeId);
+    if (!output) {
+      missing = true;
+      continue;
+    }
+    try {
+      output.connect(masterGain ?? toneModule.Destination);
+    } catch (error) {
+      missing = true;
+      console.warn('[tone-adapter] audio connect to master failed', error);
+    }
+  }
+
+  return !missing;
+}
+
+// Mark the audio graph as dirty and rebuild if Tone is ready.
+function scheduleGraphWiring(): void {
+  if (latestAudioConnections.length === 0) return;
+  if (!toneModule || !audioEnabled) return;
+  applyGraphWiring();
 }
 
 async function ensureTone(): Promise<ToneModule> {
@@ -195,7 +404,7 @@ function rebuildBusChain(busName: string): void {
   }
 
   const effects = Array.from(effectInstances.values())
-    .filter((inst) => inst.bus === busName)
+    .filter((inst) => inst.bus === busName && !inst.wiredExternally)
     .sort((a, b) => (a.order !== b.order ? a.order - b.order : a.nodeId.localeCompare(b.nodeId)));
 
   let tail = bus.input;
@@ -471,6 +680,7 @@ function createOscInstance(
   };
 
   oscInstances.set(nodeId, instance);
+  scheduleGraphWiring();
   return instance;
 }
 
@@ -619,6 +829,7 @@ function createEffectInstance(
     bus,
     order,
     enabled,
+    wiredExternally: false,
     wrapper,
     lastParams: { ...params, bus, order, enabled },
   };
@@ -629,6 +840,7 @@ function createEffectInstance(
 
   effectInstances.set(nodeId, instance);
   rebuildBusChain(bus);
+  scheduleGraphWiring();
   return instance;
 }
 
@@ -649,6 +861,7 @@ function updateEffectInstance(
   if (bus !== prevBus || order !== prevOrder) {
     rebuildBusChain(prevBus);
     rebuildBusChain(bus);
+    scheduleGraphWiring();
   }
 
   const applyWet = (value: number) => {
@@ -772,6 +985,7 @@ function createGranularInstance(
 
   granularInstances.set(nodeId, instance);
   rebuildBusChain(bus.name);
+  scheduleGraphWiring();
   return instance;
 }
 
@@ -822,6 +1036,7 @@ function createPlayerInstance(
 
   playerInstances.set(nodeId, instance);
   rebuildBusChain(bus.name);
+  scheduleGraphWiring();
   return instance;
 }
 
@@ -832,7 +1047,10 @@ export async function enableToneAudio(): Promise<{ enabled: boolean; error?: str
     await tone.start();
     const state = tone.getContext().state;
     audioEnabled = state === 'running';
-    if (audioEnabled) ensureMasterGain();
+    if (audioEnabled) {
+      ensureMasterGain();
+      scheduleGraphWiring();
+    }
     return { enabled: audioEnabled };
   } catch (error) {
     lastEnableError = error instanceof Error ? error.message : String(error);
@@ -944,7 +1162,7 @@ export function registerToneClientDefinitions(
       { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
       { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Amp', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Amp', type: 'any', kind: 'sink' }],
     configSchema: [
       {
         key: 'waveform',
@@ -999,6 +1217,7 @@ export function registerToneClientDefinitions(
         const bus = getOrCreateBus(busName);
         instance.gain.connect(bus.input);
         rebuildBusChain(bus.name);
+        scheduleGraphWiring();
       }
 
       if (instance.lastWaveform !== waveform) {
@@ -1088,12 +1307,12 @@ export function registerToneClientDefinitions(
     label: 'Tone Delay (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
@@ -1117,13 +1336,13 @@ export function registerToneClientDefinitions(
     label: 'Tone Resonator (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
@@ -1148,14 +1367,14 @@ export function registerToneClientDefinitions(
     label: 'Tone Pitch (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
@@ -1181,12 +1400,12 @@ export function registerToneClientDefinitions(
     label: 'Tone Reverb (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
@@ -1217,7 +1436,7 @@ export function registerToneClientDefinitions(
       { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
@@ -1284,6 +1503,7 @@ export function registerToneClientDefinitions(
         const bus = getOrCreateBus(busName);
         instance.gain.connect(bus.input);
         rebuildBusChain(bus.name);
+        scheduleGraphWiring();
       }
 
       if (instance.lastParams.playbackRate !== playbackRate) instance.player.playbackRate = playbackRate;
@@ -1328,7 +1548,7 @@ export function registerToneClientDefinitions(
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
@@ -1420,6 +1640,7 @@ export function registerToneClientDefinitions(
         const bus = getOrCreateBus(busName);
         instance.gain.connect(bus.input);
         rebuildBusChain(bus.name);
+        scheduleGraphWiring();
       }
 
       if (instance.lastParams.playbackRate !== playbackRate) instance.player.playbackRate = playbackRate;
@@ -1493,9 +1714,27 @@ export function registerToneClientDefinitions(
       for (const nodeId of Array.from(effectInstances.keys())) disposeEffectInstance(nodeId);
       for (const nodeId of Array.from(granularInstances.keys())) disposeGranularInstance(nodeId);
       for (const nodeId of Array.from(playerInstances.keys())) disposePlayerInstance(nodeId);
+      for (const bus of buses.values()) {
+        try {
+          bus.input.disconnect();
+        } catch {
+          // ignore
+        }
+        try {
+          bus.input.dispose();
+        } catch {
+          // ignore
+        }
+      }
+      buses.clear();
+      latestGraphNodesById = new Map();
+      latestAudioConnections = [];
+      latestExplicitNodeIds = new Set();
+      latestExplicitEffectIds = new Set();
       maybeStopTransport();
     },
-    syncActiveNodes: (activeNodeIds: Set<string>) => {
+    syncActiveNodes: (activeNodeIds: Set<string>, nodes: NodeInstance[], connections: Connection[]) => {
+      updateAudioGraphSnapshot(nodes ?? [], connections ?? []);
       for (const nodeId of Array.from(oscInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposeOscInstance(nodeId);
       }
@@ -1508,6 +1747,15 @@ export function registerToneClientDefinitions(
       for (const nodeId of Array.from(playerInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposePlayerInstance(nodeId);
       }
+
+      if (latestAudioConnections.length === 0) {
+        for (const inst of effectInstances.values()) inst.wiredExternally = false;
+        if (toneModule && audioEnabled) reconnectSourcesToBus();
+        for (const bus of buses.keys()) rebuildBusChain(bus);
+        return;
+      }
+
+      scheduleGraphWiring();
     },
   };
 

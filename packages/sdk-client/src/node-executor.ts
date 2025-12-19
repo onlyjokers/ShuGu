@@ -282,7 +282,7 @@ export class NodeExecutor {
         )
         .map((node) => node.id)
     );
-    this.toneAdapter?.syncActiveNodes(toneNodeIds);
+    this.toneAdapter?.syncActiveNodes(toneNodeIds, parsed.graph.nodes, parsed.graph.connections);
 
     this.runtime.stop();
     this.runtime.clear();

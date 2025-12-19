@@ -20,3 +20,18 @@
 - 2025-12-19: Verified existing audio unlock flow: `apps/client/src/routes/+page.svelte` calls `enableAudio()` on Start; `apps/client/src/lib/stores/client.ts` uses `enableToneAudio()` to call `Tone.start()` + `ensureMasterGain()`.
 - 2025-12-19: No code changes required for Step 4 at this time.
 
+## Step 5 - Tone adapter cleanup + reduce heavy work in process
+- 2025-12-19: Added audio graph wiring helpers and deferred wiring to a single rebuild (`applyGraphWiring`) instead of per-tick connections.
+- 2025-12-19: Added explicit-bus separation: effects now track `wiredExternally` and bus chains skip explicitly wired effects.
+- 2025-12-19: Strengthened cleanup in `disposeAll()` to dispose bus inputs and reset graph snapshot state.
+
+## Step 2 - Graph-to-audio wiring
+- 2025-12-19: `NodeExecutor` now passes `nodes` + `connections` into `toneAdapter.syncActiveNodes(...)`.
+- 2025-12-19: `tone-adapter` now builds explicit audio connections from graph edges (source audio out -> effect in), connects terminal nodes to master, and falls back to bus chaining for non-explicit nodes.
+- 2025-12-19: Client tone node port definitions updated to `type: 'any'` + `kind: 'sink'` to prevent audio edges from entering the compute DAG.
+
+## Step 6 - Validation/testing
+- 2025-12-19: Ran `pnpm -w lint` (repo-wide). Result: warnings only (existing warnings across packages + Tone adapter any-typed nodes). No errors.
+
+- 2025-12-19: Verified `packages/node-core/src/definitions.ts` already had audio ports marked `any` + `sink` in HEAD (no git diff for Step 1).
+

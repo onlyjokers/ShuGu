@@ -144,3 +144,8 @@ This file tracks the implementation progress for `docs/PlanDocs/1228_OneNodeSyst
   - Added a temporary toast pill at the top of the group frame when membership changes (e.g. “Add X to Group Y” / “Remove X from Group Y”).
   - Commands run:
     - `pnpm --filter @shugu/manager run check`
+
+- Follow-up: Temporarily bypassed client geolocation gating on Enter:
+  - Added a `BYPASS_GEO_GATE` flag in `apps/client/src/routes/+page.svelte` so clicking Enter goes straight into the client without requesting location.
+  - Commands run:
+    - `pnpm --filter @shugu/client run check`

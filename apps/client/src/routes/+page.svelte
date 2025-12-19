@@ -46,6 +46,9 @@
   let gateMessage = '';
   let gateDetails: { targetAddress?: string | null; distanceM?: number; rangeM?: number } = {};
 
+  // Temporary bypass: allow entering the client without geolocation checks.
+  const BYPASS_GEO_GATE = true;
+
   let retryCooldownS = 0;
   let retryCooldownTimer: ReturnType<typeof setInterval> | null = null;
   let gateInFlight: Promise<void> | null = null;
@@ -376,6 +379,14 @@
     const fence = bootstrap?.fence ?? null;
     applyVisualBootstrap(bootstrap?.visual ?? null);
 
+    if (BYPASS_GEO_GATE) {
+      permissions.update((p) => ({ ...p, geolocation: 'granted' }));
+      gateState = 'idle';
+      hasStarted = true;
+      if (document.visibilityState === 'visible') connectToServer();
+      return;
+    }
+
     if (!fence) {
       // If no fence is configured, allow start (no gating).
       gateState = 'idle';
@@ -464,6 +475,18 @@
       await enableAudio();
     } catch (error) {
       console.warn('[Client] Tone audio enable failed', error);
+    }
+
+    if (BYPASS_GEO_GATE) {
+      permissions.update((p) => ({ ...p, geolocation: 'granted' }));
+      gateState = 'idle';
+      gateTitle = '';
+      gateMessage = '';
+      gateDetails = {};
+      hasStarted = true;
+      initialize({ serverUrl }, { autoConnect: true });
+      if (document.visibilityState === 'visible') connectToServer();
+      return;
     }
 
     if (gateInFlight) return;
