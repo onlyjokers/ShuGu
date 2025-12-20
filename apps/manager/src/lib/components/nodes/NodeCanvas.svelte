@@ -8,17 +8,17 @@
   import { HistoryPlugin } from 'rete-history-plugin';
   import { SveltePlugin, Presets as SveltePresets } from 'rete-svelte-plugin';
 
-  import NodeCanvasLayout from './node-canvas/NodeCanvasLayout.svelte';
-  import ReteNode from '$lib/components/nodes/ReteNode.svelte';
-  import ReteControl from '$lib/components/nodes/ReteControl.svelte';
-  import ReteConnection from '$lib/components/nodes/ReteConnection.svelte';
-  import ExecutorLogsPanel from './node-canvas/ExecutorLogsPanel.svelte';
-  import GroupFramesOverlay from './node-canvas/GroupFramesOverlay.svelte';
-  import LoopFramesOverlay from './node-canvas/LoopFramesOverlay.svelte';
-  import MarqueeOverlay from './node-canvas/MarqueeOverlay.svelte';
-  import NodeCanvasMinimap from './node-canvas/NodeCanvasMinimap.svelte';
-  import NodeCanvasToolbar from './node-canvas/NodeCanvasToolbar.svelte';
-  import NodePickerOverlay from './node-canvas/NodePickerOverlay.svelte';
+  import NodeCanvasLayout from './node-canvas/ui/NodeCanvasLayout.svelte';
+  import ReteNode from './node-canvas/rete/ReteNode.svelte';
+  import ReteControl from './node-canvas/rete/ReteControl.svelte';
+  import ReteConnection from './node-canvas/rete/ReteConnection.svelte';
+  import ExecutorLogsPanel from './node-canvas/ui/panels/ExecutorLogsPanel.svelte';
+  import GroupFramesOverlay from './node-canvas/ui/overlays/GroupFramesOverlay.svelte';
+  import LoopFramesOverlay from './node-canvas/ui/overlays/LoopFramesOverlay.svelte';
+  import MarqueeOverlay from './node-canvas/ui/overlays/MarqueeOverlay.svelte';
+  import NodeCanvasMinimap from './node-canvas/ui/NodeCanvasMinimap.svelte';
+  import NodeCanvasToolbar from './node-canvas/ui/NodeCanvasToolbar.svelte';
+  import NodePickerOverlay from './node-canvas/ui/NodePickerOverlay.svelte';
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
@@ -30,20 +30,20 @@
   } from '$lib/nodes/types';
   import type { LocalLoop } from '$lib/nodes';
   import { midiService } from '$lib/features/midi/midi-service';
-  import { createFileActions } from './node-canvas/file-actions';
-  import { LiveDOMSocketPosition } from './node-canvas/live-socket-position';
-  import { createMinimapController } from './node-canvas/minimap-controller';
-  import { createGroupController } from './node-canvas/group-controller';
-  import { createLoopController, type LoopController } from './node-canvas/loop-controller';
-  import { createMidiHighlightController } from './node-canvas/midi-highlight-controller';
+  import { createFileActions } from './node-canvas/io/file-actions';
+  import { LiveDOMSocketPosition } from './node-canvas/rete/live-socket-position';
+  import { createMinimapController } from './node-canvas/controllers/minimap-controller';
+  import { createGroupController } from './node-canvas/controllers/group-controller';
+  import { createLoopController, type LoopController } from './node-canvas/controllers/loop-controller';
+  import { createMidiHighlightController } from './node-canvas/controllers/midi-highlight-controller';
   import {
     createPickerController,
     type SocketData,
-  } from './node-canvas/picker-controller';
-  import { createReteBuilder } from './node-canvas/rete-builder';
-  import { createGraphSync, type GraphSyncController } from './node-canvas/rete-sync';
-  import { bindRetePipes } from './node-canvas/rete-pipes';
-  import { normalizeAreaTransform } from './node-canvas/view-utils';
+  } from './node-canvas/controllers/picker-controller';
+  import { createReteBuilder } from './node-canvas/rete/rete-builder';
+  import { createGraphSync, type GraphSyncController } from './node-canvas/rete/rete-sync';
+  import { bindRetePipes } from './node-canvas/rete/rete-pipes';
+  import { normalizeAreaTransform } from './node-canvas/utils/view-utils';
 
   let container: HTMLDivElement | null = null;
   let editor: NodeEditor<any> | null = null;

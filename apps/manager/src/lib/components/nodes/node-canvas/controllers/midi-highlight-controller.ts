@@ -1,5 +1,5 @@
 /**
- * Purpose: MIDI activity highlights for NodeCanvas.
+ * Purpose: MIDI activity highlights for the node canvas.
  */
 import { get } from 'svelte/store';
 import type { GraphState } from '$lib/nodes/types';

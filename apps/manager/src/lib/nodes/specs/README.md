@@ -1,6 +1,6 @@
 # Node Specs (Manager)
 
-Manager 的 Node Graph 节点通过本目录下的 `*.json` 自动注册。
+Manager 的 Node Graph 节点通过本目录及子目录下的 `**/*.json` 自动注册。
 
 ## 结构
 
@@ -23,6 +23,6 @@ Manager 的 Node Graph 节点通过本目录下的 `*.json` 自动注册。
 
 ## 新增节点
 
-1. 在本目录新增一个 `*.json`
+1. 在本目录（或子目录）新增一个 `*.json`
 2. 填写上述字段（至少需要 `type/label/category/inputs/outputs/configSchema/runtime`）
 3. 重启 `pnpm dev:manager`（或重新 build）即可在 Add 菜单中出现

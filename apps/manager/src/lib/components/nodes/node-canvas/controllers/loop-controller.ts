@@ -5,7 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import { sensorData } from '$lib/stores/manager';
 import type { GraphState } from '$lib/nodes/types';
-import { readAreaTransform, unionBounds } from './view-utils';
+import { readAreaTransform, unionBounds } from '../utils/view-utils';
 import {
   createLoopActions,
   loopHasDisabledNodes,

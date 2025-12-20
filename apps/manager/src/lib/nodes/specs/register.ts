@@ -609,7 +609,7 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
 }
 
 function loadSpecs(): NodeSpec[] {
-  const modules = import.meta.glob('./*.json', { eager: true }) as Record<string, { default: NodeSpec }>;
+  const modules = import.meta.glob('./**/*.json', { eager: true }) as Record<string, { default: NodeSpec }>;
   const specs: NodeSpec[] = [];
 
   for (const [path, mod] of Object.entries(modules)) {

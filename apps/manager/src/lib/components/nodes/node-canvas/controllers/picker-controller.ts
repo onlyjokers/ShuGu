@@ -1,5 +1,5 @@
 /**
- * Purpose: Node picker controller (add/connect) for NodeCanvas.
+ * Purpose: Node picker controller (add/connect) for the node canvas.
  */
 import { derived, get, writable } from 'svelte/store';
 import { tick } from 'svelte';

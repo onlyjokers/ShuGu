@@ -1,3 +1,4 @@
+<!-- Purpose: Custom Rete connection renderer with loop/MIDI highlighting. -->
 <script lang="ts">
   type Position = { x: number; y: number };
 

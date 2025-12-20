@@ -2,7 +2,11 @@
  * Purpose: Import/export actions for node graphs and MIDI templates.
  */
 import type { GraphState } from '$lib/nodes/types';
-import { exportMidiTemplateFile, instantiateMidiBindings, parseMidiTemplateFile } from '$lib/features/midi/midi-templates';
+import {
+  exportMidiTemplateFile,
+  instantiateMidiBindings,
+  parseMidiTemplateFile,
+} from '$lib/features/midi/midi-templates';
 
 type FileActionsOptions = {
   nodeEngine: {

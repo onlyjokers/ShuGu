@@ -4,7 +4,7 @@
 import { get, writable, type Writable } from 'svelte/store';
 import type { MinimapPreferences } from '$lib/project/uiState';
 import { minimapPreferences } from '$lib/project/uiState';
-import { normalizeAreaTransform } from './view-utils';
+import { normalizeAreaTransform } from '../utils/view-utils';
 
 type MiniNode = {
   id: string;

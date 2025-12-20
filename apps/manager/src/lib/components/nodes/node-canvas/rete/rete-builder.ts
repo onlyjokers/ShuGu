@@ -12,7 +12,7 @@ import {
   FilePickerControl,
   MidiLearnControl,
   SelectControl,
-} from '../rete-controls';
+} from './rete-controls';
 
 type ReteSocketMap = Record<string, ClassicPreset.Socket>;
 

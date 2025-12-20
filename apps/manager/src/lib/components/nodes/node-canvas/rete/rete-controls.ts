@@ -1,3 +1,6 @@
+/**
+ * Purpose: Custom Rete control models used by the node canvas renderer.
+ */
 import { ClassicPreset } from 'rete';
 
 export type SelectOption = { value: string; label: string };

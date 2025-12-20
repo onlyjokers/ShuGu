@@ -1,3 +1,4 @@
+<!-- Purpose: Custom Rete node renderer for the node canvas. -->
 <script lang="ts">
   import Ref from 'rete-svelte-plugin/svelte/Ref.svelte';
   import type { ClassicScheme, SvelteArea2D } from 'rete-svelte-plugin/svelte/presets/classic/types';

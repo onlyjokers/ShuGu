@@ -1,3 +1,4 @@
+<!-- Purpose: Render Rete controls (inputs/selects/MIDI learn) for the node canvas. -->
 <script lang="ts">
   import { ClassicPreset } from 'rete';
   import { sensorData, state as managerState } from '$lib/stores/manager';

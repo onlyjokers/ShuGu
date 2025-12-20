@@ -1,7 +1,5 @@
 /**
- * Node graph view utilities.
- *
- * Shared geometry helpers for overlays (minimap, groups, loops).
+ * Purpose: Node graph view utilities shared across overlays and controllers.
  */
 import type { AreaPlugin } from 'rete-area-plugin';
 

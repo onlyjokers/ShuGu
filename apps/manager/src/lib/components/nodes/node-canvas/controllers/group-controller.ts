@@ -5,7 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
-import { readAreaTransform, readNodeBounds, type AreaTransform, type NodeBounds, unionBounds } from './view-utils';
+import { readAreaTransform, readNodeBounds, type AreaTransform, type NodeBounds, unionBounds } from '../utils/view-utils';
 
 export type NodeGroup = { id: string; name: string; nodeIds: string[]; disabled: boolean };
 export type GroupFrame = { group: NodeGroup; left: number; top: number; width: number; height: number };

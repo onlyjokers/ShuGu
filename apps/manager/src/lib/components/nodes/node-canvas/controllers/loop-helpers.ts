@@ -25,7 +25,12 @@ export type ExecutorClientStatus = {
 export type ExecutorStatusMap = Map<string, ExecutorClientStatus>;
 
 export type ManagerSdkLike = {
-  sendPluginControl: (target: { mode: string; ids: string[] }, plugin: string, event: string, payload: any) => void;
+  sendPluginControl: (
+    target: { mode: string; ids: string[] },
+    plugin: string,
+    event: string,
+    payload: any
+  ) => void;
   stopSound: (force?: boolean) => void;
   stopMedia: (force?: boolean) => void;
   hideImage: (force?: boolean) => void;
