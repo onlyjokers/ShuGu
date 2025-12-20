@@ -1,0 +1,19 @@
+{
+  "type": "number-stabilizer",
+  "label": "Number Stabilizer",
+  "category": "Math",
+  "inputs": [{ "id": "in", "label": "In", "type": "number", "defaultValue": 0 }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "configSchema": [
+    {
+      "key": "smoothing",
+      "label": "Smoothing",
+      "type": "number",
+      "defaultValue": 0.2,
+      "min": 0,
+      "max": 2000,
+      "step": 10
+    }
+  ],
+  "runtime": { "kind": "number-stabilizer" }
+}

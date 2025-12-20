@@ -473,6 +473,9 @@
 
     if (BYPASS_GEO_GATE) {
       // Kick off permission prompts within the same user gesture.
+      if (!getSDK()) {
+        initialize({ serverUrl }, { autoConnect: false });
+      }
       const permissionsPromise = requestPermissions().catch((error) => {
         console.warn('[Client] Permission request failed', error);
       });
@@ -486,7 +489,6 @@
       gateMessage = '';
       gateDetails = {};
       hasStarted = true;
-      initialize({ serverUrl }, { autoConnect: true });
       if (document.visibilityState === 'visible') connectToServer();
       await Promise.allSettled([permissionsPromise, audioPromise]);
       return;

@@ -45,8 +45,9 @@ class NodeEngineClass {
   constructor() {
     this.runtime = new NodeRuntime(nodeRegistry, {
       tickIntervalMs: TICK_INTERVAL,
-      isNodeEnabled: (nodeId) =>
-        !this.offloadedNodeIds.has(nodeId) && !this.disabledNodeIds.has(nodeId),
+      isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(nodeId),
+      // Allow offloaded nodes to compute for UI visibility, but skip sink side-effects.
+      isSinkEnabled: (nodeId) => !this.offloadedNodeIds.has(nodeId),
       onTick: ({ time }) => {
         this.tickTime.set(time);
       },
@@ -507,6 +508,7 @@ class NodeEngineClass {
       'math',
       'lfo',
       'number',
+      'number-stabilizer',
       'proc-flashlight',
       'proc-screen-color',
       'proc-synth-update',

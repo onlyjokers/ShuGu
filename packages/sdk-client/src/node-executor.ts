@@ -230,12 +230,14 @@ export class NodeExecutor {
     const required = parsed.meta.requiredCapabilities ?? [];
     const missing = required.filter((cap) => !this.options.canRunCapability(cap));
     if (missing.length > 0) {
+      const error = `missing required capabilities: ${missing.join(', ')}`;
       this.report('rejected', {
         loopId: parsed.meta.loopId,
         requiredCapabilities: required,
         missingCapabilities: missing,
+        error,
       });
-      throw new Error(`missing required capabilities: ${missing.join(', ')}`);
+      throw new Error(error);
     }
 
     const tickIntervalMs = Number(parsed.meta.tickIntervalMs ?? 33);

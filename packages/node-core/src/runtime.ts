@@ -32,6 +32,7 @@ export class NodeRuntime {
   private onTick: ((info: { durationMs: number; time: number }) => void) | null = null;
   private onWatchdog: ((info: NodeRuntimeWatchdogInfo) => void) | null = null;
   private isNodeEnabled: ((nodeId: string) => boolean) | null = null;
+  private isSinkEnabled: ((nodeId: string) => boolean) | null = null;
 
   // Remote overrides (manager-driven) that take precedence over connections and local inputs.
   // Overrides are NOT written into node.inputValues / node.config so TTL expiry restores base values.
@@ -56,6 +57,7 @@ export class NodeRuntime {
       onTick?: (info: { durationMs: number; time: number }) => void;
       onWatchdog?: (info: NodeRuntimeWatchdogInfo) => void;
       isNodeEnabled?: (nodeId: string) => boolean;
+      isSinkEnabled?: (nodeId: string) => boolean;
       watchdog?: {
         maxSinkValuesPerTick?: number;
         oscillation?: {
@@ -73,6 +75,7 @@ export class NodeRuntime {
     this.onTick = options?.onTick ?? null;
     this.onWatchdog = options?.onWatchdog ?? null;
     this.isNodeEnabled = options?.isNodeEnabled ?? null;
+    this.isSinkEnabled = options?.isSinkEnabled ?? null;
 
     const maxSink = options?.watchdog?.maxSinkValuesPerTick;
     if (typeof maxSink === 'number' && Number.isFinite(maxSink) && maxSink > 0) {
@@ -500,6 +503,7 @@ export class NodeRuntime {
       if (this.isNodeEnabled && !this.isNodeEnabled(node.id)) continue;
       const def = this.registry.get(node.type);
       if (!def?.onSink) continue;
+      if (this.isSinkEnabled && !this.isSinkEnabled(node.id)) continue;
 
       const sinkInputs: Record<string, unknown> = {};
       for (const conn of this.connections) {

@@ -210,7 +210,7 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
           const hasAudioContext =
             typeof window !== 'undefined' &&
             Boolean((window as any).AudioContext || (window as any).webkitAudioContext);
-          return hasAudioContext && get(audioEnabled);
+          return hasAudioContext;
         }
         return true;
       },

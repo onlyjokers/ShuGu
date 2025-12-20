@@ -82,6 +82,7 @@ type NodeRuntime =
   | { kind: 'param-get' }
   | { kind: 'param-set' }
   | { kind: 'number' }
+  | { kind: 'number-stabilizer' }
   | { kind: 'math' }
   | { kind: 'lfo' }
   | { kind: 'tone-osc' }
@@ -147,6 +148,7 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['client-object', pick('client-object')],
     ['proc-client-sensors', pick('proc-client-sensors')],
     ['number', pick('number')],
+    ['number-stabilizer', pick('number-stabilizer')],
     ['math', pick('math')],
     ['lfo', pick('lfo')],
     ['tone-osc', pick('tone-osc')],
@@ -344,6 +346,7 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
     case 'client-object':
     case 'proc-client-sensors':
     case 'number':
+    case 'number-stabilizer':
     case 'math':
     case 'lfo':
     case 'tone-osc':

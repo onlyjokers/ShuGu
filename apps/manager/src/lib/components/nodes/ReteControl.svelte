@@ -104,8 +104,10 @@
   $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
 
   function formatValue(val: number | null | undefined): string {
-    if (val === null || val === undefined) return '--';
-    return Number(val).toFixed(2);
+    if (val === null || val === undefined) return '0.00';
+    const num = Number(val);
+    if (!Number.isFinite(num)) return '0.00';
+    return num.toFixed(2);
   }
 
   let sensorsClientId = '';
@@ -114,30 +116,37 @@
   let sensorValueText = '--';
 
   function formatBpm(val: unknown): string {
-    if (val === null || val === undefined) return '--';
+    if (val === null || val === undefined) return '0';
     const num = Number(val);
-    if (!Number.isFinite(num)) return '--';
+    if (!Number.isFinite(num)) return '0';
     return String(Math.round(num));
   }
 
   function computeSensorValue(portId: string, msg: any, payload: any): string {
-    if (!msg || typeof msg !== 'object') return '--';
+    const fallbackNumber = formatValue(0);
+    const fallbackBpm = formatBpm(0);
+    if (!msg || typeof msg !== 'object') return portId === 'micBpm' ? fallbackBpm : fallbackNumber;
 
-    if (portId === 'accelX') return msg.sensorType === 'accel' ? formatValue(payload.x) : '--';
-    if (portId === 'accelY') return msg.sensorType === 'accel' ? formatValue(payload.y) : '--';
-    if (portId === 'accelZ') return msg.sensorType === 'accel' ? formatValue(payload.z) : '--';
+    if (portId === 'accelX')
+      return msg.sensorType === 'accel' ? formatValue(payload.x) : fallbackNumber;
+    if (portId === 'accelY')
+      return msg.sensorType === 'accel' ? formatValue(payload.y) : fallbackNumber;
+    if (portId === 'accelZ')
+      return msg.sensorType === 'accel' ? formatValue(payload.z) : fallbackNumber;
 
     const isAngle = msg.sensorType === 'gyro' || msg.sensorType === 'orientation';
-    if (portId === 'gyroA') return isAngle ? formatValue(payload.alpha) : '--';
-    if (portId === 'gyroB') return isAngle ? formatValue(payload.beta) : '--';
-    if (portId === 'gyroG') return isAngle ? formatValue(payload.gamma) : '--';
+    if (portId === 'gyroA') return isAngle ? formatValue(payload.alpha) : fallbackNumber;
+    if (portId === 'gyroB') return isAngle ? formatValue(payload.beta) : fallbackNumber;
+    if (portId === 'gyroG') return isAngle ? formatValue(payload.gamma) : fallbackNumber;
 
-    if (portId === 'micVol') return msg.sensorType === 'mic' ? formatValue(payload.volume) : '--';
-    if (portId === 'micLow') return msg.sensorType === 'mic' ? formatValue(payload.lowEnergy) : '--';
-    if (portId === 'micHigh') return msg.sensorType === 'mic' ? formatValue(payload.highEnergy) : '--';
-    if (portId === 'micBpm') return msg.sensorType === 'mic' ? formatBpm(payload.bpm) : '--';
+    if (portId === 'micVol') return msg.sensorType === 'mic' ? formatValue(payload.volume) : fallbackNumber;
+    if (portId === 'micLow')
+      return msg.sensorType === 'mic' ? formatValue(payload.lowEnergy) : fallbackNumber;
+    if (portId === 'micHigh')
+      return msg.sensorType === 'mic' ? formatValue(payload.highEnergy) : fallbackNumber;
+    if (portId === 'micBpm') return msg.sensorType === 'mic' ? formatBpm(payload.bpm) : fallbackBpm;
 
-    return '--';
+    return fallbackNumber;
   }
 
   $: if (data?.controlType === 'client-sensor-value') {

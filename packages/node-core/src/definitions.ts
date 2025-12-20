@@ -56,6 +56,7 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createMathNode());
   registry.register(createLFONode());
   registry.register(createNumberNode());
+  registry.register(createNumberStabilizerNode());
   // Tone.js audio nodes (client runtime overrides these definitions).
   registry.register(createToneOscNode());
   registry.register(createToneDelayNode());
@@ -123,6 +124,11 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
 }
 
 function createClientSensorsProcessorNode(): NodeDefinition {
+  const toFiniteNumber = (value: unknown, fallback = 0): number => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
   return {
     type: 'proc-client-sensors',
     label: 'Client Sensors',
@@ -163,21 +169,21 @@ function createClientSensorsProcessorNode(): NodeDefinition {
       const payload = msg.payload ?? {};
       switch (msg.sensorType) {
         case 'accel':
-          out.accelX = Number(payload.x ?? 0);
-          out.accelY = Number(payload.y ?? 0);
-          out.accelZ = Number(payload.z ?? 0);
+          out.accelX = toFiniteNumber(payload.x);
+          out.accelY = toFiniteNumber(payload.y);
+          out.accelZ = toFiniteNumber(payload.z);
           break;
         case 'gyro':
         case 'orientation':
-          out.gyroA = Number(payload.alpha ?? 0);
-          out.gyroB = Number(payload.beta ?? 0);
-          out.gyroG = Number(payload.gamma ?? 0);
+          out.gyroA = toFiniteNumber(payload.alpha);
+          out.gyroB = toFiniteNumber(payload.beta);
+          out.gyroG = toFiniteNumber(payload.gamma);
           break;
         case 'mic':
-          out.micVol = Number(payload.volume ?? 0);
-          out.micLow = Number(payload.lowEnergy ?? 0);
-          out.micHigh = Number(payload.highEnergy ?? 0);
-          out.micBpm = Number(payload.bpm ?? 0);
+          out.micVol = toFiniteNumber(payload.volume);
+          out.micLow = toFiniteNumber(payload.lowEnergy);
+          out.micHigh = toFiniteNumber(payload.highEnergy);
+          out.micBpm = toFiniteNumber(payload.bpm);
           break;
       }
 
@@ -320,6 +326,75 @@ function createNumberNode(): NodeDefinition {
     outputs: [{ id: 'value', label: 'Value', type: 'number' }],
     configSchema: [{ key: 'value', label: 'Value', type: 'number', defaultValue: 0 }],
     process: (_inputs, config) => ({ value: (config.value as number) ?? 0 }),
+  };
+}
+
+type StabilizerState = {
+  value: number;
+  target: number;
+  startValue: number;
+  startTime: number;
+  durationMs: number;
+};
+
+const stabilizerState = new Map<string, StabilizerState>();
+
+function createNumberStabilizerNode(): NodeDefinition {
+  return {
+    type: 'number-stabilizer',
+    label: 'Number Stabilizer',
+    category: 'Math',
+    inputs: [{ id: 'in', label: 'In', type: 'number', defaultValue: 0 }],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [
+      {
+        key: 'smoothing',
+        label: 'Smoothing',
+        type: 'number',
+        defaultValue: 0.2,
+        min: 0,
+        max: 2000,
+        step: 10,
+      },
+    ],
+    process: (inputs, config, context) => {
+      const raw = inputs.in;
+      const smoothingRaw = Number(config.smoothing ?? 0.2);
+      const smoothingFinite = Number.isFinite(smoothingRaw) ? smoothingRaw : 0.2;
+      // Backward-compat: if smoothing <= 1, treat it as normalized smoothing (0..1),
+      // otherwise interpret it as an explicit duration in ms.
+      const durationMs =
+        smoothingFinite <= 1 ? 50 + Math.max(0, Math.min(1, smoothingFinite)) * 950 : Math.max(0, smoothingFinite);
+
+      const inputValue =
+        typeof raw === 'number' && Number.isFinite(raw) ? (raw as number) : 0;
+
+      const prev = stabilizerState.get(context.nodeId);
+      if (!prev) {
+        const initial: StabilizerState = {
+          value: inputValue,
+          target: inputValue,
+          startValue: inputValue,
+          startTime: context.time,
+          durationMs,
+        };
+        stabilizerState.set(context.nodeId, initial);
+        return { out: initial.value };
+      }
+
+      if (inputValue !== prev.target || durationMs !== prev.durationMs) {
+        prev.startValue = prev.value;
+        prev.target = inputValue;
+        prev.startTime = context.time;
+        prev.durationMs = durationMs;
+      }
+
+      const elapsed = Math.max(0, context.time - prev.startTime);
+      const t = prev.durationMs <= 0 ? 1 : Math.max(0, Math.min(1, elapsed / prev.durationMs));
+      prev.value = prev.startValue + (prev.target - prev.startValue) * t;
+      stabilizerState.set(context.nodeId, prev);
+      return { out: prev.value };
+    },
   };
 }
 

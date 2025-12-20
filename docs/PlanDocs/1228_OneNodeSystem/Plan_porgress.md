@@ -149,3 +149,33 @@ This file tracks the implementation progress for `docs/PlanDocs/1228_OneNodeSyst
   - Added a `BYPASS_GEO_GATE` flag in `apps/client/src/routes/+page.svelte` so clicking Enter goes straight into the client without requesting location.
   - Commands run:
     - `pnpm --filter @shugu/client run check`
+
+- Follow-up: Added a numeric stabilizer node to smooth noisy/disappearing values:
+  - Added core runtime node `number-stabilizer` (EMA smoothing with per-node state) in `packages/node-core/src/definitions.ts`.
+  - Added manager JSON spec `apps/manager/src/lib/nodes/specs/number-stabilizer.json`.
+  - Wired manager runtime mapping for `number-stabilizer` in `apps/manager/src/lib/nodes/specs/register.ts`.
+  - Commands run:
+    - `pnpm --filter @shugu/node-core run build`
+
+- Follow-up: Ensured Client Sensors never emit `NaN/--` values:
+  - Added `toFiniteNumber()` guard in `proc-client-sensors` node so missing/invalid payloads output `0`.
+  - Commands run:
+    - `pnpm --filter @shugu/node-core run build`
+
+- Follow-up: Client Sensors UI now shows numeric zeros instead of `--`:
+  - Updated manager `ReteControl` sensor value formatting to return `0`/`0.00` on missing or mismatched sensor payloads.
+  - Commands run (fails due to existing midi-templates type error):
+    - `pnpm --filter @shugu/manager run check`
+
+- Follow-up: Improved Number Stabilizer to use time-based interpolation:
+  - Stabilizer now interpolates to targets over a time window (default ~240ms), instead of EMA factor per tick.
+  - Backward-compatible: `smoothing` in 0–1 maps to 50–1000ms; values >1 are treated as explicit ms.
+  - Updated UI config range to allow ms values.
+  - Commands run:
+    - `pnpm --filter @shugu/node-core run build`
+
+- Follow-up: Offloaded loops now still compute values for UI (but skip side effects):
+  - Added `isSinkEnabled` option to node-core runtime and gated sink execution per node.
+  - Manager NodeEngine now allows offloaded nodes to compute (for display), while preventing sink side effects.
+  - Commands run (manager typecheck still blocked by existing midi-templates type error):
+    - `pnpm --filter @shugu/node-core run build`

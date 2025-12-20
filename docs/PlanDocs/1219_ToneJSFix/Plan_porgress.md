@@ -35,3 +35,10 @@
 
 - 2025-12-19: Verified `packages/node-core/src/definitions.ts` already had audio ports marked `any` + `sink` in HEAD (no git diff for Step 1).
 
+## Fix - Deploy rejected when sound not enabled
+- 2025-12-19: Loops were rejected when `sound` capability required but audio was not yet enabled on the client.
+- 2025-12-19: Relaxed `canRunCapability('sound')` to allow deploy as long as an AudioContext exists (audio can be enabled later by user gesture).
+- 2025-12-19: Change in `apps/client/src/lib/stores/client.ts`.
+
+- 2025-12-19: Added explicit error string to node-executor rejection payload so Manager shows the missing capability instead of generic "rejected".
+
