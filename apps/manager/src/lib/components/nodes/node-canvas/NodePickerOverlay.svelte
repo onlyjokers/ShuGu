@@ -1,3 +1,4 @@
+<!-- Purpose: Node picker overlay for adding and connecting nodes. -->
 <script lang="ts">
   // @ts-nocheck
   type PickerMode = 'add' | 'connect';
@@ -212,4 +213,3 @@
     font-size: 12px;
   }
 </style>
-

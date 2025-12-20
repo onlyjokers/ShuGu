@@ -1,3 +1,4 @@
+<!-- Purpose: Marquee selection overlay with group creation affordance. -->
 <script lang="ts">
   // @ts-nocheck
   import Button from '$lib/components/ui/Button.svelte';
@@ -65,4 +66,3 @@
     pointer-events: auto;
   }
 </style>
-

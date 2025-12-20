@@ -1,3 +1,4 @@
+<!-- Purpose: Toolbar controls for node canvas start/stop and file actions. -->
 <script lang="ts">
   import Button from '$lib/components/ui/Button.svelte';
 

@@ -1,3 +1,4 @@
+<!-- Purpose: Render loop frames with deploy/stop controls and status. -->
 <script lang="ts">
   // @ts-nocheck
   import Button from '$lib/components/ui/Button.svelte';

@@ -1,3 +1,4 @@
+<!-- Purpose: Executor log panel for a loop/client. -->
 <script lang="ts">
   // @ts-nocheck
   export let clientId = '';
@@ -123,4 +124,3 @@
     font-size: 12px;
   }
 </style>
-

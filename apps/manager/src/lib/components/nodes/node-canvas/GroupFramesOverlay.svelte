@@ -1,3 +1,4 @@
+<!-- Purpose: Render group frames and group actions overlay. -->
 <script lang="ts">
   // @ts-nocheck
   import { tick } from 'svelte';

@@ -1,0 +1,195 @@
+/**
+ * Purpose: Bind Rete editor/area pipes to the NodeEngine + UI helpers.
+ */
+import { get, type Writable } from 'svelte/store';
+import type { NodeEditor } from 'rete';
+import type { AreaPlugin } from 'rete-area-plugin';
+import type { Connection as EngineConnection } from '$lib/nodes/types';
+
+type RetePipeOptions = {
+  editor: NodeEditor<any>;
+  areaPlugin: AreaPlugin | null;
+  nodeEngine: {
+    addConnection: (conn: EngineConnection) => boolean;
+    removeConnection: (id: string) => void;
+    removeNode: (id: string) => void;
+    updateNodePosition: (id: string, pos: { x: number; y: number }) => void;
+  };
+  nodeMap: Map<string, any>;
+  connectionMap: Map<string, any>;
+  isSyncing: () => boolean;
+  setSelectedNode: (id: string) => void;
+  groupSelectionNodeIds: Writable<Set<string>>;
+  isProgrammaticTranslate: () => boolean;
+  handleDroppedNodesAfterDrag: (nodeIds: string[]) => void;
+  requestFramesUpdate: () => void;
+  requestMinimapUpdate: () => void;
+};
+
+export function bindRetePipes(opts: RetePipeOptions) {
+  const {
+    editor,
+    areaPlugin,
+    nodeEngine,
+    nodeMap,
+    connectionMap,
+    isSyncing,
+    setSelectedNode,
+    groupSelectionNodeIds,
+    isProgrammaticTranslate,
+    handleDroppedNodesAfterDrag,
+    requestFramesUpdate,
+    requestMinimapUpdate,
+  } = opts;
+
+  let multiDragLeaderId: string | null = null;
+  let multiDragLeaderLastPos: { x: number; y: number } | null = null;
+  let multiDragTranslateDepth = 0;
+  const isMultiDragTranslate = () => multiDragTranslateDepth > 0;
+
+  editor.addPipe(async (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return ctx;
+    if (isSyncing()) return ctx;
+
+    if (ctx.type === 'connectioncreated') {
+      const c = ctx.data as any;
+      const engineConn: EngineConnection = {
+        id: String(c.id),
+        sourceNodeId: String(c.source),
+        sourcePortId: String(c.sourceOutput),
+        targetNodeId: String(c.target),
+        targetPortId: String(c.targetInput),
+      };
+      const accepted = nodeEngine.addConnection(engineConn);
+      if (accepted) {
+        connectionMap.set(engineConn.id, c);
+        const targetNode = nodeMap.get(engineConn.targetNodeId);
+        const input = targetNode?.inputs?.[engineConn.targetPortId];
+        const control = input?.control as any;
+        if (control && Boolean(control.readonly) !== true) {
+          control.readonly = true;
+          await areaPlugin?.update?.('node', engineConn.targetNodeId);
+        }
+      } else if (editor) {
+        try {
+          if (editor.getConnection(String(c.id))) {
+            await editor.removeConnection(String(c.id));
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (ctx.type === 'connectionremoved') {
+      const raw = ctx.data as any;
+      const id = String(raw.id);
+      const targetId = String(raw.target);
+      const portId = String(raw.targetInput);
+      connectionMap.delete(id);
+      nodeEngine.removeConnection(id);
+      const targetNode = nodeMap.get(targetId);
+      const input = targetNode?.inputs?.[portId];
+      const control = input?.control as any;
+      if (control) {
+        const stillConnected = Array.from(connectionMap.values()).some(
+          (conn: any) => String(conn.target) === targetId && String(conn.targetInput) === portId
+        );
+        if (Boolean(control.readonly) !== stillConnected) {
+          control.readonly = stillConnected;
+          await areaPlugin?.update?.('node', targetId);
+        }
+      }
+    }
+
+    if (ctx.type === 'noderemoved') {
+      const id = String((ctx.data as any).id);
+      nodeMap.delete(id);
+      nodeEngine.removeNode(id);
+    }
+
+    return ctx;
+  });
+
+  if (!areaPlugin) return;
+  areaPlugin.addPipe(async (ctx: any) => {
+    if (ctx?.type === 'nodepicked') {
+      setSelectedNode(String(ctx.data?.id ?? ''));
+    }
+    if (ctx?.type === 'nodetranslate') {
+      if (isProgrammaticTranslate() || isMultiDragTranslate()) return ctx;
+
+      const id = String(ctx.data?.id ?? '');
+      const selectedIds = get(groupSelectionNodeIds);
+      if (id && selectedIds.size > 1 && selectedIds.has(id)) {
+        multiDragLeaderId = id;
+        const view = areaPlugin?.nodeViews?.get?.(id);
+        const pos = view?.position as { x: number; y: number } | undefined;
+        multiDragLeaderLastPos = pos ? { x: pos.x, y: pos.y } : null;
+      } else {
+        multiDragLeaderId = null;
+        multiDragLeaderLastPos = null;
+      }
+    }
+    if (ctx?.type === 'nodedragged') {
+      const id = String(ctx.data?.id ?? '');
+      const selectedIds = get(groupSelectionNodeIds);
+      const movedNodeIds =
+        multiDragLeaderId && id === multiDragLeaderId && selectedIds.size > 1 && selectedIds.has(id)
+          ? Array.from(selectedIds).map(String)
+          : id
+            ? [id]
+            : [];
+      multiDragLeaderId = null;
+      multiDragLeaderLastPos = null;
+      handleDroppedNodesAfterDrag(movedNodeIds);
+    }
+    if (ctx?.type === 'translated' || ctx?.type === 'zoomed' || ctx?.type === 'nodetranslated') {
+      requestMinimapUpdate();
+      requestFramesUpdate();
+    }
+    if (ctx?.type === 'pointerdown') {
+      const target = ctx.data?.event?.target as HTMLElement | undefined;
+      const clickedNode = target?.closest?.('.node');
+      if (!clickedNode) setSelectedNode('');
+    }
+    if (ctx?.type === 'nodetranslated') {
+      const { id, position } = ctx.data ?? {};
+      if (id && position) {
+        const nodeId = String(id);
+        const selectedIds = get(groupSelectionNodeIds);
+
+        if (multiDragLeaderId && nodeId === multiDragLeaderId && selectedIds.size > 1 && !isProgrammaticTranslate()) {
+          if (!multiDragLeaderLastPos) {
+            multiDragLeaderLastPos = { x: position.x, y: position.y };
+          } else {
+            const dx = position.x - multiDragLeaderLastPos.x;
+            const dy = position.y - multiDragLeaderLastPos.y;
+            multiDragLeaderLastPos = { x: position.x, y: position.y };
+
+            if ((dx || dy) && areaPlugin?.nodeViews) {
+              multiDragTranslateDepth += 1;
+              try {
+                const promises: Promise<unknown>[] = [];
+                for (const otherId of selectedIds) {
+                  const oid = String(otherId);
+                  if (oid === nodeId) continue;
+                  const view = areaPlugin.nodeViews.get(oid);
+                  const pos = view?.position as { x: number; y: number } | undefined;
+                  if (!pos) continue;
+                  promises.push(areaPlugin.translate(oid, { x: pos.x + dx, y: pos.y + dy }));
+                }
+                await Promise.all(promises);
+              } finally {
+                multiDragTranslateDepth = Math.max(0, multiDragTranslateDepth - 1);
+              }
+            }
+          }
+        }
+
+        nodeEngine.updateNodePosition(nodeId, { x: position.x, y: position.y });
+      }
+    }
+    return ctx;
+  });
+}

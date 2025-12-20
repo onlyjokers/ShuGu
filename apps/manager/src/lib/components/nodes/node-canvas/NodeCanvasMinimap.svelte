@@ -1,3 +1,4 @@
+<!-- Purpose: Minimap overlay UI for the node canvas. -->
 <script lang="ts">
   // @ts-nocheck
   export let minimapUi: { x: number; y: number } = { x: 0, y: 0 };
