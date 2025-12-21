@@ -310,10 +310,11 @@ export function instantiateMidiBinding(template: MidiBindingTemplateV1, opts: In
   let mapNodeType = 'midi-map';
   let mapConfig: Record<string, unknown> = { ...template.mapping };
 
-  if (template.target.kind === 'node-input') {
-    const def = nodeRegistry.get(template.target.nodeType);
-    const port = def?.inputs?.find((p) => p.id === template.target.inputId);
-    const options = getSelectOptionsForInput(template.target.nodeType, template.target.inputId);
+  const target = template.target;
+  if (target.kind === 'node-input') {
+    const def = nodeRegistry.get(target.nodeType);
+    const port = def?.inputs?.find((p) => p.id === target.inputId);
+    const options = getSelectOptionsForInput(target.nodeType, target.inputId);
     if (port?.type === 'fuzzy' && options && options.length > 0) {
       mapNodeType = 'midi-select-map';
       mapConfig = { ...template.mapping, options };

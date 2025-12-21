@@ -27,23 +27,24 @@
   import MediaControl from '$lib/features/audio/MediaControl.svelte';
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
   import GeoControl from '$lib/features/location/GeoControl.svelte';
-  import AutoControlPanel from '$lib/components/AutoControlPanel.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
   import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
+  import AssetsManager from '$lib/components/AssetsManager.svelte';
 
   let serverUrl = 'https://localhost:3001';
+  let assetWriteToken = '';
   let isConnecting = false;
   let username: AuthUser | '' = '';
   let password = '';
   let rememberLogin = false;
 
-  type WorkspaceTab = 'dashboard' | 'auto' | 'registry-midi' | 'nodes';
+  type WorkspaceTab = 'dashboard' | 'assets' | 'registry-midi' | 'nodes';
   let activePage: WorkspaceTab = 'dashboard';
   const nodeGraphRunning = nodeEngine.isRunning;
 
   let tabsEl: HTMLDivElement | null = null;
   let tabDashboardEl: HTMLButtonElement | null = null;
-  let tabAutoEl: HTMLButtonElement | null = null;
+  let tabAssetsEl: HTMLButtonElement | null = null;
   let tabRegistryMidiEl: HTMLButtonElement | null = null;
   let tabNodesEl: HTMLButtonElement | null = null;
   const tabSlider = spring(
@@ -62,7 +63,7 @@
 
   function getActiveTabEl(): HTMLButtonElement | null {
     if (activePage === 'dashboard') return tabDashboardEl;
-    if (activePage === 'auto') return tabAutoEl;
+    if (activePage === 'assets') return tabAssetsEl;
     if (activePage === 'registry-midi') return tabRegistryMidiEl;
     if (activePage === 'nodes') return tabNodesEl;
     return null;
@@ -97,6 +98,9 @@
       // Default to HTTPS on current host
       serverUrl = `https://${window.location.hostname}:3001`;
     }
+
+    const savedAssetWrite = localStorage.getItem('shugu-asset-write-token');
+    assetWriteToken = savedAssetWrite ? savedAssetWrite : '';
 
     return () => {
       disconnect();
@@ -139,6 +143,7 @@
   function handleConnect() {
     if (!$auth.user) return;
     localStorage.setItem('shugu-server-url', serverUrl);
+    localStorage.setItem('shugu-asset-write-token', assetWriteToken);
     isConnecting = true;
     connect({ serverUrl });
     isConnecting = false;
@@ -242,6 +247,16 @@
             placeholder="https://localhost:3001"
           />
 
+          <label class="form-label" for="asset-write-token">Asset Write Token</label>
+          <input
+            id="asset-write-token"
+            type="password"
+            class="input"
+            bind:value={assetWriteToken}
+            placeholder="ASSET_WRITE_TOKEN"
+            autocomplete="off"
+          />
+
           <p class="status-note">Logged in as: <strong>{$auth.user}</strong></p>
 
           {#if $connectionStatus === 'error'}
@@ -278,14 +293,14 @@
           class:active={activePage === 'dashboard'}
           on:click={() => (activePage = 'dashboard')}
         >
-          🧰 控制台
+          🧰 Console
         </button>
         <button
-          bind:this={tabAutoEl}
-          class:active={activePage === 'auto'}
-          on:click={() => (activePage = 'auto')}
+          bind:this={tabAssetsEl}
+          class:active={activePage === 'assets'}
+          on:click={() => (activePage = 'assets')}
         >
-          🎛️ Auto UI
+          🗂️ Assets Manager
         </button>
         <button
           bind:this={tabRegistryMidiEl}
@@ -345,10 +360,8 @@
         </div>
       </div>
 
-      <div class:hide={activePage !== 'auto'}>
-        <div class="auto-pane">
-          <AutoControlPanel />
-        </div>
+      <div class:hide={activePage !== 'assets'}>
+        <AssetsManager {serverUrl} />
       </div>
 
       <div class:hide={activePage !== 'registry-midi'}>
@@ -502,10 +515,6 @@
   }
 
   .midi-pane {
-    margin-top: var(--space-sm);
-  }
-
-  .auto-pane {
     margin-top: var(--space-sm);
   }
 

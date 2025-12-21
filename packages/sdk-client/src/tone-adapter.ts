@@ -20,6 +20,7 @@ type ParsedLoop = {
 
 type ToneAdapterDeps = {
   sdk?: ClientSDK;
+  resolveAssetRef?: (ref: string) => string;
 };
 
 type ToneAdapterHandle = {
@@ -1162,7 +1163,7 @@ export function registerToneClientDefinitions(
       { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
       { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Amp', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       {
         key: 'waveform',
@@ -1307,12 +1308,12 @@ export function registerToneClientDefinitions(
     label: 'Tone Delay (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
@@ -1336,13 +1337,13 @@ export function registerToneClientDefinitions(
     label: 'Tone Resonator (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
@@ -1367,14 +1368,14 @@ export function registerToneClientDefinitions(
     label: 'Tone Pitch (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
@@ -1400,12 +1401,12 @@ export function registerToneClientDefinitions(
     label: 'Tone Reverb (client)',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
@@ -1436,7 +1437,7 @@ export function registerToneClientDefinitions(
       { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
@@ -1454,7 +1455,8 @@ export function registerToneClientDefinitions(
       const grainSize = toNumber(inputs.grainSize ?? config.grainSize, 0.2);
       const overlap = toNumber(inputs.overlap ?? config.overlap, 0.1);
       const volume = toNumber(inputs.volume ?? config.volume, 0.6);
-      const url = toString(config.url, '');
+      const urlRaw = toString(config.url, '');
+      const url = deps.resolveAssetRef ? deps.resolveAssetRef(urlRaw) : urlRaw;
       const loop = toBoolean(config.loop, true);
       const gate = toNumber(inputs.gate, 0);
       const enabled = toBoolean(config.enabled, false) || gate > 0;
@@ -1548,7 +1550,7 @@ export function registerToneClientDefinitions(
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
@@ -1560,7 +1562,8 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
     ],
     process: (inputs, config, context) => {
-      const url = toString(inputs.url ?? config.url, '');
+      const urlRaw = toString(inputs.url ?? config.url, '');
+      const url = deps.resolveAssetRef ? deps.resolveAssetRef(urlRaw) : urlRaw;
       const triggerRaw = inputs.trigger;
       const triggerActive =
         typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);

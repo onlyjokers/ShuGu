@@ -10,6 +10,7 @@ export type PortType =
   | 'boolean'
   | 'string'
   | 'color'
+  | 'audio'
   | 'client'
   | 'command'
   | 'fuzzy'
@@ -47,9 +48,11 @@ export interface ConfigField {
     | 'param-path'
     | 'midi-source'
     | 'client-picker'
+    | 'asset-picker'
     | 'file';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
+  assetKind?: 'audio' | 'image' | 'video' | 'any';
   min?: number;
   max?: number;
   step?: number;

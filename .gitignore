@@ -7,6 +7,7 @@ dist
 dist2
 dist-user
 dist-local
+dist-server
 dist-writable
 dist-out
 dist-dev*
@@ -44,12 +45,17 @@ coverage
 *.temp
 .tmp.driveupload
 .driveupload
+*.timestamp-*.mjs
 
 # Security & Secrets
 secrets/
 certs/
 *.pem
 *.key
+
+# Runtime data / local test assets
+apps/**/data/
+assets/
 
 # Python Cache
 **/__pycache__/

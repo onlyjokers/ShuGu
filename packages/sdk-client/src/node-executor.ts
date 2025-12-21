@@ -31,6 +31,11 @@ export type NodeExecutorOptions = {
    * Safety limits (Task 6 will tighten these further).
    */
   canRunCapability?: (capability: string) => boolean;
+  /**
+   * Optional asset resolver for URL-like inputs (e.g. `asset:<id>` -> https://.../content?token=...).
+   * When provided, Tone nodes (tone-player/granular) will resolve before loading.
+   */
+  resolveAssetRef?: (ref: string) => string;
   limits?: {
     maxNodes?: number;
     minTickIntervalMs?: number;
@@ -106,11 +111,22 @@ export class NodeExecutor {
 
     registerDefaultNodeDefinitions(this.registry, {
       getClientId: () => this.sdk.getState().clientId,
+      getAllClientIds: () => {
+        const id = this.sdk.getState().clientId;
+        return id ? [id] : [];
+      },
+      getSelectedClientIds: () => {
+        const id = this.sdk.getState().clientId;
+        return id ? [id] : [];
+      },
       getLatestSensor: () => this.sdk.getLatestSensorData(),
       executeCommand: (cmd) => this.executeCommand(cmd),
     });
     // Client-only Tone.js implementations override the shared node-core definitions.
-    this.toneAdapter = registerToneClientDefinitions(this.registry, { sdk: this.sdk });
+    this.toneAdapter = registerToneClientDefinitions(this.registry, {
+      sdk: this.sdk,
+      resolveAssetRef: options?.resolveAssetRef,
+    });
 
     this.runtime = new NodeRuntime(this.registry, {
       onTick: ({ durationMs }) => {

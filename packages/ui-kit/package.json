@@ -2,27 +2,27 @@
     "name": "@shugu/ui-kit",
     "version": "1.0.0",
     "description": "Shared UI components and styles",
-    "main": "./dist/index.js",
-    "module": "./dist/index.js",
-    "types": "./dist/index.d.ts",
+    "main": "./dist-out/index.js",
+    "module": "./dist-out/index.js",
+    "types": "./dist-out/index.d.ts",
     "type": "module",
     "svelte": "./src/index.ts",
     "exports": {
         ".": {
-            "types": "./dist/index.d.ts",
+            "types": "./dist-out/index.d.ts",
             "svelte": "./src/index.ts",
-            "import": "./dist/index.js"
+            "import": "./dist-out/index.js"
         },
         "./styles": "./src/styles/index.css"
     },
     "scripts": {
-        "build": "tsc",
-        "dev": "tsc --watch",
-        "clean": "rm -rf dist",
+        "build": "pnpm exec tsc",
+        "dev": "pnpm exec tsc --watch",
+        "clean": "rm -rf dist-out",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.{ts,svelte}\""
     },
     "files": [
-        "dist",
+        "dist-out",
         "src"
     ],
     "peerDependencies": {

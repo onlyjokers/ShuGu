@@ -863,8 +863,31 @@ function loadSpecs(): NodeSpec[] {
 }
 
 // Register on import.
+registerDefaultNodeDefinitions(nodeRegistry, {
+  // Manager-side: resolve clientId from node config.
+  getClientId: () => null,
+  getAllClientIds: () =>
+    (get(state).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean),
+  getSelectedClientIds: () => (get(state).selectedClientIds ?? []).map(String).filter(Boolean),
+  getSensorForClientId: (clientId: string) => {
+    if (!clientId) return null;
+    return (get(sensorData).get(clientId) as any) ?? null;
+  },
+  executeCommand: () => {
+    // Manager always routes via executeCommandForClientId.
+  },
+  executeCommandForClientId: (clientId: string, cmd: any) => {
+    if (!clientId) return;
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendControl(targetClients([clientId]), cmd.action, cmd.payload ?? {}, cmd.executeAt);
+  },
+} as any);
+
 for (const spec of loadSpecs()) {
   try {
+    // Single Source of Truth: never override node-core definitions via hand-written specs.
+    if (nodeRegistry.get(spec.type)) continue;
     nodeRegistry.register(createDefinition(spec));
   } catch (err) {
     console.warn('[node-specs] failed to register', spec?.type, err);

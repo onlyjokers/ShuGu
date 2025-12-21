@@ -6,6 +6,8 @@ import type { AreaPlugin } from 'rete-area-plugin';
 export type AreaTransform = { k: number; tx: number; ty: number };
 export type NodeBounds = { left: number; top: number; right: number; bottom: number };
 
+type AnyAreaPlugin = AreaPlugin<any, any>;
+
 export function normalizeAreaTransform(area: any) {
   const k = Number(area?.transform?.k);
   const x = Number(area?.transform?.x);
@@ -16,7 +18,7 @@ export function normalizeAreaTransform(area: any) {
   if (!Number.isFinite(y)) area.transform.y = 0;
 }
 
-export function readAreaTransform(areaPlugin: AreaPlugin | null | undefined): AreaTransform | null {
+export function readAreaTransform(areaPlugin: AnyAreaPlugin | null | undefined): AreaTransform | null {
   if (!areaPlugin?.area) return null;
   const area = areaPlugin.area;
   normalizeAreaTransform(area);
@@ -27,7 +29,7 @@ export function readAreaTransform(areaPlugin: AreaPlugin | null | undefined): Ar
 }
 
 export function readNodeBounds(
-  areaPlugin: AreaPlugin | null | undefined,
+  areaPlugin: AnyAreaPlugin | null | undefined,
   nodeId: string,
   t: AreaTransform
 ): NodeBounds | null {
@@ -44,7 +46,7 @@ export function readNodeBounds(
   return { left, top, right: left + width, bottom: top + height };
 }
 
-export function readNodeBoundsGraph(areaPlugin: AreaPlugin | null | undefined, nodeId: string): NodeBounds | null {
+export function readNodeBoundsGraph(areaPlugin: AnyAreaPlugin | null | undefined, nodeId: string): NodeBounds | null {
   if (!areaPlugin?.nodeViews) return null;
   const view = areaPlugin.nodeViews.get(String(nodeId));
   const el = view?.element as HTMLElement | undefined;
@@ -59,7 +61,7 @@ export function readNodeBoundsGraph(areaPlugin: AreaPlugin | null | undefined, n
 }
 
 export function unionBounds(
-  areaPlugin: AreaPlugin | null | undefined,
+  areaPlugin: AnyAreaPlugin | null | undefined,
   nodeIds: string[],
   t: AreaTransform
 ): NodeBounds | null {
@@ -86,7 +88,7 @@ export function unionBounds(
   return { left, top, right, bottom };
 }
 
-export function unionBoundsGraph(areaPlugin: AreaPlugin | null | undefined, nodeIds: string[]): NodeBounds | null {
+export function unionBoundsGraph(areaPlugin: AnyAreaPlugin | null | undefined, nodeIds: string[]): NodeBounds | null {
   let left = Number.POSITIVE_INFINITY;
   let top = Number.POSITIVE_INFINITY;
   let right = Number.NEGATIVE_INFINITY;

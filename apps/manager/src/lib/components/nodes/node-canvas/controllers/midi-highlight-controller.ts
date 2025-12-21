@@ -119,7 +119,7 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
           selectedInputId,
           sourceNodeTypes: midiSourceNodeTypes,
           traversalStopNodeTypes: midiTraversalStopNodeTypes,
-          midiSourceMatchesEvent,
+          midiSourceMatchesEvent: midiSourceMatchesEvent as any,
         });
 
         if (result) {

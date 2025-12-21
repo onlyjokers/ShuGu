@@ -30,6 +30,24 @@ export const state = writable<ManagerState>({
 // Sensor data store (latest data from each client)
 export const sensorData = writable<Map<string, SensorDataMessage>>(new Map());
 
+export type ClientReadinessStatus =
+    | 'connected' // connected but not verified assets yet (yellow)
+    | 'assets-loading' // actively preloading (yellow)
+    | 'assets-ready' // preload complete (green)
+    | 'assets-error'; // preload failed (red)
+
+export type ClientReadiness = {
+    status: ClientReadinessStatus;
+    manifestId?: string;
+    loaded?: number;
+    total?: number;
+    error?: string;
+    updatedAt: number;
+};
+
+// Per-client readiness (drives "client dot" UI state).
+export const clientReadiness = writable<Map<string, ClientReadiness>>(new Map());
+
 // Derived stores
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clients = derived(state, ($state) => $state.clients);
@@ -57,6 +75,25 @@ export function connect(config: ManagerSDKConfig): void {
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
         state.set(newState);
+        clientReadiness.update((prev) => {
+            const next = new Map(prev);
+            const ids = new Set((newState.clients ?? []).map((c) => String((c as any).clientId ?? '')).filter(Boolean));
+
+            // Remove vanished clients
+            for (const id of next.keys()) {
+                if (!ids.has(id)) next.delete(id);
+            }
+
+            // Mark new clients as connected (yellow) until they report assets-ready.
+            const now = Date.now();
+            for (const id of ids) {
+                if (!next.has(id)) {
+                    next.set(id, { status: 'connected', updatedAt: now });
+                }
+            }
+
+            return next;
+        });
     });
 
     // Subscribe to sensor data
@@ -65,6 +102,41 @@ export function connect(config: ManagerSDKConfig): void {
             map.set(data.clientId, data);
             return new Map(map);
         });
+
+        // Parse multimedia-core readiness events (custom sensor channel).
+        if (data.sensorType === 'custom') {
+            const payload: any = (data as any).payload ?? {};
+            if (payload?.kind === 'multimedia-core' && payload?.event === 'asset-preload') {
+                const status = typeof payload.status === 'string' ? payload.status : '';
+                const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : undefined;
+                const loaded = typeof payload.loaded === 'number' && Number.isFinite(payload.loaded) ? payload.loaded : undefined;
+                const total = typeof payload.total === 'number' && Number.isFinite(payload.total) ? payload.total : undefined;
+                const error = payload.error ? String(payload.error) : undefined;
+                const now = Date.now();
+
+                clientReadiness.update((prev) => {
+                    const next = new Map(prev);
+                    const current = next.get(data.clientId) ?? { status: 'connected' as const, updatedAt: now };
+
+                    if (status === 'loading') {
+                        next.set(data.clientId, { ...current, status: 'assets-loading', manifestId, loaded, total, updatedAt: now });
+                        return next;
+                    }
+
+                    if (status === 'ready') {
+                        next.set(data.clientId, { ...current, status: 'assets-ready', manifestId, loaded: total ?? loaded, total, updatedAt: now });
+                        return next;
+                    }
+
+                    if (status === 'error') {
+                        next.set(data.clientId, { ...current, status: 'assets-error', manifestId, error, updatedAt: now });
+                        return next;
+                    }
+
+                    return next;
+                });
+            }
+        }
     });
 
     sdk.connect();
@@ -77,6 +149,7 @@ export function disconnect(): void {
     sdk?.disconnect();
     sdk = null;
     sensorData.set(new Map());
+    clientReadiness.set(new Map());
     parameterRegistry.clear();
 }
 

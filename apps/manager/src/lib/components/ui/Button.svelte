@@ -4,6 +4,8 @@
   export let disabled = false;
   export let type: 'button' | 'submit' | 'reset' = 'button';
   export let fullWidth = false;
+  export let ariaLabel: string | undefined = undefined;
+  export let title: string | undefined = undefined;
 
   let className = '';
   export { className as class };
@@ -11,7 +13,7 @@
   $: btnClass = `btn btn-${variant} btn-${size} ${fullWidth ? 'w-full' : ''} ${className}`;
 </script>
 
-<button {type} class={btnClass} {disabled} on:click>
+<button {type} class={btnClass} {disabled} aria-label={ariaLabel} {title} on:click>
   <slot />
 </button>
 

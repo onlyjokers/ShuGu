@@ -2,8 +2,14 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { loadOptionalEnv } from './bootstrap/load-env.js';
 
 async function bootstrap() {
+  const env = loadOptionalEnv();
+  if (env.loadedFrom) {
+    console.log(`[env] loaded ${env.keys.length} keys from ${env.loadedFrom}`);
+  }
+
   // Check if certificates exist
   const keyCandidates = [
     path.join(process.cwd(), 'secrets/privkey.pem'),
@@ -33,7 +39,15 @@ async function bootstrap() {
     cors: {
       origin: '*',
       methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-      credentials: true,
+      credentials: false,
+      allowedHeaders: ['Range', 'If-None-Match', 'Content-Type', 'Authorization'],
+      exposedHeaders: [
+        'Content-Range',
+        'Accept-Ranges',
+        'ETag',
+        'Content-Length',
+        'Content-Type',
+      ],
     },
   };
 

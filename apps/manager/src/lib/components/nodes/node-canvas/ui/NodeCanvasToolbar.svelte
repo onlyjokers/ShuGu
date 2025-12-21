@@ -25,8 +25,7 @@
       variant={isRunning ? 'danger' : 'primary'}
       size="sm"
       on:click={onToggleEngine}
-      title={isRunning ? 'Stop' : 'Start'}
-      aria-label={isRunning ? 'Stop' : 'Start'}
+      ariaLabel={isRunning ? 'Stop' : 'Start'}
     >
       {isRunning ? '⏹' : '▶'}
     </Button>

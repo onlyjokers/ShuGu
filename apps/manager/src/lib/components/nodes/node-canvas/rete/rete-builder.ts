@@ -9,12 +9,14 @@ import {
   BooleanControl,
   ClientPickerControl,
   ClientSensorValueControl,
+  AssetPickerControl,
   FilePickerControl,
   MidiLearnControl,
   SelectControl,
 } from './rete-controls';
 
 type ReteSocketMap = Record<string, ClassicPreset.Socket>;
+type AnyAreaPlugin = AreaPlugin<any, any>;
 
 type ReteBuilderOptions = {
   nodeRegistry: NodeRegistry;
@@ -37,7 +39,7 @@ export type ReteBuilder = {
   buildReteNode: (instance: NodeInstance) => any;
   applyMidiMapRangeConstraints: (
     state: { nodes: NodeInstance[]; connections: EngineConnection[] },
-    areaPlugin: AreaPlugin | null | undefined,
+    areaPlugin: AnyAreaPlugin | null | undefined,
     nodeMap: Map<string, any>
   ) => Promise<void>;
   isCompatible: (sourceType: PortType, targetType: PortType) => boolean;
@@ -220,7 +222,7 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
               : String(derivedDefault ?? '#ffffff');
         inp.addControl(
           (() => {
-            const control: any = new ClassicPreset.InputControl('color', {
+            const control: any = new ClassicPreset.InputControl('text', {
               initial,
               change: (value) => {
                 nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
@@ -326,6 +328,17 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         control.nodeId = instance.id;
         control.nodeType = instance.type;
         node.addControl(key, control);
+      } else if (field.type === 'asset-picker') {
+        const control: any = new AssetPickerControl({
+          label: field.label,
+          initial: String(current ?? ''),
+          assetKind: (field as any).assetKind ?? 'any',
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
+        });
+        node.addControl(key, control);
       } else if (field.type === 'param-path') {
         node.addControl(
           key,
@@ -378,7 +391,7 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
 
   const applyMidiMapRangeConstraints = async (
     state: { nodes: NodeInstance[]; connections: EngineConnection[] },
-    areaPlugin: AreaPlugin | null | undefined,
+    areaPlugin: AnyAreaPlugin | null | undefined,
     nodeMap: Map<string, any>
   ) => {
     if (!areaPlugin) return;

@@ -31,6 +31,15 @@ export type ClientObject = {
 export type ClientObjectDeps = {
   getClientId: () => string | null;
   /**
+   * Manager-side list of all available clientIds (for client selection inputs).
+   * Client-side implementations may return `[selfClientId]` (or `[]` when offline).
+   */
+  getAllClientIds?: () => string[];
+  /**
+   * Manager-side selected clientIds (fallback when the node has no explicit selection).
+   */
+  getSelectedClientIds?: () => string[];
+  /**
    * Client-side convenience (single local client).
    * Prefer `getSensorForClientId` when available.
    */
@@ -49,6 +58,71 @@ export type ClientObjectDeps = {
    */
   executeCommandForClientId?: (clientId: string, cmd: NodeCommand) => void;
 };
+
+type ClientSelectionState = {
+  availableKey: string;
+  random: boolean;
+  stableRandomOrder: string[];
+};
+
+const clientSelectionStateByNodeId = new Map<string, ClientSelectionState>();
+
+function hashStringDjb2(value: string): number {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'string' ? Number(value) : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const next = Math.floor(n);
+  return Math.max(min, Math.min(max, next));
+}
+
+function buildStableRandomOrder(nodeId: string, clients: string[]): string[] {
+  const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
+  keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
+  return keyed.map((k) => k.id);
+}
+
+function selectClientIdsForNode(
+  nodeId: string,
+  clients: string[],
+  options: { index: unknown; range: unknown; random: unknown }
+): { index: number; selectedIds: string[] } {
+  const total = clients.length;
+  if (total === 0) return { index: 1, selectedIds: [] };
+
+  const index = clampInt(options.index, 1, 1, total);
+  const range = clampInt(options.range, 1, 1, total);
+  const random = Boolean(options.random);
+
+  const availableKey = clients.join('|');
+  const prev = clientSelectionStateByNodeId.get(nodeId);
+  const needRebuild =
+    !prev || prev.availableKey !== availableKey || prev.random !== random || prev.stableRandomOrder.length !== total;
+
+  const state: ClientSelectionState = needRebuild
+    ? {
+        availableKey,
+        random,
+        stableRandomOrder: random ? buildStableRandomOrder(nodeId, clients) : clients.slice(),
+      }
+    : prev;
+
+  if (needRebuild) clientSelectionStateByNodeId.set(nodeId, state);
+
+  const ordered = state.random ? state.stableRandomOrder : clients;
+  const start = index - 1;
+  const selected: string[] = [];
+  for (let i = 0; i < range; i += 1) {
+    selected.push(ordered[(start + i) % total]);
+  }
+  return { index, selectedIds: selected };
+}
 
 export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: ClientObjectDeps): void {
   registry.register(createClientObjectNode(deps));
@@ -73,7 +147,10 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createToneGranularNode());
   registry.register(createTonePlayerNode());
   // Media playback helpers.
+  registry.register(createLoadAudioFromAssetsNode());
   registry.register(createLoadMediaSoundNode());
+  registry.register(createLoadMediaImageNode());
+  registry.register(createLoadMediaVideoNode());
   registry.register(createPlayMediaNode());
   registry.register(createFlashlightProcessorNode());
   registry.register(createScreenColorProcessorNode());
@@ -81,19 +158,61 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createSceneSwitchProcessorNode());
 }
 
+function createLoadAudioFromAssetsNode(): NodeDefinition {
+  return {
+    type: 'load-audio-from-assets',
+    label: 'Load Audio From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Audio Asset',
+        type: 'asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
+    ],
+    process: (_inputs, config) => {
+      const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
+      return { ref: assetId ? `asset:${assetId}` : '' };
+    },
+  };
+}
+
 function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
   return {
     type: 'client-object',
     label: 'Client',
     category: 'Objects',
-    inputs: [{ id: 'in', label: 'In', type: 'command', kind: 'sink' }],
-    outputs: [{ id: 'out', label: 'Out', type: 'client' }],
-    configSchema: [],
-    process: (_inputs, config) => {
+    inputs: [
+      { id: 'index', label: 'Index', type: 'number', defaultValue: 1, min: 1, step: 1 },
+      { id: 'range', label: 'Range', type: 'number', defaultValue: 1, min: 1, step: 1 },
+      { id: 'random', label: 'Random', type: 'boolean', defaultValue: false },
+      { id: 'in', label: 'In', type: 'command', kind: 'sink' },
+    ],
+    outputs: [
+      { id: 'out', label: 'Out', type: 'client' },
+      { id: 'indexOut', label: 'Index Out', type: 'number' },
+    ],
+    configSchema: [{ key: 'clientId', label: 'Clients', type: 'client-picker', defaultValue: '' }],
+    process: (inputs, config, context) => {
       const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
-      const clientId = deps.getClientId() ?? configured;
-      const latest = clientId
-        ? deps.getSensorForClientId?.(clientId) ?? deps.getLatestSensor?.() ?? null
+
+      const available = deps.getAllClientIds?.() ?? [];
+      const selection = selectClientIdsForNode(context.nodeId, available, {
+        index: inputs.index,
+        range: inputs.range,
+        random: inputs.random,
+      });
+
+      const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
+      const primaryClientId =
+        selection.selectedIds[0] ?? fallbackSelected[0] ?? deps.getClientId() ?? configured;
+
+      const latest = primaryClientId
+        ? deps.getSensorForClientId?.(primaryClientId) ?? deps.getLatestSensor?.() ?? null
         : deps.getLatestSensor?.() ?? null;
       const sensors: ClientSensorMessage | null = latest
         ? {
@@ -103,13 +222,30 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
             clientTimestamp: latest.clientTimestamp,
           }
         : null;
-      const out: ClientObject = { clientId, sensors };
-      return { out };
+      const out: ClientObject = { clientId: primaryClientId, sensors };
+      return { out, indexOut: selection.index };
     },
-    onSink: (inputs, config) => {
+    onSink: (inputs, config, context) => {
       const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
-      const clientId = deps.getClientId() ?? configured;
-      if (!clientId) return;
+
+      const available = deps.getAllClientIds?.() ?? [];
+      const selection = selectClientIdsForNode(context.nodeId, available, {
+        index: (inputs as any).index,
+        range: (inputs as any).range,
+        random: (inputs as any).random,
+      });
+
+      const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
+      const fallbackSingle = deps.getClientId() ?? configured;
+      const targets =
+        selection.selectedIds.length > 0
+          ? selection.selectedIds
+          : fallbackSelected.length > 0
+            ? fallbackSelected
+            : fallbackSingle
+              ? [fallbackSingle]
+              : [];
+      if (targets.length === 0) return;
 
       const raw = inputs.in;
       const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
@@ -123,8 +259,11 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
           executeAt: (cmd as any).executeAt as number | undefined,
         };
 
-        if (deps.executeCommandForClientId) deps.executeCommandForClientId(clientId, next);
-        else deps.executeCommand(next);
+        for (const clientId of targets) {
+          if (!clientId) continue;
+          if (deps.executeCommandForClientId) deps.executeCommandForClientId(clientId, next);
+          else deps.executeCommand(next);
+        }
       }
     },
   };
@@ -645,7 +784,7 @@ function createToneOscNode(): NodeDefinition {
       { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
       { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       {
         key: 'waveform',
@@ -693,12 +832,12 @@ function createToneDelayNode(): NodeDefinition {
     label: 'Tone Delay',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
@@ -717,13 +856,13 @@ function createToneResonatorNode(): NodeDefinition {
     label: 'Tone Resonator',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
@@ -743,14 +882,14 @@ function createTonePitchNode(): NodeDefinition {
     label: 'Tone Pitch',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
@@ -771,12 +910,12 @@ function createToneReverbNode(): NodeDefinition {
     label: 'Tone Reverb',
     category: 'Audio',
     inputs: [
-      { id: 'in', label: 'In', type: 'any', kind: 'sink' },
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
@@ -802,7 +941,7 @@ function createToneGranularNode(): NodeDefinition {
       { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
@@ -839,6 +978,54 @@ function createLoadMediaSoundNode(): NodeDefinition {
         defaultValue: '',
         accept: 'audio/*',
         buttonLabel: 'Load Audio',
+      },
+    ],
+    process: (_inputs, config) => {
+      const url = typeof config.url === 'string' ? String(config.url) : '';
+      return { url };
+    },
+  };
+}
+
+function createLoadMediaImageNode(): NodeDefinition {
+  return {
+    type: 'load-media-image',
+    label: 'Load Media Image',
+    category: 'Media',
+    inputs: [],
+    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
+    configSchema: [
+      {
+        key: 'url',
+        label: 'Image File',
+        type: 'file',
+        defaultValue: '',
+        accept: 'image/*',
+        buttonLabel: 'Load Image',
+      },
+    ],
+    process: (_inputs, config) => {
+      const url = typeof config.url === 'string' ? String(config.url) : '';
+      return { url };
+    },
+  };
+}
+
+function createLoadMediaVideoNode(): NodeDefinition {
+  return {
+    type: 'load-media-video',
+    label: 'Load Media Video',
+    category: 'Media',
+    inputs: [],
+    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
+    configSchema: [
+      {
+        key: 'url',
+        label: 'Video File',
+        type: 'file',
+        defaultValue: '',
+        accept: 'video/*',
+        buttonLabel: 'Load Video',
       },
     ],
     process: (_inputs, config) => {
@@ -982,7 +1169,7 @@ function createTonePlayerNode(): NodeDefinition {
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
     ],
-    outputs: [{ id: 'value', label: 'Value', type: 'any', kind: 'sink' }],
+    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },

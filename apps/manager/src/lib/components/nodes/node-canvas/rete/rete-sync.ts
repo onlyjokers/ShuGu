@@ -6,9 +6,11 @@ import type { AreaPlugin } from 'rete-area-plugin';
 import type { NodeRegistry } from '@shugu/node-core';
 import type { Connection as EngineConnection, GraphState, NodeInstance } from '$lib/nodes/types';
 
+type AnyAreaPlugin = AreaPlugin<any, any>;
+
 type GraphSyncOptions = {
   editor: NodeEditor<any> | null;
-  areaPlugin: AreaPlugin | null;
+  areaPlugin: AnyAreaPlugin | null;
   nodeMap: Map<string, any>;
   connectionMap: Map<string, any>;
   nodeRegistry: NodeRegistry;
@@ -16,7 +18,7 @@ type GraphSyncOptions = {
   nodeLabel: (node: NodeInstance) => string;
   applyMidiMapRangeConstraints: (
     state: { nodes: NodeInstance[]; connections: EngineConnection[] },
-    areaPlugin: AreaPlugin | null,
+    areaPlugin: AnyAreaPlugin | null,
     nodeMap: Map<string, any>
   ) => Promise<void>;
   setGraphState: (state: GraphState) => void;

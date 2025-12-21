@@ -98,6 +98,7 @@
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);
     const urlParam = params.get('server');
+    const assetReadTokenParam = params.get('assetReadToken') ?? params.get('asset_read_token');
     const e2e = params.get('e2e') === '1';
     const isAccessingViaIP =
       window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
@@ -127,6 +128,15 @@
         } else {
           serverUrl = `https://${window.location.hostname}:3001`;
         }
+      }
+    }
+
+    // Optional provisioning: allow setting the asset read token via query param (no UI exposure).
+    if (assetReadTokenParam && assetReadTokenParam.trim()) {
+      try {
+        localStorage.setItem('shugu-asset-read-token', assetReadTokenParam.trim());
+      } catch {
+        // ignore
       }
     }
 

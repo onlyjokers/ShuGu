@@ -1,11 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "outDir": "./dist-node-core",
     "rootDir": "./src"
   },
   "include": [
     "src/**/*"
   ]
 }
-

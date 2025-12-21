@@ -695,8 +695,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
           while (cursor) {
             if (targetAndAncestors.has(cursor)) break;
             targetAndAncestors.add(cursor);
-            const parent = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : '';
-            cursor = parent && byId.has(parent) ? parent : null;
+            const parentId: string = (() => {
+              const rec = byId.get(cursor);
+              return rec?.parentId ? String(rec.parentId) : '';
+            })();
+            cursor = parentId && byId.has(parentId) ? parentId : null;
           }
 
           const targetAndDescendants = new Set<string>();
@@ -820,8 +823,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     while (cursor) {
       if (targetAndAncestors.has(cursor)) break;
       targetAndAncestors.add(cursor);
-      const parent = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : '';
-      cursor = parent && byId.has(parent) ? parent : null;
+      const parentId: string = (() => {
+        const rec = byId.get(cursor);
+        return rec?.parentId ? String(rec.parentId) : '';
+      })();
+      cursor = parentId && byId.has(parentId) ? parentId : null;
     }
 
     const effectiveDisabled = Array.from(targetAndAncestors).some((id) => Boolean(byId.get(id)?.disabled));

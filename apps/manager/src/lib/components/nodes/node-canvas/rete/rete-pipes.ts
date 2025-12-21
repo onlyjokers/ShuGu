@@ -6,9 +6,11 @@ import type { NodeEditor } from 'rete';
 import type { AreaPlugin } from 'rete-area-plugin';
 import type { Connection as EngineConnection } from '$lib/nodes/types';
 
+type AnyAreaPlugin = AreaPlugin<any, any>;
+
 type RetePipeOptions = {
   editor: NodeEditor<any>;
-  areaPlugin: AreaPlugin | null;
+  areaPlugin: AnyAreaPlugin | null;
   nodeEngine: {
     addConnection: (conn: EngineConnection) => boolean;
     removeConnection: (id: string) => void;

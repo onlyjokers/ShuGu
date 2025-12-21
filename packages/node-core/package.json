@@ -2,25 +2,25 @@
   "name": "@shugu/node-core",
   "version": "1.0.0",
   "description": "Shared node graph core (types/registry/runtime) for manager and client",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist-node-core/index.js",
+  "module": "./dist-node-core/index.js",
+  "types": "./dist-node-core/index.d.ts",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist-node-core/index.d.ts",
+      "import": "./dist-node-core/index.js"
     }
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "clean": "rm -rf dist",
+    "build": "pnpm exec tsc",
+    "dev": "pnpm exec tsc --watch",
+    "clean": "rm -rf dist-out",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\"",
     "test": "pnpm run build && node --test test/*.test.mjs"
   },
   "files": [
-    "dist"
+    "dist-node-core"
   ],
   "dependencies": {
     "@shugu/protocol": "workspace:*"

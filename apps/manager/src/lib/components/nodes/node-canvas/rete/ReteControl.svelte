@@ -1,7 +1,8 @@
 <!-- Purpose: Render Rete controls (inputs/selects/MIDI learn) for the node canvas. -->
 <script lang="ts">
   import { ClassicPreset } from 'rete';
-  import { sensorData, state as managerState } from '$lib/stores/manager';
+  import { clientReadiness, sensorData, state as managerState } from '$lib/stores/manager';
+  import { assetsStore } from '$lib/stores/assets';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
@@ -86,6 +87,23 @@
     data?.setValue?.(clientId);
   }
 
+  let didRefreshAssets = false;
+  $: if (data?.controlType === 'asset-picker' && !didRefreshAssets) {
+    didRefreshAssets = true;
+    void assetsStore.refresh();
+  }
+
+  function buildAssetOptions(kind: string): { value: string; label: string }[] {
+    const list = ($assetsStore?.assets ?? []) as any[];
+    const k = kind && typeof kind === 'string' ? kind : 'any';
+    const filtered =
+      k === 'any' ? list : list.filter((a) => String(a?.kind ?? '') === k);
+    return filtered.map((a) => ({
+      value: String(a?.id ?? ''),
+      label: `${String(a?.originalName ?? a?.id ?? '')}`,
+    }));
+  }
+
   function clientLabel(c: ClientInfo): string {
     return String((c as any).clientId ?? '');
   }
@@ -99,6 +117,15 @@
     } catch {
       return '';
     }
+  }
+
+  function readinessClass(clientId: string): string {
+    const info = $clientReadiness.get(clientId);
+    if (!info) return 'connected';
+    if (info.status === 'assets-ready') return 'ready';
+    if (info.status === 'assets-error') return 'error';
+    if (info.status === 'assets-loading') return 'loading';
+    return 'connected';
   }
 
   $: hasLabel = Boolean(data?.label) && !isInline;
@@ -174,13 +201,76 @@
   let fileInput: HTMLInputElement | null = null;
   let fileName = '';
   let fileDisplayLabel = '';
+  let fileIsUploading = false;
+  let fileUploadError: string | null = null;
 
   function openFilePicker() {
     if (data?.readonly) return;
+    if (fileIsUploading) return;
     fileInput?.click?.();
   }
 
-  function handleFileChange(event: Event) {
+  function inferAssetKind(mimeType: string): 'audio' | 'image' | 'video' | null {
+    const t = mimeType.toLowerCase();
+    if (t.startsWith('audio/')) return 'audio';
+    if (t.startsWith('image/')) return 'image';
+    if (t.startsWith('video/')) return 'video';
+    return null;
+  }
+
+  function buildAssetUploadUrl(serverUrl: string): string | null {
+    const trimmed = serverUrl.trim();
+    if (!trimmed) return null;
+    try {
+      const base = trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+      return new URL('api/assets', base).toString();
+    } catch {
+      return null;
+    }
+  }
+
+  async function uploadFileToAssetService(file: File): Promise<{ assetId: string } | null> {
+    const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
+    const uploadUrl = buildAssetUploadUrl(serverUrl);
+    if (!uploadUrl) {
+      fileUploadError = 'Invalid server URL (missing shugu-server-url)';
+      return null;
+    }
+
+    const token = localStorage.getItem('shugu-asset-write-token') ?? '';
+    if (!token) {
+      fileUploadError = 'Missing Asset Write Token (shugu-asset-write-token)';
+      return null;
+    }
+
+    const formData = new FormData();
+    formData.set('file', file);
+    formData.set('originalName', file.name);
+    const kind = inferAssetKind(file.type);
+    if (kind) formData.set('kind', kind);
+
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      fileUploadError = text ? `Upload failed (${res.status}): ${text}` : `Upload failed (${res.status})`;
+      return null;
+    }
+
+    const json = (await res.json().catch(() => null)) as any;
+    const assetId = String(json?.asset?.id ?? '');
+    if (!assetId) {
+      fileUploadError = 'Upload failed: invalid response (missing asset.id)';
+      return null;
+    }
+    return { assetId };
+  }
+
+  async function handleFileChange(event: Event) {
     if (data?.readonly) return;
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
@@ -188,15 +278,20 @@
     if (!file) return;
 
     fileName = file.name;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      data?.setValue?.(result);
-    };
-    reader.onerror = () => {
-      console.warn('[file-picker] Failed to read file');
-    };
-    reader.readAsDataURL(file);
+    fileIsUploading = true;
+    fileUploadError = null;
+
+    try {
+      const uploaded = await uploadFileToAssetService(file);
+      if (!uploaded) return;
+      data?.setValue?.(`asset:${uploaded.assetId}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      fileUploadError = `Upload failed: ${message}`;
+      console.warn('[file-picker] Upload failed', err);
+    } finally {
+      fileIsUploading = false;
+    }
   }
 
   function formatMidiEvent(event: MidiEvent | null): string {
@@ -217,7 +312,9 @@
 
   $: fileDisplayLabel =
     data?.controlType === 'file-picker'
-      ? fileName || (typeof data?.value === 'string' && data.value ? 'Loaded' : 'No file')
+      ? fileIsUploading
+        ? 'Uploading…'
+        : fileName || (typeof data?.value === 'string' && data.value ? 'Loaded' : 'No file')
       : '';
 
   function toggleMidiLearn(nodeId: string) {
@@ -294,7 +391,7 @@
       <button
         type="button"
         class="file-btn"
-        disabled={data.readonly}
+        disabled={data.readonly || fileIsUploading}
         on:pointerdown|stopPropagation
         on:click|stopPropagation={openFilePicker}
       >
@@ -302,12 +399,15 @@
       </button>
       <div class="file-name">{fileDisplayLabel}</div>
     </div>
+    {#if fileUploadError}
+      <div class="file-error">{fileUploadError}</div>
+    {/if}
     <input
       class="file-input"
       type="file"
       accept={data.accept}
       bind:this={fileInput}
-      disabled={data.readonly}
+      disabled={data.readonly || fileIsUploading}
       on:pointerdown|stopPropagation
       on:change={handleFileChange}
     />
@@ -329,7 +429,7 @@
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}
           >
-            <span class="client-dot"></span>
+            <span class="client-dot {readinessClass(c.clientId)}"></span>
             <span class="client-main">
               <span class="client-id">{clientLabel(c)}</span>
               <span class="client-time">{clientSubtitle(c)}</span>
@@ -339,6 +439,16 @@
       </div>
     {/if}
   </div>
+{:else if data?.controlType === 'asset-picker'}
+  {#if hasLabel}
+    <div class="control-label">{data.label}</div>
+  {/if}
+  <select class="select" on:change={changeSelect} value={data.value} disabled={data.readonly}>
+    <option value="">(select asset)</option>
+    {#each buildAssetOptions(data.assetKind) as opt (opt.value)}
+      <option value={opt.value}>{opt.label}</option>
+    {/each}
+  </select>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
 {:else if data?.controlType === 'midi-learn'}
@@ -560,6 +670,13 @@
     display: none;
   }
 
+  .file-error {
+    font-size: 11px;
+    color: rgba(239, 68, 68, 0.9);
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
   .client-empty {
     padding: 10px 8px;
     color: rgba(255, 255, 255, 0.6);
@@ -607,9 +724,19 @@
     width: 10px;
     height: 10px;
     border-radius: 999px;
+    background: rgba(250, 204, 21, 0.95);
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
+    flex: 0 0 auto;
+  }
+
+  .client-dot.ready {
     background: rgba(34, 197, 94, 0.9);
     box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.16);
-    flex: 0 0 auto;
+  }
+
+  .client-dot.error {
+    background: rgba(239, 68, 68, 0.92);
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
   }
 
   .client-main {

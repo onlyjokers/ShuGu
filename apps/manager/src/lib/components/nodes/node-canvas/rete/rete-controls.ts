@@ -86,6 +86,36 @@ export class ClientPickerControl extends ClassicPreset.Control {
   }
 }
 
+export class AssetPickerControl extends ClassicPreset.Control {
+  controlType = 'asset-picker' as const;
+  label?: string;
+  value: string;
+  assetKind: 'audio' | 'image' | 'video' | 'any';
+  readonly: boolean;
+  private onChange?: (value: string) => void;
+
+  constructor(opts: {
+    label?: string;
+    initial?: string;
+    assetKind?: 'audio' | 'image' | 'video' | 'any';
+    readonly?: boolean;
+    change?: (value: string) => void;
+  }) {
+    super();
+    this.label = opts.label;
+    this.value = opts.initial ?? '';
+    this.assetKind = opts.assetKind ?? 'any';
+    this.readonly = Boolean(opts.readonly);
+    this.onChange = opts.change;
+  }
+
+  setValue(value: string): void {
+    if (this.readonly) return;
+    this.value = value;
+    this.onChange?.(value);
+  }
+}
+
 export class FilePickerControl extends ClassicPreset.Control {
   controlType = 'file-picker' as const;
   label?: string;

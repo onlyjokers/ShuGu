@@ -5,6 +5,7 @@ import { ClientRegistryModule } from './client-registry/client-registry.module.j
 import { MessageRouterModule } from './message-router/message-router.module.js';
 import { GeoModule } from './geo/geo.module.js';
 import { BootstrapModule } from './bootstrap/bootstrap.module.js';
+import { AssetsModule } from './assets/assets.module.js';
 
 @Module({
     imports: [
@@ -13,6 +14,7 @@ import { BootstrapModule } from './bootstrap/bootstrap.module.js';
         MessageRouterModule,
         GeoModule,
         BootstrapModule,
+        AssetsModule,
     ],
     controllers: [AppController],
 })

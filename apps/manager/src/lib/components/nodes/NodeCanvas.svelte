@@ -74,6 +74,7 @@
     boolean: new ClassicPreset.Socket('boolean'),
     string: new ClassicPreset.Socket('string'),
     color: new ClassicPreset.Socket('color'),
+    audio: new ClassicPreset.Socket('audio'),
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
     fuzzy: new ClassicPreset.Socket('fuzzy'),
@@ -1683,6 +1684,10 @@
 
   :global(.node-canvas-container .socket[title='color']) {
     background: rgba(236, 72, 153, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='audio']) {
+    background: rgba(14, 165, 233, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='client']) {

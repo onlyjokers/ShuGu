@@ -13,8 +13,8 @@
         }
     },
     "scripts": {
-        "build": "tsc",
-        "dev": "tsc --watch",
+        "build": "pnpm exec tsc",
+        "dev": "pnpm exec tsc --watch",
         "clean": "rm -rf dist-out",
         "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
     },

@@ -18,6 +18,7 @@ import {
   type ClientSDKConfig,
   type ClientIdentity,
 } from '@shugu/sdk-client';
+import { MultimediaCore } from '@shugu/multimedia-core';
 import type {
   ControlMessage,
   PluginControlMessage,
@@ -43,6 +44,7 @@ let soundPlayer: SoundPlayer | null = null;
 let modulatedSoundPlayer: ModulatedSoundPlayer | null = null;
 let wakeLockController: WakeLockController | null = null;
 let nodeExecutor: NodeExecutor | null = null;
+let multimediaCore: MultimediaCore | null = null;
 
 // Core state store
 export const state = writable<ClientState>({
@@ -89,6 +91,7 @@ export const asciiResolution = writable<number>(11);
 export const audioStream = writable<MediaStream | null>(null);
 
 const AUDIO_ENABLED_STORAGE_KEY = 'shugu-audio-enabled';
+const ASSET_READ_TOKEN_STORAGE_KEY = 'shugu-asset-read-token';
 const storedAudioEnabled =
   typeof window !== 'undefined' &&
   window.localStorage.getItem(AUDIO_ENABLED_STORAGE_KEY) === 'true';
@@ -184,11 +187,79 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
     if (newState.clientId) {
       persistAssignedClientId(newState.clientId);
     }
+
+    // Ensure readiness is reported after the socket becomes ready (covers the case where
+    // MultimediaCore finishes preload before clientId is assigned).
+    if (newState.status === 'connected' && newState.clientId) {
+      const snapshot = multimediaCore?.getState?.();
+      if (!snapshot) return;
+      try {
+        sdk?.sendSensorData(
+          'custom',
+          {
+            kind: 'multimedia-core',
+            event: 'asset-preload',
+            status: snapshot.status,
+            manifestId: snapshot.manifestId,
+            loaded: snapshot.loaded,
+            total: snapshot.total,
+            error: snapshot.error,
+          } as any,
+          { trackLatest: false }
+        );
+      } catch {
+        // ignore
+      }
+    }
   });
 
   // Subscribe to control messages
   sdk.onControl(handleControlMessage);
   sdk.onPluginControl(handlePluginControlMessage);
+
+  // MultimediaCore: asset resolver + preload/cache + readiness reporting (no UI).
+  const assetReadToken =
+    typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
+  multimediaCore = new MultimediaCore({
+    serverUrl: config.serverUrl,
+    assetReadToken,
+    autoStart: true,
+    concurrency: 4,
+  });
+  let lastReported = '';
+  let lastSentAt = 0;
+  multimediaCore.subscribeState((s) => {
+    const status =
+      s.status === 'ready'
+        ? 'ready'
+        : s.status === 'error'
+          ? 'error'
+          : s.status === 'loading'
+            ? 'loading'
+            : 'idle';
+    const payload = {
+      kind: 'multimedia-core',
+      event: 'asset-preload',
+      status,
+      manifestId: s.manifestId,
+      loaded: s.loaded,
+      total: s.total,
+      error: s.error,
+    };
+    const signature = JSON.stringify(payload);
+    try {
+      const connected = Boolean(sdk?.getState?.().clientId) && sdk?.getState?.().status === 'connected';
+      // Don't "consume" the state signature until we are actually able to send it.
+      if (!connected) return;
+
+      if (signature === lastReported) return;
+      sdk?.sendSensorData('custom', payload as any, { trackLatest: false });
+      lastReported = signature;
+      lastSentAt = Date.now();
+    } catch {
+      // ignore
+    }
+  });
 
   // Initialize controllers
   flashlightController = new FlashlightController();
@@ -214,6 +285,7 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
         }
         return true;
       },
+      resolveAssetRef: (ref: string) => multimediaCore?.resolveAssetRef(ref) ?? ref,
     }
   );
 
@@ -398,20 +470,27 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         break;
 
       case 'playSound':
-        soundPlayer?.play(payload as PlaySoundPayload, delaySeconds);
+        {
+          const soundPayload = payload as PlaySoundPayload;
+          const url =
+            typeof soundPayload.url === 'string' ? multimediaCore?.resolveAssetRef(soundPayload.url) ?? soundPayload.url : soundPayload.url;
+          soundPlayer?.play({ ...soundPayload, url }, delaySeconds);
+        }
         break;
 
       case 'playMedia': {
         const mediaPayload = payload as PlayMediaPayload;
+        const resolvedUrl =
+          typeof mediaPayload.url === 'string' ? multimediaCore?.resolveAssetRef(mediaPayload.url) ?? mediaPayload.url : mediaPayload.url;
         // Check if it's a video by extension or explicit type
         const isVideo =
           mediaPayload.mediaType === 'video' ||
-          /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(mediaPayload.url);
+          (typeof resolvedUrl === 'string' && /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrl));
 
         if (isVideo) {
           const current = get(videoState);
           const next = {
-            url: mediaPayload.url,
+            url: resolvedUrl,
             playing: true,
             muted: mediaPayload.muted ?? true,
             loop: mediaPayload.loop ?? false,
@@ -426,7 +505,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           // Fallback to audio
           const updated =
             soundPlayer?.update({
-              url: mediaPayload.url,
+              url: resolvedUrl,
               volume: mediaPayload.volume,
               loop: mediaPayload.loop,
               fadeIn: mediaPayload.fadeIn,
@@ -434,7 +513,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           if (!updated) {
             soundPlayer?.play(
               {
-                url: mediaPayload.url,
+                url: resolvedUrl,
                 volume: mediaPayload.volume,
                 loop: mediaPayload.loop,
                 fadeIn: mediaPayload.fadeIn,
@@ -464,8 +543,10 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'showImage': {
         const imagePayload = payload as ShowImagePayload;
+        const url =
+          typeof imagePayload.url === 'string' ? multimediaCore?.resolveAssetRef(imagePayload.url) ?? imagePayload.url : imagePayload.url;
         imageState.set({
-          url: imagePayload.url,
+          url,
           visible: true,
           duration: imagePayload.duration,
         });
@@ -553,6 +634,16 @@ function handlePluginControlMessage(message: PluginControlMessage): void {
     nodeExecutor?.handlePluginControl(message);
     return;
   }
+  if (message.pluginId === 'multimedia-core' && message.command === 'configure') {
+    const payload: any = message.payload ?? {};
+    const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : '';
+    const assets = Array.isArray(payload.assets) ? payload.assets.map(String) : [];
+    const updatedAt =
+      typeof payload.updatedAt === 'number' && Number.isFinite(payload.updatedAt) ? payload.updatedAt : undefined;
+    if (!manifestId) return;
+    multimediaCore?.setAssetManifest({ manifestId, assets, updatedAt });
+    return;
+  }
 }
 
 /**
@@ -577,6 +668,9 @@ export function disconnect(): void {
 
   soundPlayer?.destroy();
   soundPlayer = null;
+
+  multimediaCore?.destroy();
+  multimediaCore = null;
 
   wakeLockController?.release();
   wakeLockController = null;

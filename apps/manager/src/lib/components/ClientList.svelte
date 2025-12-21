@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     clients,
+    clientReadiness,
     state,
     toggleClientSelection,
     selectAllClients,
@@ -10,6 +11,29 @@
   import Button from '$lib/components/ui/Button.svelte';
 
   $: selectedIds = $state.selectedClientIds;
+
+  function readinessStatus(clientId: string): 'connected' | 'loading' | 'ready' | 'error' {
+    const info = $clientReadiness.get(clientId);
+    if (!info) return 'connected';
+    if (info.status === 'assets-ready') return 'ready';
+    if (info.status === 'assets-error') return 'error';
+    if (info.status === 'assets-loading') return 'loading';
+    return 'connected';
+  }
+
+  function readinessTitle(clientId: string): string {
+    const info = $clientReadiness.get(clientId);
+    if (!info) return 'Connected (assets not verified)';
+    if (info.status === 'assets-ready') return 'Assets ready';
+    if (info.status === 'assets-error') return info.error ? `Assets error: ${info.error}` : 'Assets error';
+    if (info.status === 'assets-loading') {
+      const loaded = typeof info.loaded === 'number' ? info.loaded : null;
+      const total = typeof info.total === 'number' ? info.total : null;
+      if (loaded !== null && total !== null) return `Assets loading (${loaded}/${total})`;
+      return 'Assets loading';
+    }
+    return 'Connected (assets not verified)';
+  }
 </script>
 
 <div class="client-list-container">
@@ -47,7 +71,10 @@
           class:selected={selectedIds.includes(client.clientId)}
           on:click={() => toggleClientSelection(client.clientId)}
         >
-          <div class="status-dot"></div>
+          <div
+            class="status-dot {readinessStatus(client.clientId)}"
+            title={readinessTitle(client.clientId)}
+          ></div>
           <div class="client-info">
             <span class="client-id">{formatClientId(client.clientId)}</span>
             <span class="client-time">
@@ -132,8 +159,18 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
+    background: rgba(250, 204, 21, 0.95);
+    box-shadow: 0 0 6px rgba(250, 204, 21, 0.55);
+  }
+
+  .status-dot.ready {
     background: var(--color-success);
     box-shadow: 0 0 6px var(--color-success);
+  }
+
+  .status-dot.error {
+    background: rgba(239, 68, 68, 0.92);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.55);
   }
 
   .client-info {
