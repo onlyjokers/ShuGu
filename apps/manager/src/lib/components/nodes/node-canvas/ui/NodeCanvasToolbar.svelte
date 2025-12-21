@@ -21,10 +21,15 @@
 
 <div class="canvas-toolbar">
   <div class="toolbar-left">
-    <Button variant={isRunning ? 'danger' : 'primary'} size="sm" on:click={onToggleEngine}>
-      {isRunning ? '⏹ Stop' : '▶ Start'}
+    <Button
+      variant={isRunning ? 'danger' : 'primary'}
+      size="sm"
+      on:click={onToggleEngine}
+      title={isRunning ? 'Stop' : 'Start'}
+      aria-label={isRunning ? 'Stop' : 'Start'}
+    >
+      {isRunning ? '⏹' : '▶'}
     </Button>
-    <Button variant="ghost" size="sm" on:click={onClear}>🗑️ Clear</Button>
   </div>
 
   <div class="toolbar-right">
@@ -60,6 +65,10 @@
             on:click={() => onMenuPick(onExportTemplates)}
           >
             ⬆ Templates
+          </button>
+          <div class="toolbar-menu-sep" />
+          <button type="button" class="toolbar-menu-item" on:click={() => onMenuPick(onClear)}>
+            🗑️ Clear
           </button>
           <div class="toolbar-menu-sep" />
           <div class="toolbar-menu-footer">{nodeCount} nodes</div>

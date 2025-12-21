@@ -2,6 +2,10 @@
 <script lang="ts">
   export let container: HTMLDivElement | null = null;
   export let isRunning = false;
+  // Scale grid background with canvas zoom.
+  export let gridScale = 1;
+  // Keep grid background aligned with canvas translation.
+  export let gridOffset = { x: 0, y: 0 };
 </script>
 
 <div class="node-canvas-container">
@@ -13,6 +17,7 @@
     bind:this={container}
     role="application"
     aria-label="Node graph editor"
+    style="--grid-scale: {gridScale}; --grid-x: {gridOffset.x}px; --grid-y: {gridOffset.y}px;"
   >
     <div class="canvas-dimmer" class:active={isRunning} aria-hidden="true" />
     <slot name="overlays" />
@@ -55,12 +60,17 @@
       radial-gradient(circle at 70% 10%, rgba(168, 85, 247, 0.1), transparent 55%),
       linear-gradient(180deg, rgba(10, 11, 20, 0.85) 0%, rgba(7, 8, 17, 0.95) 100%);
     background-size:
-      32px 32px,
-      32px 32px,
+      calc(32px * var(--grid-scale, 1)) calc(32px * var(--grid-scale, 1)),
+      calc(32px * var(--grid-scale, 1)) calc(32px * var(--grid-scale, 1)),
       auto,
       auto,
       auto;
-    background-position: center, center, center, center, center;
+    background-position:
+      var(--grid-x, 0px) var(--grid-y, 0px),
+      var(--grid-x, 0px) var(--grid-y, 0px),
+      center,
+      center,
+      center;
   }
 
   .canvas-dimmer {

@@ -62,6 +62,9 @@
   let groupHeaderDragPointerId: number | null = null;
   let groupHeaderDragMoveHandler: ((event: PointerEvent) => void) | null = null;
   let groupHeaderDragUpHandler: ((event: PointerEvent) => void) | null = null;
+  let loopHeaderDragPointerId: number | null = null;
+  let loopHeaderDragMoveHandler: ((event: PointerEvent) => void) | null = null;
+  let loopHeaderDragUpHandler: ((event: PointerEvent) => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
@@ -92,6 +95,8 @@
   let pickerElement: HTMLDivElement | null = null;
   let lastPointerClient = { x: 0, y: 0 };
   let clipboardNodes: NodeInstance[] = [];
+  // Track internal connections so paste can restore them.
+  let clipboardConnections: EngineConnection[] = [];
   let clipboardPasteIndex = 0;
 
   const graphStateStore = nodeEngine?.graphState;
@@ -101,6 +106,7 @@
   let loopController: LoopController | null = null;
   let minimapController: ReturnType<typeof createMinimapController> | null = null;
   let requestFramesUpdate = () => {};
+  let canvasTransform = { k: 1, tx: 0, ty: 0 };
 
   const groupController = createGroupController({
     getContainer: () => container,
@@ -181,6 +187,8 @@
   });
 
   requestFramesUpdate = () => {
+    const t = readAreaTransform(areaPlugin);
+    if (t) canvasTransform = t;
     loopController?.requestFramesUpdate();
     groupController.requestFramesUpdate();
   };
@@ -666,20 +674,34 @@
     outputValues: { ...(node.outputValues ?? {}) },
   });
 
-  const collectCopyNodes = (): NodeInstance[] => {
+  const collectCopySelection = (): { nodes: NodeInstance[]; ids: string[] } => {
     const selected = get(groupController.groupSelectionNodeIds);
     const ids = selected.size > 0 ? Array.from(selected).map(String) : selectedNodeId ? [String(selectedNodeId)] : [];
-    if (ids.length === 0) return [];
+    if (ids.length === 0) return { nodes: [], ids: [] };
 
     const nodeById = new Map(graphState.nodes.map((node) => [String(node.id), node]));
     const nodes = ids.map((id) => nodeById.get(id)).filter(Boolean) as NodeInstance[];
-    return nodes.map((node) => cloneNodeInstance(node));
+    return { nodes: nodes.map((node) => cloneNodeInstance(node)), ids };
+  };
+
+  const collectCopyConnections = (ids: string[]): EngineConnection[] => {
+    const set = new Set(ids.map(String));
+    return (graphState.connections ?? [])
+      .filter((c) => set.has(String(c.sourceNodeId)) && set.has(String(c.targetNodeId)))
+      .map((c) => ({
+        id: String(c.id),
+        sourceNodeId: String(c.sourceNodeId),
+        sourcePortId: String(c.sourcePortId),
+        targetNodeId: String(c.targetNodeId),
+        targetPortId: String(c.targetPortId),
+      }));
   };
 
   const copySelectedNodes = () => {
-    const nodes = collectCopyNodes();
+    const { nodes, ids } = collectCopySelection();
     if (nodes.length === 0) return false;
     clipboardNodes = nodes;
+    clipboardConnections = collectCopyConnections(ids);
     clipboardPasteIndex = 0;
     return true;
   };
@@ -703,11 +725,16 @@
     const positions = clipboardNodes.map((node) => node.position);
     const minX = Math.min(...positions.map((p) => p.x));
     const minY = Math.min(...positions.map((p) => p.y));
+    const maxX = Math.max(...positions.map((p) => p.x));
+    const maxY = Math.max(...positions.map((p) => p.y));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
     const nudge = clipboardPasteIndex * 28;
-    const offsetX = anchor.x - minX + nudge;
-    const offsetY = anchor.y - minY + nudge;
+    const offsetX = anchor.x - centerX + nudge;
+    const offsetY = anchor.y - centerY + nudge;
 
     const newIds: string[] = [];
+    const idMap = new Map<string, string>();
     for (const node of clipboardNodes) {
       const newId = generateId();
       const position = { x: node.position.x + offsetX, y: node.position.y + offsetY };
@@ -722,6 +749,24 @@
       nodeEngine.addNode(newNode);
       groupController.autoAddNodeToGroupFromPosition(newId, position);
       newIds.push(newId);
+      idMap.set(String(node.id), newId);
+    }
+
+    if (clipboardConnections.length > 0 && idMap.size > 0) {
+      for (const conn of clipboardConnections) {
+        const sourceNodeId = idMap.get(String(conn.sourceNodeId));
+        const targetNodeId = idMap.get(String(conn.targetNodeId));
+        if (!sourceNodeId || !targetNodeId) continue;
+        const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+        const engineConn: EngineConnection = {
+          id: connId,
+          sourceNodeId,
+          sourcePortId: String(conn.sourcePortId),
+          targetNodeId,
+          targetPortId: String(conn.targetPortId),
+        };
+        nodeEngine.addConnection(engineConn);
+      }
     }
 
     clipboardPasteIndex += 1;
@@ -744,7 +789,6 @@
     const target = event.target as HTMLElement | null;
     if (target?.closest?.('.group-frame-actions')) return;
     if (target?.closest?.('input')) return;
-    if (target?.closest?.('button')) return;
 
     const group = get(groupController.nodeGroups).find((g) => String(g.id) === String(groupId));
     if (!group?.nodeIds?.length) return;
@@ -772,12 +816,15 @@
 
     groupHeaderDragPointerId = event.pointerId;
     const start = { x: event.clientX, y: event.clientY };
+    let didMove = false;
     groupController.beginProgrammaticTranslate();
 
     const onMove = (ev: PointerEvent) => {
       if (groupHeaderDragPointerId !== null && ev.pointerId !== groupHeaderDragPointerId) return;
       const dx = (ev.clientX - start.x) / t.k;
       const dy = (ev.clientY - start.y) / t.k;
+      if (!dx && !dy) return;
+      didMove = true;
       for (const [id, pos] of startPositions.entries()) {
         void areaPlugin.translate(id, { x: pos.x + dx, y: pos.y + dy });
       }
@@ -797,11 +844,89 @@
       groupHeaderDragMoveHandler = null;
       groupHeaderDragUpHandler = null;
 
+      if (!didMove) return;
       groupController.handleDroppedNodesAfterDrag(Array.from(startPositions.keys()));
     };
 
     groupHeaderDragMoveHandler = onMove;
     groupHeaderDragUpHandler = onUp;
+    window.addEventListener('pointermove', onMove, { capture: true });
+    window.addEventListener('pointerup', onUp, { capture: true });
+    window.addEventListener('pointercancel', onUp, { capture: true });
+
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  // Dragging a loop header moves all nodes in that loop together.
+  const startLoopHeaderDrag = (loopId: string, event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('.loop-frame-actions')) return;
+    if (target?.closest?.('input')) return;
+
+    const effectiveLoops =
+      loopController?.getEffectiveLoops?.() ?? (loopController ? get(loopController.localLoops) : []);
+    const loop = (effectiveLoops ?? []).find((l: any) => String(l?.id ?? '') === String(loopId));
+    if (!loop?.nodeIds?.length) return;
+    if (!areaPlugin?.nodeViews) return;
+
+    const t = readAreaTransform(areaPlugin);
+    if (!t) return;
+
+    const nodeIds = (loop.nodeIds ?? []).map((id: string) => String(id));
+    const startPositions = new Map<string, { x: number; y: number }>();
+    for (const id of nodeIds) {
+      const view = areaPlugin.nodeViews.get(id);
+      const pos = view?.position as { x: number; y: number } | undefined;
+      if (!pos) continue;
+      startPositions.set(id, { x: pos.x, y: pos.y });
+    }
+    if (startPositions.size === 0) return;
+
+    if (loopHeaderDragMoveHandler)
+      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+    if (loopHeaderDragUpHandler) {
+      window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+    }
+
+    loopHeaderDragPointerId = event.pointerId;
+    const start = { x: event.clientX, y: event.clientY };
+    let didMove = false;
+    groupController.beginProgrammaticTranslate();
+
+    const onMove = (ev: PointerEvent) => {
+      if (loopHeaderDragPointerId !== null && ev.pointerId !== loopHeaderDragPointerId) return;
+      const dx = (ev.clientX - start.x) / t.k;
+      const dy = (ev.clientY - start.y) / t.k;
+      if (!dx && !dy) return;
+      didMove = true;
+      for (const [id, pos] of startPositions.entries()) {
+        void areaPlugin.translate(id, { x: pos.x + dx, y: pos.y + dy });
+      }
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (loopHeaderDragPointerId !== null && ev.pointerId !== loopHeaderDragPointerId) return;
+      loopHeaderDragPointerId = null;
+      groupController.endProgrammaticTranslate();
+
+      if (loopHeaderDragMoveHandler)
+        window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+      if (loopHeaderDragUpHandler) {
+        window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
+        window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+      }
+      loopHeaderDragMoveHandler = null;
+      loopHeaderDragUpHandler = null;
+
+      if (!didMove) return;
+      groupController.handleDroppedNodesAfterDrag(Array.from(startPositions.keys()));
+    };
+
+    loopHeaderDragMoveHandler = onMove;
+    loopHeaderDragUpHandler = onUp;
     window.addEventListener('pointermove', onMove, { capture: true });
     window.addEventListener('pointerup', onUp, { capture: true });
     window.addEventListener('pointercancel', onUp, { capture: true });
@@ -1159,6 +1284,11 @@
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
 
+      const t = readAreaTransform(areaPlugin);
+      if (!t) return;
+      const gx = (x - t.tx) / t.k;
+      const gy = (y - t.ty) / t.k;
+
       const frames = get(groupFrames) ?? [];
       let picked: any = null;
       let bestDepth = -1;
@@ -1172,7 +1302,7 @@
         if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height))
           continue;
 
-        const inside = x >= left && x <= left + width && y >= top && y <= top + height;
+        const inside = gx >= left && gx <= left + width && gy >= top && gy <= top + height;
         if (!inside) continue;
 
         const depth = Number(frame?.depth ?? 0);
@@ -1305,6 +1435,16 @@
     groupHeaderDragPointerId = null;
     groupHeaderDragMoveHandler = null;
     groupHeaderDragUpHandler = null;
+    if (loopHeaderDragMoveHandler)
+      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+    if (loopHeaderDragUpHandler) {
+      window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+    }
+    if (loopHeaderDragPointerId !== null) groupController.endProgrammaticTranslate();
+    loopHeaderDragPointerId = null;
+    loopHeaderDragMoveHandler = null;
+    loopHeaderDragUpHandler = null;
     if (toolbarMenuOutsideHandler)
       window.removeEventListener('pointerdown', toolbarMenuOutsideHandler, {
         capture: true,
@@ -1325,7 +1465,12 @@
   });
 </script>
 
-<NodeCanvasLayout bind:container isRunning={$isRunningStore}>
+<NodeCanvasLayout
+  bind:container
+  isRunning={$isRunningStore}
+  gridScale={canvasTransform.k}
+  gridOffset={{ x: canvasTransform.tx, y: canvasTransform.ty }}
+>
   <svelte:fragment slot="toolbar">
     <input
       bind:this={importGraphInputEl}
@@ -1393,6 +1538,7 @@
 
     <GroupFramesOverlay
       frames={$groupFrames}
+      areaTransform={canvasTransform}
       editModeGroupId={$editModeGroupId}
       toast={$groupEditToast}
       onToggleDisabled={groupController.toggleGroupDisabled}
@@ -1404,6 +1550,7 @@
 
     <LoopFramesOverlay
       frames={$loopFrames}
+      areaTransform={canvasTransform}
       deployedLoopIds={$deployedLoopIds}
       getLoopClientId={loopController.loopActions.getLoopClientId}
       executorStatusByClient={$executorStatusByClient}
@@ -1415,6 +1562,7 @@
       onDeploy={loopController.loopActions.deployLoop}
       isLoopDeploying={loopController.isLoopDeploying}
       loopHasDisabledNodes={loopController.loopHasDisabledNodes}
+      onHeaderPointerDown={startLoopHeaderDrag}
     />
 
     <MarqueeOverlay

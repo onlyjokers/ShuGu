@@ -44,6 +44,20 @@ export function readNodeBounds(
   return { left, top, right: left + width, bottom: top + height };
 }
 
+export function readNodeBoundsGraph(areaPlugin: AreaPlugin | null | undefined, nodeId: string): NodeBounds | null {
+  if (!areaPlugin?.nodeViews) return null;
+  const view = areaPlugin.nodeViews.get(String(nodeId));
+  const el = view?.element as HTMLElement | undefined;
+  const pos = view?.position as { x: number; y: number } | undefined;
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return null;
+
+  const width = el?.clientWidth ?? 230;
+  const height = el?.clientHeight ?? 100;
+  const left = pos.x;
+  const top = pos.y;
+  return { left, top, right: left + width, bottom: top + height };
+}
+
 export function unionBounds(
   areaPlugin: AreaPlugin | null | undefined,
   nodeIds: string[],
@@ -56,6 +70,30 @@ export function unionBounds(
 
   for (const nodeId of nodeIds) {
     const b = readNodeBounds(areaPlugin, nodeId, t);
+    if (!b) continue;
+    left = Math.min(left, b.left);
+    top = Math.min(top, b.top);
+    right = Math.max(right, b.right);
+    bottom = Math.max(bottom, b.bottom);
+  }
+
+  const hasBounds =
+    Number.isFinite(left) &&
+    Number.isFinite(top) &&
+    Number.isFinite(right) &&
+    Number.isFinite(bottom);
+  if (!hasBounds) return null;
+  return { left, top, right, bottom };
+}
+
+export function unionBoundsGraph(areaPlugin: AreaPlugin | null | undefined, nodeIds: string[]): NodeBounds | null {
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+
+  for (const nodeId of nodeIds) {
+    const b = readNodeBoundsGraph(areaPlugin, nodeId);
     if (!b) continue;
     left = Math.min(left, b.left);
     top = Math.min(top, b.top);

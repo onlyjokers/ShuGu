@@ -5,7 +5,14 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
-import { readAreaTransform, readNodeBounds, type AreaTransform, type NodeBounds, unionBounds } from '../utils/view-utils';
+import {
+  readAreaTransform,
+  readNodeBounds,
+  readNodeBoundsGraph,
+  type NodeBounds,
+  unionBounds,
+  unionBoundsGraph,
+} from '../utils/view-utils';
 
 export type NodeGroup = {
   id: string;
@@ -33,9 +40,8 @@ export type FrameInfo = {
 };
 
 export type FrameMoveContext = {
-  movingFrameIds: Set<string>;
   frameById: Map<string, FrameInfo>;
-  nodeToMovingFrameId: Map<string, string>;
+  nodeToFrameIds: Map<string, string[]>;
   movedFrameIds: Set<string>;
 };
 
@@ -281,7 +287,6 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   // Include child frames so parent bounds reflect nested groups.
   const computeGroupFrameBoundsWithChildren = (
     groupId: string,
-    t: AreaTransform,
     byId: Map<string, NodeGroup>,
     childrenByParentId: Map<string, string[]>,
     cache: Map<string, NodeBounds | null>,
@@ -296,9 +301,10 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     visiting.add(groupId);
 
-    const paddingX = 52;
-    const paddingTop = 64;
-    const paddingBottom = 52;
+    const isSubGroup = Boolean(group.parentId);
+    const paddingX = isSubGroup ? 36 : 52;
+    const paddingTop = isSubGroup ? 54 : 64;
+    const paddingBottom = isSubGroup ? 40 : 52;
 
     const loopPaddingX = 56;
     const loopPaddingTop = 64;
@@ -307,14 +313,14 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     let bounds: NodeBounds | null = null;
 
     const areaPlugin = opts.getAreaPlugin();
-    bounds = mergeBounds(bounds, unionBounds(areaPlugin, group.nodeIds ?? [], t));
+    bounds = mergeBounds(bounds, unionBoundsGraph(areaPlugin, group.nodeIds ?? []));
 
     const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
     for (const loop of opts.getLocalLoops()) {
       if (!loop?.nodeIds?.length) continue;
       const fullyContained = loop.nodeIds.every((id) => groupNodeSet.has(String(id)));
       if (!fullyContained) continue;
-      const lb = unionBounds(areaPlugin, loop.nodeIds, t);
+      const lb = unionBoundsGraph(areaPlugin, loop.nodeIds.map(String));
       if (!lb) continue;
       bounds = mergeBounds(bounds, {
         left: lb.left - loopPaddingX,
@@ -328,7 +334,6 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     for (const childId of children) {
       const childBounds = computeGroupFrameBoundsWithChildren(
         childId,
-        t,
         byId,
         childrenByParentId,
         cache,
@@ -354,13 +359,12 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     return padded;
   };
 
-  const computeGroupFrameBounds = (group: NodeGroup, t: AreaTransform): NodeBounds | null => {
+  const computeGroupFrameBounds = (group: NodeGroup): NodeBounds | null => {
     const groupsSnapshot = get(nodeGroups);
     const { byId, childrenByParentId } = buildGroupIndex(groupsSnapshot);
     const cache = new Map<string, NodeBounds | null>();
     return computeGroupFrameBoundsWithChildren(
       String(group.id),
-      t,
       byId,
       childrenByParentId,
       cache,
@@ -373,9 +377,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const paddingTop = 64;
     const paddingBottom = 64;
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (!t) return null;
-    const base = unionBounds(opts.getAreaPlugin(), loop.nodeIds ?? [], t);
+    const base = unionBoundsGraph(opts.getAreaPlugin(), (loop.nodeIds ?? []).map(String));
     if (!base) return null;
 
     return {
@@ -428,27 +430,30 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   const pushNodesOutOfBounds = (bounds: NodeBounds, excludeNodeIds: Set<string>, frameMoves?: FrameMoveContext) => {
     const areaPlugin = opts.getAreaPlugin();
     if (!areaPlugin?.nodeViews) return;
-    const t = readAreaTransform(areaPlugin);
-    if (!t) return;
 
-    const margin = 24;
+    const t = readAreaTransform(areaPlugin);
+    const zoom = t?.k && Number.isFinite(t.k) && t.k > 0 ? t.k : 1;
+    const margin = 24 / zoom;
     const updates: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
     const skipNodeIds = new Set(excludeNodeIds);
 
-    // If a full frame was moved, push the whole frame as a unit.
+    // Push full frames as units when possible so internal node layout stays intact.
     const moveFrame = (frameId: string): boolean => {
       if (!frameMoves) return false;
-      if (!frameMoves.movingFrameIds.has(frameId)) return false;
       if (frameMoves.movedFrameIds.has(frameId)) return false;
       const frame = frameMoves.frameById.get(frameId);
       if (!frame) return false;
       if (!boundsIntersect(bounds, frame.bounds)) return false;
 
+      for (const nodeId of frame.nodeIds) {
+        if (excludeNodeIds.has(String(nodeId))) return false;
+      }
+
       const pick = pickMoveDelta(bounds, frame.bounds, margin);
       if (!pick) return false;
 
-      const dx = pick.dx / t.k;
-      const dy = pick.dy / t.k;
+      const dx = pick.dx;
+      const dy = pick.dy;
 
       for (const nodeId of frame.nodeIds) {
         const id = String(nodeId);
@@ -467,7 +472,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     for (const nodeId of opts.getNodeMap().keys()) {
       const id = String(nodeId);
       if (skipNodeIds.has(id)) continue;
-      const b = readNodeBounds(areaPlugin, id, t);
+      const b = readNodeBoundsGraph(areaPlugin, id);
       if (!b) continue;
 
       const cx = (b.left + b.right) / 2;
@@ -476,8 +481,17 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       if (!inside) continue;
 
       if (frameMoves) {
-        const movingFrameId = frameMoves.nodeToMovingFrameId.get(id);
-        if (movingFrameId && moveFrame(movingFrameId)) continue;
+        const frameIds = frameMoves.nodeToFrameIds.get(id);
+        if (frameIds?.length) {
+          let moved = false;
+          for (const frameId of frameIds) {
+            if (moveFrame(frameId)) {
+              moved = true;
+              break;
+            }
+          }
+          if (moved) continue;
+        }
       }
 
       const pick = pickMoveDelta(bounds, b, margin);
@@ -487,7 +501,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const pos = view?.position as { x: number; y: number } | undefined;
       if (!pos) continue;
 
-      const to = { x: pos.x + pick.dx / t.k, y: pos.y + pick.dy / t.k };
+      const to = { x: pos.x + pick.dx, y: pos.y + pick.dy };
       updates.push({ id, from: { x: pos.x, y: pos.y }, to });
       skipNodeIds.add(id);
     }
@@ -499,15 +513,12 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     if (!nodeIds.length) return;
     if (isProgrammaticTranslate()) return;
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (!t) return;
-
     const nodeCenterCache = new Map<string, { cx: number; cy: number }>();
     const getNodeCenter = (nodeId: string) => {
       const id = String(nodeId);
       const cached = nodeCenterCache.get(id);
       if (cached) return cached;
-      const b = readNodeBounds(opts.getAreaPlugin(), id, t);
+      const b = readNodeBoundsGraph(opts.getAreaPlugin(), id);
       if (!b) return null;
       const cx = (b.left + b.right) / 2;
       const cy = (b.top + b.bottom) / 2;
@@ -532,7 +543,6 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const computeGroupBoundsCached = (groupId: string) =>
       computeGroupFrameBoundsWithChildren(
         groupId,
-        t,
         byId,
         childrenByParentId,
         groupBoundsCache,
@@ -565,12 +575,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
       let bounds: NodeBounds | null = null;
       if (editId && editModeGroupBounds && editId === groupId) {
-        bounds = {
-          left: editModeGroupBounds.left * t.k + t.tx,
-          top: editModeGroupBounds.top * t.k + t.ty,
-          right: editModeGroupBounds.right * t.k + t.tx,
-          bottom: editModeGroupBounds.bottom * t.k + t.ty,
-        };
+        bounds = { ...editModeGroupBounds };
       } else {
         bounds = computeGroupBoundsCached(groupId);
       }
@@ -583,88 +588,34 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       });
     }
 
-    const movedSet = new Set(nodeIds.map((id) => String(id)));
-    const movingGroupIds = new Set<string>();
+    const frameAreaById = new Map<string, number>();
+    const nodeToFrameIds = new Map<string, string[]>();
 
-    for (const [groupId, nodeSet] of groupNodeSets.entries()) {
-      if (nodeSet.size === 0) continue;
-      let allMoved = true;
-      for (const nid of nodeSet) {
-        if (!movedSet.has(nid)) {
-          allMoved = false;
-          break;
-        }
-      }
-      if (allMoved) movingGroupIds.add(groupId);
-    }
-
-    const prunedMovingGroupIds = new Set<string>(movingGroupIds);
-    for (const groupId of movingGroupIds) {
-      let cursor = byId.get(groupId)?.parentId ? String(byId.get(groupId)?.parentId) : null;
-      while (cursor) {
-        if (movingGroupIds.has(cursor)) {
-          prunedMovingGroupIds.delete(groupId);
-          break;
-        }
-        cursor = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : null;
-      }
-    }
-
-    const movingGroupNodeIds = new Set<string>();
-    for (const groupId of prunedMovingGroupIds) {
-      const set = groupNodeSets.get(groupId);
-      if (!set) continue;
-      for (const nid of set) movingGroupNodeIds.add(nid);
-    }
-
-    const movingLoopIds = new Set<string>();
-    for (const [loopId, nodeSet] of loopNodeSets.entries()) {
-      if (nodeSet.size === 0) continue;
-      let allMoved = true;
-      for (const nid of nodeSet) {
-        if (!movedSet.has(nid)) {
-          allMoved = false;
-          break;
-        }
-      }
-      if (!allMoved) continue;
-
-      let coveredByGroup = true;
-      for (const nid of nodeSet) {
-        if (!movingGroupNodeIds.has(nid)) {
-          coveredByGroup = false;
-          break;
-        }
-      }
-      if (coveredByGroup) continue;
-
-      movingLoopIds.add(loopId);
-    }
-
-    const movingFrameIds = new Set<string>();
-    for (const groupId of prunedMovingGroupIds) {
-      const frameId = `group:${groupId}`;
-      if (frameById.has(frameId)) movingFrameIds.add(frameId);
-    }
-    for (const loopId of movingLoopIds) {
-      const frameId = `loop:${loopId}`;
-      if (frameById.has(frameId)) movingFrameIds.add(frameId);
-    }
-
-    const nodeToMovingFrameId = new Map<string, string>();
-    for (const frameId of movingFrameIds) {
-      const frame = frameById.get(frameId);
-      if (!frame) continue;
+    for (const [frameId, frame] of frameById.entries()) {
+      const area = Math.max(
+        0,
+        (frame.bounds.right - frame.bounds.left) * (frame.bounds.bottom - frame.bounds.top)
+      );
+      frameAreaById.set(frameId, area);
       for (const nid of frame.nodeIds) {
         const id = String(nid);
-        if (!nodeToMovingFrameId.has(id)) nodeToMovingFrameId.set(id, frameId);
+        const list = nodeToFrameIds.get(id) ?? [];
+        list.push(frameId);
+        nodeToFrameIds.set(id, list);
       }
+    }
+
+    for (const [nodeId, list] of nodeToFrameIds.entries()) {
+      list.sort((a, b) => {
+        const areaA = frameAreaById.get(a) ?? Number.POSITIVE_INFINITY;
+        const areaB = frameAreaById.get(b) ?? Number.POSITIVE_INFINITY;
+        return areaA - areaB;
+      });
+      nodeToFrameIds.set(nodeId, list);
     }
 
     const frameMoves: FrameMoveContext | undefined =
-      movingFrameIds.size > 0
-        ? { movingFrameIds, frameById, nodeToMovingFrameId, movedFrameIds: new Set() }
-        : undefined;
+      frameById.size > 0 ? { frameById, nodeToFrameIds, movedFrameIds: new Set() } : undefined;
 
     for (const loop of loopsSnapshot) {
       const loopId = String(loop.id ?? '');
@@ -696,12 +647,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     if (editId && editModeGroupBounds) {
       const group = groupsSnapshot.find((g) => String(g.id) === String(editId)) ?? null;
       if (group) {
-        const bounds: NodeBounds = {
-          left: editModeGroupBounds.left * t.k + t.tx,
-          top: editModeGroupBounds.top * t.k + t.ty,
-          right: editModeGroupBounds.right * t.k + t.tx,
-          bottom: editModeGroupBounds.bottom * t.k + t.ty,
-        };
+        const bounds: NodeBounds = { ...editModeGroupBounds };
 
         const nextSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
         const added: string[] = [];
@@ -833,7 +779,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     }
   };
 
-  const pickGroupAtPoint = (groups: NodeGroup[], px: number, py: number, t: AreaTransform): NodeGroup | null => {
+  const pickGroupAtPoint = (groups: NodeGroup[], gx: number, gy: number): NodeGroup | null => {
     let picked: NodeGroup | null = null;
     let pickedArea = Number.POSITIVE_INFINITY;
 
@@ -841,18 +787,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       let bounds: NodeBounds | null = null;
 
       if (get(editModeGroupId) === group.id && editModeGroupBounds) {
-        bounds = {
-          left: editModeGroupBounds.left * t.k + t.tx,
-          top: editModeGroupBounds.top * t.k + t.ty,
-          right: editModeGroupBounds.right * t.k + t.tx,
-          bottom: editModeGroupBounds.bottom * t.k + t.ty,
-        };
+        bounds = { ...editModeGroupBounds };
       } else {
-        bounds = computeGroupFrameBounds(group, t);
+        bounds = computeGroupFrameBounds(group);
       }
 
       if (!bounds) continue;
-      const inside = px >= bounds.left && px <= bounds.right && py >= bounds.top && py <= bounds.bottom;
+      const inside = gx >= bounds.left && gx <= bounds.right && gy >= bounds.top && gy <= bounds.bottom;
       if (!inside) continue;
 
       const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
@@ -910,20 +851,14 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const createdId = String(nodeId ?? '');
     if (!createdId) return;
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (!t) return;
-
     const gx = Number(graphPos?.x);
     const gy = Number(graphPos?.y);
     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
 
-    const px = gx * t.k + t.tx;
-    const py = gy * t.k + t.ty;
-
     const groupsSnapshot = get(nodeGroups);
     if (groupsSnapshot.length === 0) return;
 
-    const picked = pickGroupAtPoint(groupsSnapshot, px, py, t);
+    const picked = pickGroupAtPoint(groupsSnapshot, gx, gy);
     if (!picked) return;
 
     addNodeToGroupChain(picked.id, createdId);
@@ -938,21 +873,14 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const createdId = String(newNodeId ?? '');
     if (!initialId || !createdId) return;
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (!t) return;
-
     const gx = Number(dropGraphPos?.x);
     const gy = Number(dropGraphPos?.y);
     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
 
-    // Convert the pick/drop graph position into the overlay coordinate space (container pixels).
-    const px = gx * t.k + t.tx;
-    const py = gy * t.k + t.ty;
-
     const candidates = get(nodeGroups).filter((g) => (g.nodeIds ?? []).some((id) => String(id) === initialId));
     if (candidates.length === 0) return;
 
-    const picked = pickGroupAtPoint(candidates, px, py, t);
+    const picked = pickGroupAtPoint(candidates, gx, gy);
 
     if (!picked) return;
     addNodeToGroupChain(picked.id, createdId);
@@ -1086,9 +1014,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     scheduleHighlight();
     opts.requestLoopFramesUpdate();
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (!t) return;
-    const bounds = computeGroupFrameBounds(group, t);
+    const bounds = computeGroupFrameBounds(group);
     if (!bounds) return;
     pushNodesOutOfBounds(bounds, new Set(group.nodeIds.map((id) => String(id))));
   };
@@ -1175,22 +1101,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       return;
     }
 
-    const t = readAreaTransform(opts.getAreaPlugin());
-    if (t) {
-      const b = computeGroupFrameBounds(group, t);
-      if (b) {
-        editModeGroupBounds = {
-          left: (b.left - t.tx) / t.k,
-          top: (b.top - t.ty) / t.k,
-          right: (b.right - t.tx) / t.k,
-          bottom: (b.bottom - t.ty) / t.k,
-        };
-      } else {
-        editModeGroupBounds = null;
-      }
-    } else {
-      editModeGroupBounds = null;
-    }
+    const b = computeGroupFrameBounds(group);
+    editModeGroupBounds = b ? { ...b } : null;
 
     editModeGroupId.set(groupId);
     clearGroupEditToast();
@@ -1205,12 +1117,6 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     }
     const groups = get(nodeGroups);
     if (groups.length === 0) {
-      groupFrames.set([]);
-      return;
-    }
-
-    const t = readAreaTransform(areaPlugin);
-    if (!t) {
       groupFrames.set([]);
       return;
     }
@@ -1251,7 +1157,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     const boundsCache = new Map<string, NodeBounds | null>();
     const computeBoundsCached = (groupId: string) =>
-      computeGroupFrameBoundsWithChildren(groupId, t, byId, childrenByParentId, boundsCache, new Set());
+      computeGroupFrameBoundsWithChildren(groupId, byId, childrenByParentId, boundsCache, new Set());
 
     const frames: GroupFrame[] = [];
     for (const group of groups) {
@@ -1259,10 +1165,10 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const effectiveDisabled = getEffectiveDisabled(String(group.id));
 
       if (get(editModeGroupId) === group.id && editModeGroupBounds) {
-        const left = editModeGroupBounds.left * t.k + t.tx;
-        const top = editModeGroupBounds.top * t.k + t.ty;
-        const right = editModeGroupBounds.right * t.k + t.tx;
-        const bottom = editModeGroupBounds.bottom * t.k + t.ty;
+        const left = editModeGroupBounds.left;
+        const top = editModeGroupBounds.top;
+        const right = editModeGroupBounds.right;
+        const bottom = editModeGroupBounds.bottom;
         frames.push({
           group,
           left,

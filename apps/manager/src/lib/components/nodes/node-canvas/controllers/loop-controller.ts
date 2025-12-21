@@ -5,7 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import { sensorData } from '$lib/stores/manager';
 import type { GraphState } from '$lib/nodes/types';
-import { readAreaTransform, unionBounds } from '../utils/view-utils';
+import { unionBoundsGraph } from '../utils/view-utils';
 import {
   createLoopActions,
   loopHasDisabledNodes,
@@ -209,19 +209,13 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
       return;
     }
 
-    const t = readAreaTransform(areaPlugin);
-    if (!t) {
-      loopFrames.set([]);
-      return;
-    }
-
     const paddingX = 56;
     const paddingTop = 64;
     const paddingBottom = 64;
 
     const frames: LoopFrame[] = [];
     for (const loop of get(localLoops)) {
-      const bounds = unionBounds(areaPlugin, getEffectiveLoopNodeIds(loop), t);
+      const bounds = unionBoundsGraph(areaPlugin, getEffectiveLoopNodeIds(loop));
       if (!bounds) continue;
       const left = bounds.left;
       const top = bounds.top;
@@ -257,16 +251,9 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     const areaPlugin = opts.getAreaPlugin();
     if (!areaPlugin?.nodeViews || !areaPlugin?.area) return;
 
-    const t = readAreaTransform(areaPlugin);
-    if (!t) return;
-
     const gx = Number(dropGraphPos?.x);
     const gy = Number(dropGraphPos?.y);
     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
-
-    // Convert the pick/drop graph position into the overlay coordinate space (container pixels).
-    const px = gx * t.k + t.tx;
-    const py = gy * t.k + t.ty;
 
     const candidates = get(localLoops).filter((l) => (l.nodeIds ?? []).some((id) => String(id) === initialId));
     if (candidates.length === 0) return;
@@ -279,7 +266,7 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     let pickedArea = Number.POSITIVE_INFINITY;
 
     for (const loop of candidates) {
-      const bounds = unionBounds(areaPlugin, getEffectiveLoopNodeIds(loop), t);
+      const bounds = unionBoundsGraph(areaPlugin, getEffectiveLoopNodeIds(loop));
       if (!bounds) continue;
 
       const left = bounds.left - paddingX;
@@ -287,7 +274,7 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
       const right = bounds.right + paddingX;
       const bottom = bounds.bottom + paddingBottom;
 
-      const inside = px >= left && px <= right && py >= top && py <= bottom;
+      const inside = gx >= left && gx <= right && gy >= top && gy <= bottom;
       if (!inside) continue;
 
       const area = (right - left) * (bottom - top);

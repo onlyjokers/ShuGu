@@ -5,6 +5,7 @@
   import Button from '$lib/components/ui/Button.svelte';
 
   export let frames: any[] = [];
+  export let areaTransform: { k: number; tx: number; ty: number } | null = null;
   export let editModeGroupId: string | null = null;
   export let toast: { groupId: string; message: string } | null = null;
   export let onToggleDisabled: (groupId: string) => void = () => undefined;
@@ -16,6 +17,15 @@
   let editingGroupId: string | null = null;
   let draftName = '';
   let nameInputEl: HTMLInputElement | null = null;
+  let k = 1;
+  let tx = 0;
+  let ty = 0;
+
+  $: k = Number(areaTransform?.k ?? 1) || 1;
+  $: tx = Number(areaTransform?.tx ?? 0) || 0;
+  $: ty = Number(areaTransform?.ty ?? 0) || 0;
+
+  $: isTiny = k < 0.55;
 
   async function startEdit(group: any) {
     editingGroupId = String(group?.id ?? '');
@@ -38,11 +48,12 @@
 </script>
 
 {#if frames.length > 0}
-  <div class="group-frame-layer">
+  <div class="group-frame-layer" style="transform: translate({tx}px, {ty}px) scale({k}); transform-origin: 0 0;">
     {#each frames as frame (frame.group.id)}
       {@const group = frame.group}
       {@const isEditing = editModeGroupId === group.id}
       {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
+      {@const showCount = !isTiny}
       <div
         class="group-frame {frame.effectiveDisabled ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
         style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
@@ -75,7 +86,9 @@
               }}
             >
               <span class="group-frame-title-name">{group.name ?? 'Group'}</span>
-              <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
+              {#if showCount}
+                <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
+              {/if}
             </button>
           {/if}
           <div class="group-frame-actions">
@@ -154,6 +167,20 @@
     justify-content: space-between;
     gap: 14px;
     pointer-events: auto;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+
+  .group-frame-header.compact {
+    justify-content: flex-start;
+  }
+
+  .group-frame-header:active,
+  .group-frame-header:active *,
+  .group-frame-header *:active {
+    cursor: grabbing;
   }
 
   .group-frame-title {
@@ -195,6 +222,9 @@
     color: rgba(255, 255, 255, 0.9);
     font-size: 11px;
     outline: none;
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .group-frame-actions {
@@ -202,10 +232,13 @@
     align-items: center;
     gap: 8px;
     pointer-events: auto;
+    flex-wrap: nowrap;
+    white-space: nowrap;
   }
 
   .group-frame-actions :global(.btn) {
     border-radius: 999px;
+    white-space: nowrap;
   }
 
   .group-frame-toast {

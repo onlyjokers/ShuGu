@@ -4,6 +4,7 @@
   import Button from '$lib/components/ui/Button.svelte';
 
   export let frames: any[] = [];
+  export let areaTransform: { k: number; tx: number; ty: number } | null = null;
   export let deployedLoopIds: Set<string> = new Set();
   export let getLoopClientId: (loop: any) => string = () => '';
   export let executorStatusByClient: Map<string, any> = new Map();
@@ -16,10 +17,22 @@
   export let onDeploy: (loop: any) => void = () => undefined;
   export let isLoopDeploying: (loopId: string) => boolean = () => false;
   export let loopHasDisabledNodes: (loop: any) => boolean = () => false;
+  export let onHeaderPointerDown: (loopId: string, event: PointerEvent) => void = () => undefined;
+
+  let k = 1;
+  let tx = 0;
+  let ty = 0;
+
+  $: k = Number(areaTransform?.k ?? 1) || 1;
+  $: tx = Number(areaTransform?.tx ?? 0) || 0;
+  $: ty = Number(areaTransform?.ty ?? 0) || 0;
+
+  $: isCompact = k < 0.75;
+  $: isTiny = k < 0.55;
 </script>
 
 {#if frames.length > 0}
-  <div class="loop-frame-layer">
+  <div class="loop-frame-layer" style="transform: translate({tx}px, {ty}px) scale({k}); transform-origin: 0 0;">
     {#each frames as frame (frame.loop.id)}
       {@const loop = frame.loop}
       {@const deployed = deployedLoopIds.has(loop.id)}
@@ -29,57 +42,64 @@
         class="loop-frame {deployed ? 'deployed' : ''}"
         style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
       >
-        <div class="loop-frame-header" on:pointerdown|stopPropagation>
-          <div class="loop-frame-meta">
-            <span class="loop-frame-caps">
-              {#if loop.requiredCapabilities?.length}
-                caps: {loop.requiredCapabilities.join(', ')}
-              {:else}
-                caps: none
-              {/if}
-            </span>
-
-            <span class="executor-meta">
-              exec:
-              {#if status}
-                <span class="executor-badge {status.running ? 'running' : 'stopped'}">
-                  {status.running ? 'running' : 'stopped'}
-                </span>
-                <span class="executor-event">{status.lastEvent}</span>
-                {#if status.lastError}
-                  <span class="executor-error" title={status.lastError}>⚠</span>
+        <div
+          class="loop-frame-header"
+          on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(loop.id), event)}
+        >
+          {#if !isTiny}
+            <div class="loop-frame-meta">
+              <span class="loop-frame-caps">
+                {#if loop.requiredCapabilities?.length}
+                  caps: {loop.requiredCapabilities.join(', ')}
+                {:else}
+                  caps: none
                 {/if}
-              {:else}
-                <span class="executor-badge unknown">unknown</span>
-              {/if}
-            </span>
-          </div>
+              </span>
 
-          <div class="loop-frame-actions">
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!clientId}
-              on:click={() => onToggleLogs(loop)}
-            >
-              {showExecutorLogs && logsClientId === clientId ? '✕ Logs' : 'Logs'}
-            </Button>
+              <span class="executor-meta">
+                exec:
+                {#if status}
+                  <span class="executor-badge {status.running ? 'running' : 'stopped'}">
+                    {status.running ? 'running' : 'stopped'}
+                  </span>
+                  <span class="executor-event">{status.lastEvent}</span>
+                  {#if status.lastError}
+                    <span class="executor-error" title={status.lastError}>⚠</span>
+                  {/if}
+                {:else}
+                  <span class="executor-badge unknown">unknown</span>
+                {/if}
+              </span>
+            </div>
+          {/if}
 
-            {#if deployed}
-              <Button variant="primary" size="sm" disabled={!clientId} on:click={() => onStop(loop)}>
-                Stop Loop
-              </Button>
-            {:else}
+          {#if !isCompact}
+            <div class="loop-frame-actions">
               <Button
-                variant="primary"
+                variant="ghost"
                 size="sm"
-                disabled={!isRunning || isLoopDeploying(loop.id) || loopHasDisabledNodes(loop)}
-                on:click={() => onDeploy(loop)}
+                disabled={!clientId}
+                on:click={() => onToggleLogs(loop)}
               >
-                {isLoopDeploying(loop.id) ? '… Deploying' : 'Deploy'}
+                {showExecutorLogs && logsClientId === clientId ? '✕ Logs' : 'Logs'}
               </Button>
-            {/if}
-          </div>
+
+              {#if deployed}
+                <Button variant="primary" size="sm" disabled={!clientId} on:click={() => onStop(loop)}>
+                  Stop Loop
+                </Button>
+              {:else}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!isRunning || isLoopDeploying(loop.id) || loopHasDisabledNodes(loop)}
+                  on:click={() => onDeploy(loop)}
+                >
+                  {isLoopDeploying(loop.id) ? '… Deploying' : 'Deploy'}
+                </Button>
+              {/if}
+            </div>
+          {/if}
         </div>
       </div>
     {/each}
@@ -123,6 +143,16 @@
     justify-content: space-between;
     gap: 14px;
     pointer-events: auto;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+
+  .loop-frame-header:active,
+  .loop-frame-header:active *,
+  .loop-frame-header *:active {
+    cursor: grabbing;
   }
 
   .loop-frame-meta {
