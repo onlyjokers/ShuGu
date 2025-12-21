@@ -131,6 +131,44 @@ test('compile detects cycles on non-sink edges', () => {
   assert.throws(() => runtime.compileNow(), /Cycle detected/i);
 });
 
+test('compile allows multiple edges between the same nodes', () => {
+  const registry = new NodeRegistry();
+  registry.register({
+    type: 'const',
+    label: 'Const',
+    category: 'Test',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+    configSchema: [],
+    process: () => ({ out: true }),
+  });
+  registry.register({
+    type: 'dual',
+    label: 'Dual',
+    category: 'Test',
+    inputs: [
+      { id: 'a', label: 'A', type: 'boolean' },
+      { id: 'b', label: 'B', type: 'boolean' },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+    configSchema: [],
+    process: (inputs) => ({ out: Boolean(inputs.a) && Boolean(inputs.b) }),
+  });
+
+  const runtime = new NodeRuntime(registry);
+  runtime.loadGraph({
+    nodes: [nodeInstance('src', 'const'), nodeInstance('tgt', 'dual')],
+    connections: [
+      { id: 'c1', sourceNodeId: 'src', sourcePortId: 'out', targetNodeId: 'tgt', targetPortId: 'a' },
+      { id: 'c2', sourceNodeId: 'src', sourcePortId: 'out', targetNodeId: 'tgt', targetPortId: 'b' },
+    ],
+  });
+
+  runtime.compileNow();
+  const order = runtime.executionOrder.map((n) => n.id);
+  assert.deepEqual(order, ['src', 'tgt']);
+});
+
 test('compile allows sink edges in feedback loops', () => {
   const registry = new NodeRegistry();
   registry.register({

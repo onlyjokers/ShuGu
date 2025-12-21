@@ -1,0 +1,16 @@
+{
+  "__purpose": "Manager node spec for logic divide (divides number input by 1 and passes through any input).",
+  "type": "logic-divide",
+  "label": "//",
+  "category": "Logic",
+  "inputs": [
+    { "id": "number", "label": "Number", "type": "number", "defaultValue": 0 },
+    { "id": "any", "label": "Any", "type": "any" }
+  ],
+  "outputs": [
+    { "id": "number", "label": "Number", "type": "number" },
+    { "id": "any", "label": "Any", "type": "any" }
+  ],
+  "configSchema": [],
+  "runtime": { "kind": "logic-divide" }
+}

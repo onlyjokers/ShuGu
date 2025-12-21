@@ -104,6 +104,10 @@
   $: hasLabel = Boolean(data?.label) && !isInline;
   $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
 
+  $: selectedClientIds = ($managerState.selectedClientIds ?? []).map(String);
+  $: primarySelectedClientId = selectedClientIds[0] ?? '';
+  $: selectedClientIdSet = new Set(selectedClientIds);
+
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '0.00';
     const num = Number(val);
@@ -320,7 +324,7 @@
         {#each $managerState.clients as c (c.clientId)}
           <button
             type="button"
-            class="client-item {c.clientId === data.value ? 'selected' : ''}"
+            class="client-item {c.clientId === primarySelectedClientId ? 'selected' : selectedClientIdSet.has(c.clientId) ? 'in-range' : ''}"
             disabled={data.readonly}
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}
@@ -593,6 +597,10 @@
   .client-item.selected {
     border-color: rgba(99, 102, 241, 0.7);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  }
+
+  .client-item.in-range {
+    border-color: rgba(99, 102, 241, 0.35);
   }
 
   .client-dot {

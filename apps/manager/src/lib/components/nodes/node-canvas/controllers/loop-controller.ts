@@ -57,6 +57,12 @@ export type LoopController = {
   isLoopDeploying: (loopId: string) => boolean;
   loopHasDisabledNodes: (loop: LocalLoop) => boolean;
   toggleLoopLogs: (loop: LocalLoop) => void;
+  getEffectiveLoops: () => LocalLoop[];
+  autoAddNodeToLoopFromConnectDrop: (
+    initialNodeId: string,
+    newNodeId: string,
+    dropGraphPos: { x: number; y: number }
+  ) => void;
   requestFramesUpdate: () => void;
   applyHighlights: () => Promise<void>;
   scheduleHighlight: () => void;
@@ -86,6 +92,31 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
   let sensorUnsub: (() => void) | null = null;
   const executorLastServerTimestampByClient = new Map<string, number>();
 
+  // Loop membership extensions (UI-only): when a node is created by connection-drop inside a loop frame,
+  // we treat it as part of that loop for frame bounds + local highlighting.
+  // Keyed by the loop's client-node id so it survives loopId churn when SCC membership changes.
+  let extraLoopNodeIdsByClientNodeId = new Map<string, Set<string>>();
+
+  const loopClientNodeId = (loop: LocalLoop): string => String(loop.clientsInvolved?.[0] ?? '');
+
+  const getExtraNodeIdsForLoop = (loop: LocalLoop): string[] => {
+    const clientNodeId = loopClientNodeId(loop);
+    const set = clientNodeId ? extraLoopNodeIdsByClientNodeId.get(clientNodeId) : undefined;
+    return set ? Array.from(set) : [];
+  };
+
+  const getEffectiveLoopNodeIds = (loop: LocalLoop): string[] => {
+    const ids = new Set<string>((loop.nodeIds ?? []).map((id) => String(id)));
+    for (const extraId of getExtraNodeIdsForLoop(loop)) ids.add(String(extraId));
+    return Array.from(ids);
+  };
+
+  const getEffectiveLoops = (): LocalLoop[] => {
+    const loops = get(localLoops);
+    if (loops.length === 0) return [];
+    return loops.map((loop) => ({ ...loop, nodeIds: getEffectiveLoopNodeIds(loop) }));
+  };
+
   const loopActions = createLoopActions({
     getSDK: opts.getSDK,
     getGraphState: opts.getGraphState,
@@ -114,6 +145,7 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
 
     for (const loop of loops) {
       for (const nid of loop.nodeIds) localNodes.add(nid);
+      for (const nid of getExtraNodeIdsForLoop(loop)) localNodes.add(nid);
       for (const cid of loop.connectionIds) localConns.add(cid);
       if (!deployedIds.has(loop.id)) continue;
       for (const nid of loop.nodeIds) deployedNodes.add(nid);
@@ -189,7 +221,7 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
 
     const frames: LoopFrame[] = [];
     for (const loop of get(localLoops)) {
-      const bounds = unionBounds(areaPlugin, loop.nodeIds, t);
+      const bounds = unionBounds(areaPlugin, getEffectiveLoopNodeIds(loop), t);
       if (!bounds) continue;
       const left = bounds.left;
       const top = bounds.top;
@@ -211,6 +243,74 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     }
 
     loopFrames.set(frames);
+  };
+
+  const autoAddNodeToLoopFromConnectDrop = (
+    initialNodeId: string,
+    newNodeId: string,
+    dropGraphPos: { x: number; y: number }
+  ) => {
+    const initialId = String(initialNodeId ?? '');
+    const createdId = String(newNodeId ?? '');
+    if (!initialId || !createdId) return;
+
+    const areaPlugin = opts.getAreaPlugin();
+    if (!areaPlugin?.nodeViews || !areaPlugin?.area) return;
+
+    const t = readAreaTransform(areaPlugin);
+    if (!t) return;
+
+    const gx = Number(dropGraphPos?.x);
+    const gy = Number(dropGraphPos?.y);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+
+    // Convert the pick/drop graph position into the overlay coordinate space (container pixels).
+    const px = gx * t.k + t.tx;
+    const py = gy * t.k + t.ty;
+
+    const candidates = get(localLoops).filter((l) => (l.nodeIds ?? []).some((id) => String(id) === initialId));
+    if (candidates.length === 0) return;
+
+    const paddingX = 56;
+    const paddingTop = 64;
+    const paddingBottom = 64;
+
+    let picked: LocalLoop | null = null;
+    let pickedArea = Number.POSITIVE_INFINITY;
+
+    for (const loop of candidates) {
+      const bounds = unionBounds(areaPlugin, getEffectiveLoopNodeIds(loop), t);
+      if (!bounds) continue;
+
+      const left = bounds.left - paddingX;
+      const top = bounds.top - paddingTop;
+      const right = bounds.right + paddingX;
+      const bottom = bounds.bottom + paddingBottom;
+
+      const inside = px >= left && px <= right && py >= top && py <= bottom;
+      if (!inside) continue;
+
+      const area = (right - left) * (bottom - top);
+      if (area < pickedArea) {
+        picked = loop;
+        pickedArea = area;
+      }
+    }
+
+    if (!picked) return;
+
+    const clientNodeId = loopClientNodeId(picked);
+    if (!clientNodeId) return;
+
+    const next = new Map(extraLoopNodeIdsByClientNodeId);
+    const set = new Set(next.get(clientNodeId) ?? []);
+    if (set.has(createdId)) return;
+    set.add(createdId);
+    next.set(clientNodeId, set);
+    extraLoopNodeIdsByClientNodeId = next;
+
+    recomputeLoopHighlightSets();
+    requestFramesUpdate();
   };
 
   const requestFramesUpdate = () => {
@@ -345,6 +445,8 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     isLoopDeploying: loopActions.isLoopDeploying,
     loopHasDisabledNodes: loopHasDisabledNodesForLoop,
     toggleLoopLogs,
+    getEffectiveLoops,
+    autoAddNodeToLoopFromConnectDrop,
     requestFramesUpdate,
     applyHighlights,
     scheduleHighlight,

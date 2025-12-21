@@ -54,6 +54,7 @@ export function computeMidiHighlightState(opts: MidiHighlightOptions): MidiHighl
   const nextOutputsByNode = new Map<string, Set<string>>();
 
   const queue: string[] = [];
+  let queueIndex = 0;
   const visited = new Set<string>();
   for (const id of sourceNodeIds) {
     nextNodeIds.add(id);
@@ -61,8 +62,8 @@ export function computeMidiHighlightState(opts: MidiHighlightOptions): MidiHighl
     visited.add(id);
   }
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift()!;
+  while (queueIndex < queue.length) {
+    const nodeId = queue[queueIndex++]!;
     for (const conn of outsByNode.get(nodeId) ?? []) {
       const connId = String(conn.id);
       const targetNodeId = String(conn.targetNodeId);

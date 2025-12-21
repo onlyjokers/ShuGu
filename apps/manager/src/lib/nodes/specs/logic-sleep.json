@@ -1,0 +1,13 @@
+{
+  "__purpose": "Manager node spec for logic sleep (delays any input by a configurable duration).",
+  "type": "logic-sleep",
+  "label": "Sleep",
+  "category": "Logic",
+  "inputs": [
+    { "id": "input", "label": "input", "type": "any" },
+    { "id": "sleepTimeMs", "label": "sleep time (ms)", "type": "number", "defaultValue": 0 }
+  ],
+  "outputs": [{ "id": "output", "label": "output", "type": "any" }],
+  "configSchema": [],
+  "runtime": { "kind": "logic-sleep" }
+}

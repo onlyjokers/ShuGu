@@ -291,7 +291,7 @@
               </div>
             </div>
             <Ref
-              class="output-socket"
+              class={`output-socket ${any(output).disabled ? 'socket-disabled' : ''}`}
               data-testid="output-socket"
               init={(element) =>
                 emit({
@@ -406,6 +406,11 @@
   :global(.output-socket) {
     margin-right: -10px;
     flex: 0 0 auto;
+  }
+
+  :global(.output-socket.socket-disabled) {
+    opacity: 0.35;
+    pointer-events: none;
   }
 
   .port-body {

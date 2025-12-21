@@ -54,6 +54,13 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createClientObjectNode(deps));
   registry.register(createClientSensorsProcessorNode());
   registry.register(createMathNode());
+  registry.register(createLogicAddNode());
+  registry.register(createLogicMultipleNode());
+  registry.register(createLogicSubtractNode());
+  registry.register(createLogicDivideNode());
+  registry.register(createLogicIfNode());
+  registry.register(createLogicForNode());
+  registry.register(createLogicSleepNode());
   registry.register(createLFONode());
   registry.register(createNumberNode());
   registry.register(createNumberStabilizerNode());
@@ -196,7 +203,7 @@ function createMathNode(): NodeDefinition {
   return {
     type: 'math',
     label: 'Math',
-    category: 'Math',
+    category: 'Logic',
     inputs: [
       { id: 'a', label: 'A', type: 'number', defaultValue: 0 },
       { id: 'b', label: 'B', type: 'number', defaultValue: 0 },
@@ -256,6 +263,237 @@ function createMathNode(): NodeDefinition {
       }
 
       return { result };
+    },
+  };
+}
+
+function createLogicAddNode(): NodeDefinition {
+  return {
+    type: 'logic-add',
+    label: 'Add',
+    category: 'Logic',
+    inputs: [
+      { id: 'number', label: 'Number', type: 'number', defaultValue: 0 },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    outputs: [
+      { id: 'number', label: 'Number', type: 'number' },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    configSchema: [],
+    process: (inputs) => {
+      const raw = inputs.number;
+      const numberValue = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw ?? 0);
+      return {
+        // Add 1 to the number input on every pass, regardless of which port triggered upstream.
+        number: (Number.isFinite(numberValue) ? numberValue : 0) + 1,
+        any: inputs.any,
+      };
+    },
+  };
+}
+
+function createLogicMultipleNode(): NodeDefinition {
+  return {
+    type: 'logic-multiple',
+    label: 'Multiple',
+    category: 'Logic',
+    inputs: [
+      { id: 'number', label: 'Number', type: 'number', defaultValue: 0 },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    outputs: [
+      { id: 'number', label: 'Number', type: 'number' },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    configSchema: [],
+    process: (inputs) => {
+      const raw = inputs.number;
+      const numberValue = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw ?? 0);
+      return {
+        number: (Number.isFinite(numberValue) ? numberValue : 0) * 1,
+        any: inputs.any,
+      };
+    },
+  };
+}
+
+function createLogicSubtractNode(): NodeDefinition {
+  return {
+    type: 'logic-subtract',
+    label: 'Subtract',
+    category: 'Logic',
+    inputs: [
+      { id: 'number', label: 'Number', type: 'number', defaultValue: 0 },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    outputs: [
+      { id: 'number', label: 'Number', type: 'number' },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    configSchema: [],
+    process: (inputs) => {
+      const raw = inputs.number;
+      const numberValue = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw ?? 0);
+      return {
+        number: (Number.isFinite(numberValue) ? numberValue : 0) - 1,
+        any: inputs.any,
+      };
+    },
+  };
+}
+
+function createLogicDivideNode(): NodeDefinition {
+  return {
+    type: 'logic-divide',
+    label: 'Divide',
+    category: 'Logic',
+    inputs: [
+      { id: 'number', label: 'Number', type: 'number', defaultValue: 0 },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    outputs: [
+      { id: 'number', label: 'Number', type: 'number' },
+      { id: 'any', label: 'Any', type: 'any' },
+    ],
+    configSchema: [],
+    process: (inputs) => {
+      const raw = inputs.number;
+      const numberValue = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw ?? 0);
+      return {
+        number: (Number.isFinite(numberValue) ? numberValue : 0) / 1,
+        any: inputs.any,
+      };
+    },
+  };
+}
+
+function createLogicIfNode(): NodeDefinition {
+  return {
+    type: 'logic-if',
+    label: 'if',
+    category: 'Logic',
+    inputs: [
+      { id: 'input', label: 'input', type: 'number', defaultValue: 0 },
+      { id: 'condition', label: 'condition', type: 'number', defaultValue: 0 },
+    ],
+    outputs: [
+      { id: 'false', label: 'false', type: 'number' },
+      { id: 'true', label: 'true', type: 'number' },
+    ],
+    configSchema: [],
+    process: (inputs) => {
+      const inputRaw = inputs.input;
+      const conditionRaw = inputs.condition;
+
+      const inputValue =
+        typeof inputRaw === 'number' && Number.isFinite(inputRaw) ? inputRaw : Number(inputRaw ?? 0);
+      const conditionValue =
+        typeof conditionRaw === 'number' && Number.isFinite(conditionRaw)
+          ? conditionRaw
+          : Number(conditionRaw ?? 0);
+
+      const value = Number.isFinite(inputValue) ? inputValue : 0;
+      const condition = Number.isFinite(conditionValue) ? conditionValue : 0;
+
+      // Treat condition as a numeric boolean (>= 0.5 is true).
+      if (condition >= 0.5) return { true: value };
+      return { false: value };
+    },
+  };
+}
+
+type LogicForState = {
+  current: number;
+  start: number;
+  end: number;
+};
+
+const logicForState = new Map<string, LogicForState>();
+
+function createLogicForNode(): NodeDefinition {
+  return {
+    type: 'logic-for',
+    label: 'for',
+    category: 'Logic',
+    inputs: [
+      { id: 'start', label: 'start', type: 'number', defaultValue: 1 },
+      { id: 'end', label: 'end', type: 'number', defaultValue: 1 },
+    ],
+    outputs: [{ id: 'index', label: 'index', type: 'number' }],
+    configSchema: [],
+    process: (inputs, _config, context) => {
+      const startRaw = inputs.start;
+      const endRaw = inputs.end;
+
+      const startValue =
+        typeof startRaw === 'number' && Number.isFinite(startRaw) ? startRaw : Number(startRaw ?? 1);
+      const endValue =
+        typeof endRaw === 'number' && Number.isFinite(endRaw) ? endRaw : Number(endRaw ?? 1);
+
+      const start = Math.round(Number.isFinite(startValue) ? startValue : 1);
+      const end = Math.round(Number.isFinite(endValue) ? endValue : 1);
+
+      const clampedStart = Math.max(1, start);
+      const clampedEnd = Math.max(clampedStart, end);
+
+      const prev = logicForState.get(context.nodeId);
+      if (!prev || prev.start !== clampedStart || prev.end !== clampedEnd) {
+        const initial = { current: clampedStart, start: clampedStart, end: clampedEnd };
+        const out = initial.current;
+        initial.current = out >= initial.end ? initial.start : out + 1;
+        logicForState.set(context.nodeId, initial);
+        return { index: out };
+      }
+
+      const out = prev.current;
+      prev.current = out >= prev.end ? prev.start : out + 1;
+      logicForState.set(context.nodeId, prev);
+      return { index: out };
+    },
+  };
+}
+
+type LogicSleepState = {
+  queue: { time: number; value: unknown }[];
+  lastOutput: unknown;
+};
+
+// Sleep node keeps a small time queue to delay signals by the configured milliseconds.
+const logicSleepState = new Map<string, LogicSleepState>();
+
+function createLogicSleepNode(): NodeDefinition {
+  return {
+    type: 'logic-sleep',
+    label: 'Sleep',
+    category: 'Logic',
+    inputs: [
+      { id: 'input', label: 'input', type: 'any' },
+      { id: 'sleepTimeMs', label: 'sleep time (ms)', type: 'number', defaultValue: 0 },
+    ],
+    outputs: [{ id: 'output', label: 'output', type: 'any' }],
+    configSchema: [],
+    process: (inputs, _config, context) => {
+      const rawDelay = inputs.sleepTimeMs;
+      const parsed = typeof rawDelay === 'number' ? rawDelay : Number(rawDelay ?? 0);
+      const delayMs = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+
+      const state =
+        logicSleepState.get(context.nodeId) ?? {
+          queue: [],
+          lastOutput: undefined,
+        };
+
+      state.queue.push({ time: context.time, value: inputs.input });
+
+      const targetTime = context.time - delayMs;
+      while (state.queue.length > 0 && state.queue[0].time <= targetTime) {
+        const item = state.queue.shift();
+        if (item) state.lastOutput = item.value;
+      }
+
+      logicSleepState.set(context.nodeId, state);
+      return { output: state.lastOutput };
     },
   };
 }
@@ -343,7 +581,7 @@ function createNumberStabilizerNode(): NodeDefinition {
   return {
     type: 'number-stabilizer',
     label: 'Number Stabilizer',
-    category: 'Math',
+    category: 'Logic',
     inputs: [{ id: 'in', label: 'In', type: 'number', defaultValue: 0 }],
     outputs: [{ id: 'out', label: 'Out', type: 'number' }],
     configSchema: [

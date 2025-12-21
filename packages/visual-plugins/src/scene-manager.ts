@@ -19,6 +19,7 @@ export class DefaultSceneManager implements SceneManager {
 
     switchTo(sceneId: string): void {
         if (!this.container) return;
+        if (this.currentScene && this.currentScene.id === sceneId) return;
 
         // Unmount current scene
         if (this.currentScene) {

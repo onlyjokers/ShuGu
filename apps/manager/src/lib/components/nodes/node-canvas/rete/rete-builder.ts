@@ -26,6 +26,9 @@ type ReteBuilderOptions = {
   sockets: ReteSocketMap;
   getNumberParamOptions: () => { path: string; label: string }[];
   sendNodeOverride: (nodeId: string, kind: 'input' | 'config', portId: string, value: unknown) => void;
+  onClientNodePick?: (nodeId: string, clientId: string) => void;
+  onClientNodeSelectInput?: (nodeId: string, portId: 'index' | 'range', value: number) => void;
+  onClientNodeRandom?: (nodeId: string, value: boolean) => void;
 };
 
 export type ReteBuilder = {
@@ -95,7 +98,10 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
       const configValue = instance.config?.[input.id];
       const current = instance.inputValues?.[input.id];
       const derivedDefault = hasDefault ? input.defaultValue : configField?.defaultValue;
-      const hasInitial = current !== undefined || configValue !== undefined || derivedDefault !== undefined;
+      const forceInlineInput =
+        instance.type === 'client-object' && (input.id === 'index' || input.id === 'range' || input.id === 'random');
+      const hasInitial =
+        forceInlineInput || current !== undefined || configValue !== undefined || derivedDefault !== undefined;
       if (hasInitial && isPrimitive && !isSink && !isSelectConfig) {
         if (input.type === 'number') {
           const min =
@@ -122,7 +128,9 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
               ? current
               : typeof configValue === 'number'
                 ? configValue
-                : Number(derivedDefault ?? 0);
+                : forceInlineInput
+                  ? 1
+                  : Number(derivedDefault ?? 0);
 
           const clamp = (value: number) => {
             let next = value;
@@ -139,12 +147,25 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
                   const next = typeof value === 'number' ? clamp(value) : value;
                   nodeEngine.updateNodeInputValue(instance.id, input.id, next);
                   sendNodeOverride(instance.id, 'input', input.id, next);
+                  if (
+                    instance.type === 'client-object' &&
+                    (input.id === 'index' || input.id === 'range') &&
+                    typeof next === 'number'
+                  ) {
+                    opts.onClientNodeSelectInput?.(instance.id, input.id, next);
+                  }
                 },
               });
               control.inline = true;
               control.min = min;
               control.max = max;
               control.step = step;
+              control.nodeId = instance.id;
+              control.nodeType = instance.type;
+              control.portId = input.id;
+              if (instance.type === 'client-object' && (input.id === 'index' || input.id === 'range')) {
+                control.integer = true;
+              }
               return control;
             })()
           );
@@ -170,12 +191,17 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
               ? current
               : typeof configValue === 'boolean'
                 ? configValue
-                : Boolean(derivedDefault);
+                : forceInlineInput
+                  ? false
+                  : Boolean(derivedDefault);
           const control: any = new BooleanControl({
             initial,
             change: (value) => {
               nodeEngine.updateNodeInputValue(instance.id, input.id, value);
               sendNodeOverride(instance.id, 'input', input.id, value);
+              if (instance.type === 'client-object' && input.id === 'random') {
+                opts.onClientNodeRandom?.(instance.id, value);
+              }
             },
           });
           control.inline = true;
@@ -287,14 +313,19 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         control.step = field.step;
         node.addControl(key, control);
       } else if (field.type === 'client-picker') {
-        node.addControl(
-          key,
-          new ClientPickerControl({
-            label: field.label,
-            initial: String(current ?? ''),
-            change: (value) => nodeEngine.updateNodeConfig(instance.id, { [key]: value }),
-          })
-        );
+        const control: any = new ClientPickerControl({
+          label: field.label,
+          initial: String(current ?? ''),
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            if (instance.type === 'client-object') {
+              opts.onClientNodePick?.(instance.id, value);
+            }
+          },
+        });
+        control.nodeId = instance.id;
+        control.nodeType = instance.type;
+        node.addControl(key, control);
       } else if (field.type === 'param-path') {
         node.addControl(
           key,

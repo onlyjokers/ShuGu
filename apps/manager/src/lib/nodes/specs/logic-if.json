@@ -1,0 +1,16 @@
+{
+  "__purpose": "Manager node spec for logic if (routes input to true/false outputs based on condition).",
+  "type": "logic-if",
+  "label": "if",
+  "category": "Logic",
+  "inputs": [
+    { "id": "input", "label": "input", "type": "number", "defaultValue": 0 },
+    { "id": "condition", "label": "condition", "type": "number", "defaultValue": 0 }
+  ],
+  "outputs": [
+    { "id": "false", "label": "false", "type": "number" },
+    { "id": "true", "label": "true", "type": "number" }
+  ],
+  "configSchema": [],
+  "runtime": { "kind": "logic-if" }
+}

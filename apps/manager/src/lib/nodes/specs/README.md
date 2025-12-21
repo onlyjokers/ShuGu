@@ -17,6 +17,7 @@ Manager 的 Node Graph 节点通过本目录及子目录下的 `**/*.json` 自�
 
 - `command`: 发送控制命令（适合新增各种 Processor 节点）
 - `number`, `math`, `lfo`
+- `logic-add`, `logic-multiple`, `logic-subtract`, `logic-divide`, `logic-if`, `logic-for`
 - `param-get`, `param-set`
 - `client-object`, `proc-client-sensors`
 - `midi-fuzzy`, `midi-boolean`, `midi-map`, `midi-select-map`, `midi-color-map`

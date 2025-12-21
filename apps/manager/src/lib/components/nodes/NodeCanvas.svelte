@@ -22,11 +22,12 @@
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { getSDK } from '$lib/stores/manager';
+  import { getSDK, selectClients, state as managerState } from '$lib/stores/manager';
   import type {
     NodeInstance,
     Connection as EngineConnection,
     GraphState,
+    PortType,
   } from '$lib/nodes/types';
   import type { LocalLoop } from '$lib/nodes';
   import { midiService } from '$lib/features/midi/midi-service';
@@ -43,7 +44,7 @@
   import { createReteBuilder } from './node-canvas/rete/rete-builder';
   import { createGraphSync, type GraphSyncController } from './node-canvas/rete/rete-sync';
   import { bindRetePipes } from './node-canvas/rete/rete-pipes';
-  import { normalizeAreaTransform } from './node-canvas/utils/view-utils';
+  import { normalizeAreaTransform, readAreaTransform } from './node-canvas/utils/view-utils';
 
   let container: HTMLDivElement | null = null;
   let editor: NodeEditor<any> | null = null;
@@ -56,9 +57,14 @@
   let contextMenuHandler: ((event: MouseEvent) => void) | null = null;
   let pointerDownHandler: ((event: PointerEvent) => void) | null = null;
   let pointerMoveHandler: ((event: PointerEvent) => void) | null = null;
+  let dblclickHandler: ((event: MouseEvent) => void) | null = null;
   let toolbarMenuOutsideHandler: ((event: PointerEvent) => void) | null = null;
+  let groupHeaderDragPointerId: number | null = null;
+  let groupHeaderDragMoveHandler: ((event: PointerEvent) => void) | null = null;
+  let groupHeaderDragUpHandler: ((event: PointerEvent) => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
+  let managerUnsub: (() => void) | null = null;
 
   const sockets = {
     number: new ClassicPreset.Socket('number'),
@@ -85,6 +91,8 @@
   let numberParamOptions: { path: string; label: string }[] = [];
   let pickerElement: HTMLDivElement | null = null;
   let lastPointerClient = { x: 0, y: 0 };
+  let clipboardNodes: NodeInstance[] = [];
+  let clipboardPasteIndex = 0;
 
   const graphStateStore = nodeEngine?.graphState;
   const isRunningStore = nodeEngine?.isRunning;
@@ -100,6 +108,7 @@
     getNodeMap: () => nodeMap,
     getGraphState: () => graphState,
     getLocalLoops: () => (loopController ? get(loopController.localLoops) : []),
+    getLoopConstraintLoops: () => (loopController ? loopController.getEffectiveLoops() : []),
     getDeployedLoopIds: () => (loopController ? get(loopController.deployedLoopIds) : new Set()),
     setNodesDisabled: (ids, disabled) => nodeEngine.setNodesDisabled(ids, disabled),
     requestLoopFramesUpdate: () => requestFramesUpdate(),
@@ -133,9 +142,10 @@
     onMissingSdk: () => alert('Manager SDK not connected.'),
     onLoopVanished: () => undefined,
     onLoopFrameReady: (loop) => {
-      const bounds = groupController.computeLoopFrameBounds(loop);
+      const effectiveLoop = loopController?.getEffectiveLoops().find((l) => l.id === loop.id) ?? loop;
+      const bounds = groupController.computeLoopFrameBounds(effectiveLoop);
       if (!bounds) return;
-      groupController.pushNodesOutOfBounds(bounds, new Set((loop.nodeIds ?? []).map((id) => String(id))));
+      groupController.pushNodesOutOfBounds(bounds, new Set((effectiveLoop.nodeIds ?? []).map((id) => String(id))));
     },
   });
 
@@ -152,6 +162,7 @@
   const {
     groupFrames,
     editModeGroupId,
+    canvasToast,
     groupEditToast,
     groupSelectionBounds,
     groupSelectionNodeIds,
@@ -175,6 +186,265 @@
   };
 
   const OVERRIDE_TTL_MS = 1500;
+
+  // ===== Client Node Selection Binding =====
+  const selectionEqual = (a: string[], b: string[]) => a.length === b.length && a.every((id, idx) => id === b[idx]);
+
+  const clampInt = (value: number, min: number, max: number) => {
+    const next = Math.floor(value);
+    return Math.max(min, Math.min(max, next));
+  };
+
+  const coerceBoolean = (value: unknown, fallback = false): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+    return fallback;
+  };
+
+  const manualSyncNodeIds = new Set<string>();
+
+  const clientIdsInOrder = () =>
+    (get(managerState).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+
+  const isInputConnected = (nodeId: string, portId: string) =>
+    (graphState.connections ?? []).some(
+      (c) => String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === String(portId)
+    );
+
+  // ===== Sleep Node Dynamic Output =====
+  const getOutputPortType = (nodeId: string, portId: string): PortType => {
+    const node = (graphState.nodes ?? []).find((n) => String(n.id) === String(nodeId));
+    if (!node) return 'any';
+    const def = nodeRegistry.get(String(node.type));
+    const port = def?.outputs?.find((p) => p.id === portId);
+    return (port?.type ?? 'any') as PortType;
+  };
+
+  const resolveSleepOutputType = (nodeId: string): { type: PortType; hasInput: boolean } => {
+    const conn = (graphState.connections ?? []).find(
+      (c) => String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === 'input'
+    );
+    if (!conn) return { type: 'any', hasInput: false };
+    return { type: getOutputPortType(conn.sourceNodeId, conn.sourcePortId), hasInput: true };
+  };
+
+  const syncSleepNodeSockets = async (state: GraphState) => {
+    if (!areaPlugin) return;
+    const nodes = state.nodes ?? [];
+    if (nodes.length === 0) return;
+
+    for (const node of nodes) {
+      if (String(node.type) !== 'logic-sleep') continue;
+      const reteNode = nodeMap.get(String(node.id));
+      const output = reteNode?.outputs?.output;
+      if (!reteNode || !output) continue;
+
+      const { type, hasInput } = resolveSleepOutputType(String(node.id));
+      const nextSocket = (sockets as any)[type] ?? sockets.any;
+      const nextDisabled = !hasInput;
+      const prevSocket = output.socket;
+      const prevDisabled = Boolean(output.disabled);
+
+      if (prevSocket !== nextSocket || prevDisabled !== nextDisabled) {
+        output.socket = nextSocket;
+        output.disabled = nextDisabled;
+        await areaPlugin.update('node', String(node.id));
+      }
+    }
+  };
+
+  const buildAlternatingSelection = (clients: string[], index: number, range: number) => {
+    const total = clients.length;
+    const picked: string[] = [];
+    const seen = new Set<number>();
+
+    const add = (pos: number) => {
+      if (pos < 1 || pos > total) return;
+      if (seen.has(pos)) return;
+      seen.add(pos);
+      picked.push(clients[pos - 1]);
+    };
+
+    add(index);
+    let offset = 1;
+    while (picked.length < range && (index + offset <= total || index - offset >= 1)) {
+      add(index + offset);
+      if (picked.length >= range) break;
+      add(index - offset);
+      offset += 1;
+    }
+
+    return picked;
+  };
+
+  const clientRandomState = new Map<string, { baseIds: string[]; clientsKey: string; random: boolean }>();
+
+  const pickRandomIds = (pool: string[], count: number) => {
+    if (count <= 0) return [];
+    const copy = pool.slice();
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, count);
+  };
+
+  const computeClientSlice = (nodeId: string, indexRaw: number, rangeRaw: number, randomRaw: unknown) => {
+    const clients = clientIdsInOrder();
+    if (clients.length === 0) return null;
+
+    const total = clients.length;
+    const range = clampInt(rangeRaw, 1, total);
+    const index = clampInt(indexRaw, 1, total);
+    const random = coerceBoolean(randomRaw, false);
+
+    if (!random) {
+      const ids = buildAlternatingSelection(clients, index, range);
+      const firstId = ids[0] ?? '';
+      clientRandomState.set(nodeId, { baseIds: [], clientsKey: clients.join('|'), random: false });
+      return { index, range, total, maxIndex: total, ids, firstId, random };
+    }
+
+    const clientsKey = clients.join('|');
+    const prev = clientRandomState.get(nodeId);
+    const prevRandom = prev?.random ?? false;
+    let baseIds = prev?.baseIds ?? [];
+
+    if (!prevRandom || prev?.clientsKey !== clientsKey) {
+      baseIds = [];
+    }
+
+    baseIds = baseIds.filter((id) => clients.includes(id));
+    if (baseIds.length > range) baseIds = baseIds.slice(0, range);
+
+    if (baseIds.length < range) {
+      const remaining = clients.filter((id) => !baseIds.includes(id));
+      const needed = range - baseIds.length;
+      baseIds = [...baseIds, ...pickRandomIds(remaining, needed)];
+    }
+
+    clientRandomState.set(nodeId, { baseIds, clientsKey, random: true });
+
+    const offset = index - 1;
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const baseId of baseIds) {
+      const pos = clients.indexOf(baseId);
+      if (pos < 0) continue;
+      const nextId = clients[(pos + offset) % total];
+      if (!seen.has(nextId)) {
+        seen.add(nextId);
+        ids.push(nextId);
+      }
+    }
+
+    const firstId = ids[0] ?? '';
+    return { index, range, total, maxIndex: total, ids, firstId, random };
+  };
+
+  const syncClientNodeUi = async (
+    nodeId: string,
+    slice: ReturnType<typeof computeClientSlice>,
+    opts?: { updateInputs?: boolean; updateControls?: boolean; updateConfig?: boolean }
+  ) => {
+    if (!slice) return;
+    const node = nodeEngine.getNode(nodeId);
+    if (!node || node.type !== 'client-object') return;
+    const updateInputs = opts?.updateInputs !== false;
+    const updateControls = opts?.updateControls !== false;
+    const updateConfig = opts?.updateConfig !== false;
+
+    // Keep node config in sync so labels + loop deploy use the selected client.
+    const currentClientId =
+      typeof (node.config as any)?.clientId === 'string' ? String((node.config as any).clientId) : '';
+    if (updateConfig) {
+      if (slice.firstId && slice.firstId !== currentClientId) {
+        nodeEngine.updateNodeConfig(nodeId, { clientId: slice.firstId });
+      } else if (!slice.firstId && currentClientId) {
+        nodeEngine.updateNodeConfig(nodeId, { clientId: '' });
+      }
+    }
+
+    // Clamp + persist unconnected inputs (connected inputs are driven by upstream nodes).
+    if (updateInputs) {
+      if (!isInputConnected(nodeId, 'index')) nodeEngine.updateNodeInputValue(nodeId, 'index', slice.index);
+      if (!isInputConnected(nodeId, 'range')) nodeEngine.updateNodeInputValue(nodeId, 'range', slice.range);
+    }
+
+    // Keep live display outputs usable even when the engine is stopped.
+    (node.outputValues as any).indexOut = slice.index;
+    nodeEngine.tickTime.set(Date.now());
+
+    const reteNode = nodeMap.get(String(nodeId));
+    if (!reteNode || !areaPlugin) return;
+
+    const indexCtrl: any = reteNode?.inputs?.index?.control;
+    const rangeCtrl: any = reteNode?.inputs?.range?.control;
+
+    if (indexCtrl && updateControls) {
+      indexCtrl.min = 1;
+      indexCtrl.max = slice.maxIndex;
+      indexCtrl.step = 1;
+      indexCtrl.value = slice.index;
+    }
+    if (rangeCtrl && updateControls) {
+      rangeCtrl.min = 1;
+      rangeCtrl.max = slice.total;
+      rangeCtrl.step = 1;
+      rangeCtrl.value = slice.range;
+    }
+
+    await areaPlugin.update('node', String(nodeId));
+  };
+
+  const applyClientNodeSelection = async (
+    nodeId: string,
+    next: { index?: number; range?: number; clientId?: string; random?: boolean }
+  ) => {
+    const clients = clientIdsInOrder();
+    if (clients.length === 0) return;
+
+    const node = nodeEngine.getNode(nodeId);
+    if (!node || node.type !== 'client-object') return;
+
+    const currentIndexRaw = typeof (node.inputValues as any)?.index === 'number' ? (node.inputValues as any).index : 1;
+    const currentRangeRaw = typeof (node.inputValues as any)?.range === 'number' ? (node.inputValues as any).range : 1;
+    const currentRandomRaw = (node.inputValues as any)?.random;
+
+    const desiredRange = typeof next.range === 'number' ? next.range : currentRangeRaw;
+    const desiredIndex =
+      typeof next.index === 'number'
+        ? next.index
+        : typeof next.clientId === 'string' && next.clientId
+          ? clients.indexOf(next.clientId) + 1
+          : currentIndexRaw;
+    const desiredRandom = typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
+
+    const slice = computeClientSlice(nodeId, desiredIndex, desiredRange, desiredRandom);
+    if (!slice) return;
+
+    const currentSelected = (get(managerState).selectedClientIds ?? []).map(String);
+    if (!selectionEqual(currentSelected, slice.ids)) {
+      selectClients(slice.ids);
+    }
+
+    await syncClientNodeUi(nodeId, slice);
+  };
+
+  const toggleClientSelectionFromPicker = (nodeId: string, clientId: string) => {
+    if (!clientId) return;
+    const clients = clientIdsInOrder();
+    if (clients.length === 0) return;
+
+    const current = (get(managerState).selectedClientIds ?? []).map(String);
+    const set = new Set(current);
+    if (set.has(clientId)) set.delete(clientId);
+    else set.add(clientId);
+
+    const next = clients.filter((id) => set.has(id));
+    selectClients(next);
+    manualSyncNodeIds.add(String(nodeId));
+  };
 
   const sendNodeOverride = (
     nodeId: string,
@@ -208,20 +478,53 @@
     sockets,
     getNumberParamOptions: () => numberParamOptions,
     sendNodeOverride,
+    onClientNodePick: (nodeId, clientId) => toggleClientSelectionFromPicker(nodeId, clientId),
+    onClientNodeSelectInput: (nodeId, portId, value) =>
+      void applyClientNodeSelection(nodeId, { [portId]: value } as any),
+    onClientNodeRandom: (nodeId, value) => void applyClientNodeSelection(nodeId, { random: value }),
   });
 
   let graphSync: GraphSyncController | null = null;
+
+  let pickerControllerRef: ReturnType<typeof createPickerController> | null = null;
 
   const pickerController = createPickerController({
     nodeRegistry,
     getContainer: () => container,
     computeGraphPosition,
     getLastPointerClient: () => lastPointerClient,
-    getPortDefForSocket: reteBuilder.getPortDefForSocket,
+    getPortDefForSocket: (socket) => {
+      const base = reteBuilder.getPortDefForSocket(socket);
+      if (!base) return null;
+      if (socket.side === 'output' && socket.key === 'output') {
+        const node = (graphState.nodes ?? []).find((n) => String(n.id) === String(socket.nodeId));
+        if (node && String(node.type) === 'logic-sleep') {
+          const { type } = resolveSleepOutputType(String(node.id));
+          return { ...base, type };
+        }
+      }
+      return base;
+    },
     bestMatchingPort: reteBuilder.bestMatchingPort,
-    addNode,
+    addNode: (type, position) => {
+      const nodeId = addNode(type, position);
+      if (!nodeId) return nodeId;
+
+      const picker = pickerControllerRef;
+      const mode = picker ? get(picker.mode) : 'add';
+      const initial = picker ? get(picker.initialSocket) : null;
+
+      if (mode === 'connect' && initial && position) {
+        groupController.autoAddNodeToGroupFromConnectDrop(initial.nodeId, nodeId, position);
+        loopController?.autoAddNodeToLoopFromConnectDrop(initial.nodeId, nodeId, position);
+      }
+
+      return nodeId;
+    },
     addConnection: (conn) => nodeEngine.addConnection(conn),
   });
+
+  pickerControllerRef = pickerController;
 
   const {
     isOpen: isPickerOpen,
@@ -352,6 +655,160 @@
     nodeEngine.addNode(newNode);
     return newNode.id;
   }
+
+  // Clipboard helpers for node copy/paste.
+  const cloneNodeInstance = (node: NodeInstance): NodeInstance => ({
+    id: String(node.id),
+    type: node.type,
+    position: { x: Number(node.position?.x ?? 0), y: Number(node.position?.y ?? 0) },
+    config: { ...(node.config ?? {}) },
+    inputValues: { ...(node.inputValues ?? {}) },
+    outputValues: { ...(node.outputValues ?? {}) },
+  });
+
+  const collectCopyNodes = (): NodeInstance[] => {
+    const selected = get(groupController.groupSelectionNodeIds);
+    const ids = selected.size > 0 ? Array.from(selected).map(String) : selectedNodeId ? [String(selectedNodeId)] : [];
+    if (ids.length === 0) return [];
+
+    const nodeById = new Map(graphState.nodes.map((node) => [String(node.id), node]));
+    const nodes = ids.map((id) => nodeById.get(id)).filter(Boolean) as NodeInstance[];
+    return nodes.map((node) => cloneNodeInstance(node));
+  };
+
+  const copySelectedNodes = () => {
+    const nodes = collectCopyNodes();
+    if (nodes.length === 0) return false;
+    clipboardNodes = nodes;
+    clipboardPasteIndex = 0;
+    return true;
+  };
+
+  const computePasteAnchor = () => {
+    if (!container) return { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
+    const rect = container.getBoundingClientRect();
+    const within =
+      lastPointerClient.x >= rect.left &&
+      lastPointerClient.x <= rect.right &&
+      lastPointerClient.y >= rect.top &&
+      lastPointerClient.y <= rect.bottom;
+    if (within) return computeGraphPosition(lastPointerClient.x, lastPointerClient.y);
+    return computeGraphPosition(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  };
+
+  const pasteCopiedNodes = () => {
+    if (clipboardNodes.length === 0) return false;
+
+    const anchor = computePasteAnchor();
+    const positions = clipboardNodes.map((node) => node.position);
+    const minX = Math.min(...positions.map((p) => p.x));
+    const minY = Math.min(...positions.map((p) => p.y));
+    const nudge = clipboardPasteIndex * 28;
+    const offsetX = anchor.x - minX + nudge;
+    const offsetY = anchor.y - minY + nudge;
+
+    const newIds: string[] = [];
+    for (const node of clipboardNodes) {
+      const newId = generateId();
+      const position = { x: node.position.x + offsetX, y: node.position.y + offsetY };
+      const newNode: NodeInstance = {
+        id: newId,
+        type: node.type,
+        position,
+        config: { ...(node.config ?? {}) },
+        inputValues: { ...(node.inputValues ?? {}) },
+        outputValues: { ...(node.outputValues ?? {}) },
+      };
+      nodeEngine.addNode(newNode);
+      groupController.autoAddNodeToGroupFromPosition(newId, position);
+      newIds.push(newId);
+    }
+
+    clipboardPasteIndex += 1;
+
+    if (newIds.length === 1) {
+      groupController.clearSelection();
+      setSelectedNode(newIds[0] ?? '');
+    } else if (newIds.length > 1) {
+      groupController.groupSelectionNodeIds.set(new Set(newIds));
+      groupController.scheduleHighlight();
+      groupController.requestFramesUpdate();
+    }
+
+    return true;
+  };
+
+  // Dragging a group header moves all nodes in that group together.
+  const startGroupHeaderDrag = (groupId: string, event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.('.group-frame-actions')) return;
+    if (target?.closest?.('input')) return;
+    if (target?.closest?.('button')) return;
+
+    const group = get(groupController.nodeGroups).find((g) => String(g.id) === String(groupId));
+    if (!group?.nodeIds?.length) return;
+    if (!areaPlugin?.nodeViews) return;
+
+    const t = readAreaTransform(areaPlugin);
+    if (!t) return;
+
+    const nodeIds = group.nodeIds.map((id) => String(id));
+    const startPositions = new Map<string, { x: number; y: number }>();
+    for (const id of nodeIds) {
+      const view = areaPlugin.nodeViews.get(id);
+      const pos = view?.position as { x: number; y: number } | undefined;
+      if (!pos) continue;
+      startPositions.set(id, { x: pos.x, y: pos.y });
+    }
+    if (startPositions.size === 0) return;
+
+    if (groupHeaderDragMoveHandler)
+      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+    if (groupHeaderDragUpHandler) {
+      window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+    }
+
+    groupHeaderDragPointerId = event.pointerId;
+    const start = { x: event.clientX, y: event.clientY };
+    groupController.beginProgrammaticTranslate();
+
+    const onMove = (ev: PointerEvent) => {
+      if (groupHeaderDragPointerId !== null && ev.pointerId !== groupHeaderDragPointerId) return;
+      const dx = (ev.clientX - start.x) / t.k;
+      const dy = (ev.clientY - start.y) / t.k;
+      for (const [id, pos] of startPositions.entries()) {
+        void areaPlugin.translate(id, { x: pos.x + dx, y: pos.y + dy });
+      }
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (groupHeaderDragPointerId !== null && ev.pointerId !== groupHeaderDragPointerId) return;
+      groupHeaderDragPointerId = null;
+      groupController.endProgrammaticTranslate();
+
+      if (groupHeaderDragMoveHandler)
+        window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+      if (groupHeaderDragUpHandler) {
+        window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
+        window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+      }
+      groupHeaderDragMoveHandler = null;
+      groupHeaderDragUpHandler = null;
+
+      groupController.handleDroppedNodesAfterDrag(Array.from(startPositions.keys()));
+    };
+
+    groupHeaderDragMoveHandler = onMove;
+    groupHeaderDragUpHandler = onUp;
+    window.addEventListener('pointermove', onMove, { capture: true });
+    window.addEventListener('pointerup', onUp, { capture: true });
+    window.addEventListener('pointercancel', onUp, { capture: true });
+
+    event.preventDefault();
+    event.stopPropagation();
+  };
 
 
   const handleToggleEngine = () => {
@@ -511,6 +968,7 @@
       setNodeCount: (count) => (nodeCount = count),
       getSelectedNodeId: () => selectedNodeId,
       onAfterSync: () => {
+        void syncSleepNodeSockets(graphState);
         minimapController.requestUpdate();
         requestFramesUpdate();
         void loopController?.applyHighlights();
@@ -526,6 +984,39 @@
         void midiService.init();
       }
       graphSync?.schedule(state);
+    });
+
+    let lastClientKey = '';
+    let lastSelectedKey = '';
+    managerUnsub = managerState.subscribe(($state) => {
+      const clients = ($state.clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+      const selected = ($state.selectedClientIds ?? []).map(String);
+      const nextClientKey = clients.join('|');
+      const nextSelectedKey = selected.join('|');
+      if (nextClientKey === lastClientKey && nextSelectedKey === lastSelectedKey) return;
+      lastClientKey = nextClientKey;
+      lastSelectedKey = nextSelectedKey;
+
+      if (clients.length === 0) return;
+
+      const selectedInOrder = selected.filter((id) => clients.includes(id));
+      const range = Math.max(1, Math.min(clients.length, selectedInOrder.length || 1));
+      const firstId = selectedInOrder[0] ?? clients[0] ?? '';
+      const index = Math.max(1, clients.indexOf(firstId) + 1);
+      const ids = selectedInOrder.length > 0 ? selectedInOrder : firstId ? [firstId] : [];
+      const slice = { index, range, total: clients.length, maxIndex: clients.length, ids, firstId, random: false };
+      if (!slice) return;
+
+      const engineState = get(graphStateStore);
+      for (const node of engineState.nodes ?? []) {
+        if (String(node.type) !== 'client-object') continue;
+        const nodeId = String(node.id);
+        const skipInputs = manualSyncNodeIds.has(nodeId);
+        const nodeInstance = nodeEngine.getNode(nodeId);
+        const randomActive = coerceBoolean((nodeInstance?.inputValues as any)?.random, false);
+        void syncClientNodeUi(nodeId, slice, { updateInputs: !skipInputs && !randomActive });
+        if (skipInputs) manualSyncNodeIds.delete(nodeId);
+      }
     });
 
     bindRetePipes({
@@ -612,6 +1103,7 @@
       const oy = (rect.top - clientY) * ratio;
       void area.zoom(next, ox, oy, 'wheel');
       minimapController.requestUpdate();
+      requestFramesUpdate();
     };
 
     window.addEventListener('wheel', onWheel, { passive: false, capture: true });
@@ -649,6 +1141,58 @@
     container.addEventListener('pointermove', onPointerMove, { capture: true });
     pointerMoveHandler = onPointerMove;
 
+    const onDblClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.node')) return;
+      if (target?.closest?.('.node-picker')) return;
+      if (target?.closest?.('.marquee-actions')) return;
+      if (target?.closest?.('.minimap')) return;
+      if (target?.closest?.('.executor-logs')) return;
+      if (target?.closest?.('.loop-frame-header')) return;
+      if (target?.closest?.('.group-frame-header')) return;
+
+      const tag = target?.tagName?.toLowerCase?.() ?? '';
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      const frames = get(groupFrames) ?? [];
+      let picked: any = null;
+      let bestDepth = -1;
+      let bestArea = Number.POSITIVE_INFINITY;
+
+      for (const frame of frames) {
+        const left = Number(frame?.left);
+        const top = Number(frame?.top);
+        const width = Number(frame?.width);
+        const height = Number(frame?.height);
+        if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height))
+          continue;
+
+        const inside = x >= left && x <= left + width && y >= top && y <= top + height;
+        if (!inside) continue;
+
+        const depth = Number(frame?.depth ?? 0);
+        const area = width * height;
+        if (depth > bestDepth || (depth === bestDepth && area < bestArea)) {
+          picked = frame;
+          bestDepth = depth;
+          bestArea = area;
+        }
+      }
+
+      if (!picked?.group?.id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      groupController.toggleGroupEditMode(String(picked.group.id));
+    };
+
+    container.addEventListener('dblclick', onDblClick, { capture: true });
+    dblclickHandler = onDblClick;
+
     resizeObserver = new ResizeObserver(() => {
       if (!container) return;
       const area = areaPlugin?.area;
@@ -662,6 +1206,7 @@
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key;
+      const lowerKey = key.toLowerCase();
       if (key === 'Escape' && isToolbarMenuOpen) {
         event.preventDefault();
         closeToolbarMenu();
@@ -677,7 +1222,6 @@
         groupController.clearSelection();
         return;
       }
-      if (key !== 'Backspace' && key !== 'Delete') return;
 
       const el = (event.target as HTMLElement | null) ?? document.activeElement;
       const tag = el?.tagName?.toLowerCase?.() ?? '';
@@ -687,6 +1231,22 @@
         tag === 'select' ||
         Boolean((el as any)?.isContentEditable);
       if (isEditing) return;
+
+      if ((event.metaKey || event.ctrlKey) && lowerKey === 'c') {
+        if (copySelectedNodes()) {
+          event.preventDefault();
+        }
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && lowerKey === 'v') {
+        if (pasteCopiedNodes()) {
+          event.preventDefault();
+        }
+        return;
+      }
+
+      if (key !== 'Backspace' && key !== 'Delete') return;
 
       const selectedIds = get(groupController.groupSelectionNodeIds);
       if (selectedIds.size > 0) {
@@ -720,6 +1280,7 @@
   onDestroy(() => {
     graphUnsub?.();
     paramsUnsub?.();
+    managerUnsub?.();
     midiController.stop();
     loopController?.destroy();
     groupController.destroy();
@@ -731,7 +1292,19 @@
       container?.removeEventListener('pointerdown', pointerDownHandler, { capture: true } as any);
     if (pointerMoveHandler)
       container?.removeEventListener('pointermove', pointerMoveHandler, { capture: true } as any);
+    if (dblclickHandler)
+      container?.removeEventListener('dblclick', dblclickHandler, { capture: true } as any);
     if (keydownHandler) window.removeEventListener('keydown', keydownHandler);
+    if (groupHeaderDragMoveHandler)
+      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+    if (groupHeaderDragUpHandler) {
+      window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+    }
+    if (groupHeaderDragPointerId !== null) groupController.endProgrammaticTranslate();
+    groupHeaderDragPointerId = null;
+    groupHeaderDragMoveHandler = null;
+    groupHeaderDragUpHandler = null;
     if (toolbarMenuOutsideHandler)
       window.removeEventListener('pointerdown', toolbarMenuOutsideHandler, {
         capture: true,
@@ -797,6 +1370,10 @@
   </svelte:fragment>
 
   <svelte:fragment slot="overlays">
+    {#if $canvasToast}
+      <div class="canvas-toast" aria-live="polite">{$canvasToast}</div>
+    {/if}
+
     <NodePickerOverlay
       isOpen={$isPickerOpen}
       mode={$pickerMode}
@@ -822,6 +1399,7 @@
       onToggleEditMode={groupController.toggleGroupEditMode}
       onDisassemble={groupController.disassembleGroup}
       onRename={groupController.renameGroup}
+      onHeaderPointerDown={startGroupHeaderDrag}
     />
 
     <LoopFramesOverlay
@@ -866,6 +1444,30 @@
 </NodeCanvasLayout>
 
 <style>
+  .canvas-toast {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(2, 6, 23, 0.66);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow:
+      0 10px 28px rgba(0, 0, 0, 0.38),
+      0 0 0 1px rgba(59, 130, 246, 0.12);
+    backdrop-filter: blur(14px);
+    pointer-events: none;
+    max-width: min(520px, calc(100% - 48px));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* --- Rete Classic preset overrides --- */
   :global(.node-canvas-container .node) {
     background: rgba(17, 24, 39, 0.92) !important;

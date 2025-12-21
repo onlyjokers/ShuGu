@@ -13,23 +13,80 @@
   export let initialSocket: any = null;
   export let connectTypeLabel = 'any';
 
+  let overlayElement: HTMLDivElement | null = null;
   export let pickerElement: HTMLDivElement | null = null;
 
   export let onClose: () => void = () => undefined;
   export let onPick: (item: any) => void = () => undefined;
+
+  let position = { x: 0, y: 0 };
+  let hasUserMoved = false;
+  let dragOffset = { x: 0, y: 0 };
+  let isDragging = false;
+  let lastIsOpen = false;
+
+  const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  $: {
+    if (isOpen && !lastIsOpen) {
+      hasUserMoved = false;
+    }
+    lastIsOpen = isOpen;
+  }
+
+  $: if (isOpen && !hasUserMoved) {
+    position = { x: anchor.x, y: anchor.y };
+  }
+
+  function startDrag(e: PointerEvent) {
+    if (!pickerElement || !overlayElement) return;
+    hasUserMoved = true;
+    isDragging = true;
+    e.preventDefault();
+
+    const pickerRect = pickerElement.getBoundingClientRect();
+    dragOffset = { x: e.clientX - pickerRect.left, y: e.clientY - pickerRect.top };
+
+    const handleMove = (ev: PointerEvent) => {
+      if (!pickerElement || !overlayElement) return;
+      const overlayRect = overlayElement.getBoundingClientRect();
+      const rect = pickerElement.getBoundingClientRect();
+      const maxX = Math.max(0, overlayRect.width - rect.width);
+      const maxY = Math.max(0, overlayRect.height - rect.height);
+
+      const nextX = ev.clientX - overlayRect.left - dragOffset.x;
+      const nextY = ev.clientY - overlayRect.top - dragOffset.y;
+
+      position = {
+        x: clamp(nextX, 10, Math.max(10, maxX - 10)),
+        y: clamp(nextY, 10, Math.max(10, maxY - 10)),
+      };
+    };
+
+    const handleUp = () => {
+      isDragging = false;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
+  }
 </script>
 
 {#if isOpen}
-  <div class="picker-overlay" on:pointerdown={onClose}>
+  <div class="picker-overlay" bind:this={overlayElement} on:pointerdown={onClose}>
     <div
       class="node-picker"
       bind:this={pickerElement}
-      style="left: {anchor.x}px; top: {anchor.y}px;"
+      style="left: {position.x}px; top: {position.y}px;"
       on:pointerdown|stopPropagation
       on:wheel|stopPropagation
     >
       <div class="picker-header">
-        <div class="picker-title">
+        <div class="picker-title {isDragging ? 'dragging' : ''}" on:pointerdown={startDrag}>
           {#if mode === 'connect' && initialSocket}
             Connect: {connectTypeLabel}
           {:else}
@@ -112,6 +169,12 @@
     font-size: 12px;
     letter-spacing: 0.2px;
     color: rgba(255, 255, 255, 0.78);
+    cursor: grab;
+    user-select: none;
+  }
+
+  .picker-title.dragging {
+    cursor: grabbing;
   }
 
   .picker-search {

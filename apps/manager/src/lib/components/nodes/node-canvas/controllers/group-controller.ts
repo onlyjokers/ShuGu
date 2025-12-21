@@ -7,9 +7,37 @@ import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
 import { readAreaTransform, readNodeBounds, type AreaTransform, type NodeBounds, unionBounds } from '../utils/view-utils';
 
-export type NodeGroup = { id: string; name: string; nodeIds: string[]; disabled: boolean };
-export type GroupFrame = { group: NodeGroup; left: number; top: number; width: number; height: number };
+export type NodeGroup = {
+  id: string;
+  parentId: string | null;
+  name: string;
+  nodeIds: string[];
+  disabled: boolean;
+};
+export type GroupFrame = {
+  group: NodeGroup;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  effectiveDisabled: boolean;
+  depth: number;
+};
 export type GroupEditToast = { groupId: string; message: string } | null;
+
+export type FrameInfo = {
+  id: string;
+  kind: 'group' | 'loop';
+  nodeIds: Set<string>;
+  bounds: NodeBounds;
+};
+
+export type FrameMoveContext = {
+  movingFrameIds: Set<string>;
+  frameById: Map<string, FrameInfo>;
+  nodeToMovingFrameId: Map<string, string>;
+  movedFrameIds: Set<string>;
+};
 
 export type GroupController = {
   nodeGroups: Writable<NodeGroup[]>;
@@ -17,6 +45,7 @@ export type GroupController = {
   groupSelectionNodeIds: Writable<Set<string>>;
   groupSelectionBounds: Writable<{ left: number; top: number; width: number; height: number } | null>;
   editModeGroupId: Writable<string | null>;
+  canvasToast: Writable<string | null>;
   groupEditToast: Writable<GroupEditToast>;
   groupDisabledNodeIds: Writable<Set<string>>;
   marqueeRect: Writable<{ left: number; top: number; width: number; height: number } | null>;
@@ -29,12 +58,20 @@ export type GroupController = {
   disassembleGroup: (groupId: string) => void;
   renameGroup: (groupId: string, name: string) => void;
   toggleGroupEditMode: (groupId: string) => void;
+  autoAddNodeToGroupFromPosition: (nodeId: string, graphPos: { x: number; y: number }) => void;
+  autoAddNodeToGroupFromConnectDrop: (
+    initialNodeId: string,
+    newNodeId: string,
+    dropGraphPos: { x: number; y: number }
+  ) => void;
   handleDroppedNodesAfterDrag: (nodeIds: string[]) => void;
   onPointerDown: (event: PointerEvent) => void;
   destroy: () => void;
   isProgrammaticTranslate: () => boolean;
+  beginProgrammaticTranslate: () => void;
+  endProgrammaticTranslate: () => void;
   computeLoopFrameBounds: (loop: LocalLoop) => NodeBounds | null;
-  pushNodesOutOfBounds: (bounds: NodeBounds, excludeNodeIds: Set<string>) => void;
+  pushNodesOutOfBounds: (bounds: NodeBounds, excludeNodeIds: Set<string>, frameMoves?: FrameMoveContext) => void;
 };
 
 type GroupControllerOptions = {
@@ -43,6 +80,7 @@ type GroupControllerOptions = {
   getNodeMap: () => Map<string, any>;
   getGraphState: () => GraphState;
   getLocalLoops: () => LocalLoop[];
+  getLoopConstraintLoops: () => LocalLoop[];
   getDeployedLoopIds: () => Set<string>;
   setNodesDisabled: (ids: string[], disabled: boolean) => void;
   requestLoopFramesUpdate: () => void;
@@ -59,12 +97,14 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     null
   );
   const editModeGroupId = writable<string | null>(null);
+  const canvasToast = writable<string | null>(null);
   const groupEditToast = writable<GroupEditToast>(null);
   const groupDisabledNodeIds = writable<Set<string>>(new Set());
   const marqueeRect = writable<{ left: number; top: number; width: number; height: number } | null>(null);
 
   let groupHighlightDirty = false;
   let groupEditToastTimeout: ReturnType<typeof setTimeout> | null = null;
+  let canvasToastTimeout: ReturnType<typeof setTimeout> | null = null;
 
   let editModeGroupBounds: { left: number; top: number; right: number; bottom: number } | null = null;
 
@@ -77,6 +117,12 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
   let programmaticTranslateDepth = 0;
   const isProgrammaticTranslate = () => programmaticTranslateDepth > 0;
+  const beginProgrammaticTranslate = () => {
+    programmaticTranslateDepth += 1;
+  };
+  const endProgrammaticTranslate = () => {
+    programmaticTranslateDepth = Math.max(0, programmaticTranslateDepth - 1);
+  };
 
   let framesRaf = 0;
 
@@ -94,6 +140,25 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       clearTimeout(groupEditToastTimeout);
       groupEditToastTimeout = null;
     }
+  };
+
+  const clearCanvasToast = () => {
+    canvasToast.set(null);
+    if (canvasToastTimeout) {
+      clearTimeout(canvasToastTimeout);
+      canvasToastTimeout = null;
+    }
+  };
+
+  const showCanvasToast = (message: string, durationMs = 1400) => {
+    const msg = String(message ?? '').trim();
+    if (!msg) return;
+    canvasToast.set(msg);
+    if (canvasToastTimeout) clearTimeout(canvasToastTimeout);
+    canvasToastTimeout = setTimeout(() => {
+      canvasToast.set(null);
+      canvasToastTimeout = null;
+    }, durationMs);
   };
 
   const showGroupEditToast = (groupId: string, message: string) => {
@@ -160,7 +225,77 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     }
   };
 
-  const computeGroupFrameBounds = (group: NodeGroup, t: AreaTransform): NodeBounds | null => {
+  const mergeBounds = (base: NodeBounds | null, next: NodeBounds | null): NodeBounds | null => {
+    if (!next) return base;
+    if (!base) return { ...next };
+    return {
+      left: Math.min(base.left, next.left),
+      top: Math.min(base.top, next.top),
+      right: Math.max(base.right, next.right),
+      bottom: Math.max(base.bottom, next.bottom),
+    };
+  };
+
+  const boundsIntersect = (a: NodeBounds, b: NodeBounds): boolean =>
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+  const pickMoveDelta = (bounds: NodeBounds, target: NodeBounds, margin: number) => {
+    const moveLeft = bounds.left - margin - target.right;
+    const moveRight = bounds.right + margin - target.left;
+    const moveUp = bounds.top - margin - target.bottom;
+    const moveDown = bounds.bottom + margin - target.top;
+
+    const candidates = [
+      { dx: moveLeft, dy: 0 },
+      { dx: moveRight, dy: 0 },
+      { dx: 0, dy: moveUp },
+      { dx: 0, dy: moveDown },
+    ];
+    candidates.sort((a, b) => Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy)));
+    return candidates[0] ?? null;
+  };
+
+  const buildGroupIndex = (groups: NodeGroup[]) => {
+    const byId = new Map<string, NodeGroup>();
+    const childrenByParentId = new Map<string, string[]>();
+
+    for (const group of groups) {
+      const id = String(group.id);
+      const parentId = group.parentId ? String(group.parentId) : null;
+      const normalized: NodeGroup = {
+        ...group,
+        id,
+        parentId,
+        nodeIds: (group.nodeIds ?? []).map((nodeId) => String(nodeId)),
+      };
+      byId.set(id, normalized);
+      if (!parentId) continue;
+      const list = childrenByParentId.get(parentId) ?? [];
+      list.push(id);
+      childrenByParentId.set(parentId, list);
+    }
+
+    return { byId, childrenByParentId };
+  };
+
+  // Include child frames so parent bounds reflect nested groups.
+  const computeGroupFrameBoundsWithChildren = (
+    groupId: string,
+    t: AreaTransform,
+    byId: Map<string, NodeGroup>,
+    childrenByParentId: Map<string, string[]>,
+    cache: Map<string, NodeBounds | null>,
+    visiting: Set<string>
+  ): NodeBounds | null => {
+    const cached = cache.get(groupId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(groupId)) return null;
+
+    const group = byId.get(groupId);
+    if (!group) return null;
+
+    visiting.add(groupId);
+
     const paddingX = 52;
     const paddingTop = 64;
     const paddingBottom = 52;
@@ -169,29 +304,68 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const loopPaddingTop = 64;
     const loopPaddingBottom = 64;
 
-    const base = unionBounds(opts.getAreaPlugin(), group.nodeIds ?? [], t);
-    if (!base) return null;
+    let bounds: NodeBounds | null = null;
 
-    let bounds = { ...base };
+    const areaPlugin = opts.getAreaPlugin();
+    bounds = mergeBounds(bounds, unionBounds(areaPlugin, group.nodeIds ?? [], t));
+
     const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
     for (const loop of opts.getLocalLoops()) {
       if (!loop?.nodeIds?.length) continue;
       const fullyContained = loop.nodeIds.every((id) => groupNodeSet.has(String(id)));
       if (!fullyContained) continue;
-      const lb = unionBounds(opts.getAreaPlugin(), loop.nodeIds, t);
+      const lb = unionBounds(areaPlugin, loop.nodeIds, t);
       if (!lb) continue;
-      bounds.left = Math.min(bounds.left, lb.left - loopPaddingX);
-      bounds.top = Math.min(bounds.top, lb.top - loopPaddingTop);
-      bounds.right = Math.max(bounds.right, lb.right + loopPaddingX);
-      bounds.bottom = Math.max(bounds.bottom, lb.bottom + loopPaddingBottom);
+      bounds = mergeBounds(bounds, {
+        left: lb.left - loopPaddingX,
+        top: lb.top - loopPaddingTop,
+        right: lb.right + loopPaddingX,
+        bottom: lb.bottom + loopPaddingBottom,
+      });
     }
 
-    return {
+    const children = childrenByParentId.get(groupId) ?? [];
+    for (const childId of children) {
+      const childBounds = computeGroupFrameBoundsWithChildren(
+        childId,
+        t,
+        byId,
+        childrenByParentId,
+        cache,
+        visiting
+      );
+      bounds = mergeBounds(bounds, childBounds);
+    }
+
+    visiting.delete(groupId);
+
+    if (!bounds) {
+      cache.set(groupId, null);
+      return null;
+    }
+
+    const padded = {
       left: bounds.left - paddingX,
       top: bounds.top - paddingTop,
       right: bounds.right + paddingX,
       bottom: bounds.bottom + paddingBottom,
     };
+    cache.set(groupId, padded);
+    return padded;
+  };
+
+  const computeGroupFrameBounds = (group: NodeGroup, t: AreaTransform): NodeBounds | null => {
+    const groupsSnapshot = get(nodeGroups);
+    const { byId, childrenByParentId } = buildGroupIndex(groupsSnapshot);
+    const cache = new Map<string, NodeBounds | null>();
+    return computeGroupFrameBoundsWithChildren(
+      String(group.id),
+      t,
+      byId,
+      childrenByParentId,
+      cache,
+      new Set()
+    );
   };
 
   const computeLoopFrameBounds = (loop: LocalLoop): NodeBounds | null => {
@@ -251,7 +425,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     requestAnimationFrame(step);
   };
 
-  const pushNodesOutOfBounds = (bounds: NodeBounds, excludeNodeIds: Set<string>) => {
+  const pushNodesOutOfBounds = (bounds: NodeBounds, excludeNodeIds: Set<string>, frameMoves?: FrameMoveContext) => {
     const areaPlugin = opts.getAreaPlugin();
     if (!areaPlugin?.nodeViews) return;
     const t = readAreaTransform(areaPlugin);
@@ -259,10 +433,40 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     const margin = 24;
     const updates: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
+    const skipNodeIds = new Set(excludeNodeIds);
+
+    // If a full frame was moved, push the whole frame as a unit.
+    const moveFrame = (frameId: string): boolean => {
+      if (!frameMoves) return false;
+      if (!frameMoves.movingFrameIds.has(frameId)) return false;
+      if (frameMoves.movedFrameIds.has(frameId)) return false;
+      const frame = frameMoves.frameById.get(frameId);
+      if (!frame) return false;
+      if (!boundsIntersect(bounds, frame.bounds)) return false;
+
+      const pick = pickMoveDelta(bounds, frame.bounds, margin);
+      if (!pick) return false;
+
+      const dx = pick.dx / t.k;
+      const dy = pick.dy / t.k;
+
+      for (const nodeId of frame.nodeIds) {
+        const id = String(nodeId);
+        if (skipNodeIds.has(id)) continue;
+        const view = areaPlugin.nodeViews.get(id);
+        const pos = view?.position as { x: number; y: number } | undefined;
+        if (!pos) continue;
+        updates.push({ id, from: { x: pos.x, y: pos.y }, to: { x: pos.x + dx, y: pos.y + dy } });
+        skipNodeIds.add(id);
+      }
+
+      frameMoves.movedFrameIds.add(frameId);
+      return true;
+    };
 
     for (const nodeId of opts.getNodeMap().keys()) {
       const id = String(nodeId);
-      if (excludeNodeIds.has(id)) continue;
+      if (skipNodeIds.has(id)) continue;
       const b = readNodeBounds(areaPlugin, id, t);
       if (!b) continue;
 
@@ -271,19 +475,12 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const inside = cx > bounds.left && cx < bounds.right && cy > bounds.top && cy < bounds.bottom;
       if (!inside) continue;
 
-      const moveLeft = bounds.left - margin - b.right;
-      const moveRight = bounds.right + margin - b.left;
-      const moveUp = bounds.top - margin - b.bottom;
-      const moveDown = bounds.bottom + margin - b.top;
+      if (frameMoves) {
+        const movingFrameId = frameMoves.nodeToMovingFrameId.get(id);
+        if (movingFrameId && moveFrame(movingFrameId)) continue;
+      }
 
-      const candidates = [
-        { dx: moveLeft, dy: 0 },
-        { dx: moveRight, dy: 0 },
-        { dx: 0, dy: moveUp },
-        { dx: 0, dy: moveDown },
-      ];
-      candidates.sort((a, b) => Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy)));
-      const pick = candidates[0];
+      const pick = pickMoveDelta(bounds, b, margin);
       if (!pick) continue;
 
       const view = areaPlugin.nodeViews.get(id);
@@ -292,6 +489,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
       const to = { x: pos.x + pick.dx / t.k, y: pos.y + pick.dy / t.k };
       updates.push({ id, from: { x: pos.x, y: pos.y }, to });
+      skipNodeIds.add(id);
     }
 
     animateNodeTranslations(updates);
@@ -318,10 +516,163 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       return v;
     };
 
-    for (const loop of opts.getLocalLoops()) {
+    const groupsSnapshot = get(nodeGroups);
+    const loopsSnapshot = opts.getLoopConstraintLoops();
+
+    const groupNodeSets = new Map<string, Set<string>>();
+    for (const g of groupsSnapshot) {
+      const gid = String(g.id);
+      const set = new Set((g.nodeIds ?? []).map((id) => String(id)));
+      groupNodeSets.set(gid, set);
+    }
+
+    const { byId, childrenByParentId } = buildGroupIndex(groupsSnapshot);
+
+    const groupBoundsCache = new Map<string, NodeBounds | null>();
+    const computeGroupBoundsCached = (groupId: string) =>
+      computeGroupFrameBoundsWithChildren(
+        groupId,
+        t,
+        byId,
+        childrenByParentId,
+        groupBoundsCache,
+        new Set()
+      );
+
+    const frameById = new Map<string, FrameInfo>();
+    const loopNodeSets = new Map<string, Set<string>>();
+
+    for (const loop of loopsSnapshot) {
+      const loopId = String(loop.id ?? '');
+      if (!loopId) continue;
+      const nodeIds = new Set((loop.nodeIds ?? []).map((id) => String(id)));
+      loopNodeSets.set(loopId, nodeIds);
       const bounds = computeLoopFrameBounds(loop);
       if (!bounds) continue;
-      const loopNodeSet = new Set((loop.nodeIds ?? []).map((id) => String(id)));
+      frameById.set(`loop:${loopId}`, {
+        id: `loop:${loopId}`,
+        kind: 'loop',
+        nodeIds,
+        bounds,
+      });
+    }
+
+    const editId = get(editModeGroupId);
+    for (const group of groupsSnapshot) {
+      const groupId = String(group.id ?? '');
+      if (!groupId) continue;
+      const nodeIds = groupNodeSets.get(groupId) ?? new Set();
+
+      let bounds: NodeBounds | null = null;
+      if (editId && editModeGroupBounds && editId === groupId) {
+        bounds = {
+          left: editModeGroupBounds.left * t.k + t.tx,
+          top: editModeGroupBounds.top * t.k + t.ty,
+          right: editModeGroupBounds.right * t.k + t.tx,
+          bottom: editModeGroupBounds.bottom * t.k + t.ty,
+        };
+      } else {
+        bounds = computeGroupBoundsCached(groupId);
+      }
+      if (!bounds) continue;
+      frameById.set(`group:${groupId}`, {
+        id: `group:${groupId}`,
+        kind: 'group',
+        nodeIds,
+        bounds,
+      });
+    }
+
+    const movedSet = new Set(nodeIds.map((id) => String(id)));
+    const movingGroupIds = new Set<string>();
+
+    for (const [groupId, nodeSet] of groupNodeSets.entries()) {
+      if (nodeSet.size === 0) continue;
+      let allMoved = true;
+      for (const nid of nodeSet) {
+        if (!movedSet.has(nid)) {
+          allMoved = false;
+          break;
+        }
+      }
+      if (allMoved) movingGroupIds.add(groupId);
+    }
+
+    const prunedMovingGroupIds = new Set<string>(movingGroupIds);
+    for (const groupId of movingGroupIds) {
+      let cursor = byId.get(groupId)?.parentId ? String(byId.get(groupId)?.parentId) : null;
+      while (cursor) {
+        if (movingGroupIds.has(cursor)) {
+          prunedMovingGroupIds.delete(groupId);
+          break;
+        }
+        cursor = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : null;
+      }
+    }
+
+    const movingGroupNodeIds = new Set<string>();
+    for (const groupId of prunedMovingGroupIds) {
+      const set = groupNodeSets.get(groupId);
+      if (!set) continue;
+      for (const nid of set) movingGroupNodeIds.add(nid);
+    }
+
+    const movingLoopIds = new Set<string>();
+    for (const [loopId, nodeSet] of loopNodeSets.entries()) {
+      if (nodeSet.size === 0) continue;
+      let allMoved = true;
+      for (const nid of nodeSet) {
+        if (!movedSet.has(nid)) {
+          allMoved = false;
+          break;
+        }
+      }
+      if (!allMoved) continue;
+
+      let coveredByGroup = true;
+      for (const nid of nodeSet) {
+        if (!movingGroupNodeIds.has(nid)) {
+          coveredByGroup = false;
+          break;
+        }
+      }
+      if (coveredByGroup) continue;
+
+      movingLoopIds.add(loopId);
+    }
+
+    const movingFrameIds = new Set<string>();
+    for (const groupId of prunedMovingGroupIds) {
+      const frameId = `group:${groupId}`;
+      if (frameById.has(frameId)) movingFrameIds.add(frameId);
+    }
+    for (const loopId of movingLoopIds) {
+      const frameId = `loop:${loopId}`;
+      if (frameById.has(frameId)) movingFrameIds.add(frameId);
+    }
+
+    const nodeToMovingFrameId = new Map<string, string>();
+    for (const frameId of movingFrameIds) {
+      const frame = frameById.get(frameId);
+      if (!frame) continue;
+      for (const nid of frame.nodeIds) {
+        const id = String(nid);
+        if (!nodeToMovingFrameId.has(id)) nodeToMovingFrameId.set(id, frameId);
+      }
+    }
+
+    const frameMoves: FrameMoveContext | undefined =
+      movingFrameIds.size > 0
+        ? { movingFrameIds, frameById, nodeToMovingFrameId, movedFrameIds: new Set() }
+        : undefined;
+
+    for (const loop of loopsSnapshot) {
+      const loopId = String(loop.id ?? '');
+      if (!loopId) continue;
+      const frame = frameById.get(`loop:${loopId}`);
+      const bounds = frame?.bounds;
+      if (!bounds) continue;
+      const loopNodeSet = loopNodeSets.get(loopId) ?? new Set();
 
       let shouldEnforce = false;
       for (const movedId of nodeIds) {
@@ -339,12 +690,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       }
       if (!shouldEnforce) continue;
 
-      pushNodesOutOfBounds(bounds, loopNodeSet);
+      pushNodesOutOfBounds(bounds, loopNodeSet, frameMoves);
     }
 
-    const editId = get(editModeGroupId);
     if (editId && editModeGroupBounds) {
-      const group = get(nodeGroups).find((g) => g.id === editId) ?? null;
+      const group = groupsSnapshot.find((g) => String(g.id) === String(editId)) ?? null;
       if (group) {
         const bounds: NodeBounds = {
           left: editModeGroupBounds.left * t.k + t.tx,
@@ -381,25 +731,87 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         }
 
         if (added.length > 0 || removed.length > 0) {
+          const groupsSnapshot = get(nodeGroups);
+          const byId = new Map<string, NodeGroup>();
+          const childrenByParentId = new Map<string, string[]>();
+
+          for (const g of groupsSnapshot) {
+            byId.set(String(g.id), g);
+            const pid = g.parentId ? String(g.parentId) : '';
+            if (!pid) continue;
+            const list = childrenByParentId.get(pid) ?? [];
+            list.push(String(g.id));
+            childrenByParentId.set(pid, list);
+          }
+
+          const targetAndAncestors = new Set<string>();
+          let cursor: string | null = String(group.id);
+          while (cursor) {
+            if (targetAndAncestors.has(cursor)) break;
+            targetAndAncestors.add(cursor);
+            const parent = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : '';
+            cursor = parent && byId.has(parent) ? parent : null;
+          }
+
+          const targetAndDescendants = new Set<string>();
+          const stack = [String(group.id)];
+          while (stack.length > 0) {
+            const id = stack.pop();
+            if (!id) continue;
+            if (targetAndDescendants.has(id)) continue;
+            targetAndDescendants.add(id);
+            const children = childrenByParentId.get(id) ?? [];
+            for (const childId of children) stack.push(childId);
+          }
+
+          const effectiveDisabled = Array.from(targetAndAncestors).some((id) => Boolean(byId.get(id)?.disabled));
+
           nodeGroups.update((groups) =>
-            groups.map((g) => (g.id === group.id ? { ...g, nodeIds: Array.from(nextSet) } : g))
+            groups.map((g) => {
+              const id = String(g.id);
+              let changed = false;
+              let nextNodeIds = Array.from((g.nodeIds ?? []).map((nid) => String(nid)));
+
+              if (added.length > 0 && targetAndAncestors.has(id)) {
+                const set = new Set(nextNodeIds);
+                for (const nid of added) {
+                  if (set.has(nid)) continue;
+                  set.add(nid);
+                  changed = true;
+                }
+                if (changed) nextNodeIds = Array.from(set);
+              }
+
+              if (removed.length > 0 && targetAndDescendants.has(id)) {
+                const set = new Set(nextNodeIds);
+                for (const nid of removed) {
+                  if (!set.has(nid)) continue;
+                  set.delete(nid);
+                  changed = true;
+                }
+                if (changed) nextNodeIds = Array.from(set);
+              }
+
+              return changed ? { ...g, nodeIds: nextNodeIds } : g;
+            })
           );
           recomputeDisabledNodes();
           opts.requestLoopFramesUpdate();
 
-          if (group.disabled && added.length > 0) {
+          if (effectiveDisabled && added.length > 0) {
             stopDeployedLoopsIntersecting(added.map(String));
           }
         }
       }
     }
 
-    for (const group of get(nodeGroups)) {
-      if (get(editModeGroupId) === group.id) continue;
+    for (const group of groupsSnapshot) {
+      if (editId && String(editId) === String(group.id)) continue;
 
-      const bounds = computeGroupFrameBounds(group, t);
+      const frame = frameById.get(`group:${String(group.id)}`);
+      const bounds = frame?.bounds ?? null;
       if (!bounds) continue;
-      const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
+      const groupNodeSet = groupNodeSets.get(String(group.id)) ?? new Set();
 
       let shouldEnforce = false;
       for (const movedId of nodeIds) {
@@ -417,29 +829,256 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       }
       if (!shouldEnforce) continue;
 
-      pushNodesOutOfBounds(bounds, groupNodeSet);
+      pushNodesOutOfBounds(bounds, groupNodeSet, frameMoves);
     }
   };
 
-  const createGroupFromSelection = () => {
-    const initialIds = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
-    if (initialIds.length === 0) return;
+  const pickGroupAtPoint = (groups: NodeGroup[], px: number, py: number, t: AreaTransform): NodeGroup | null => {
+    let picked: NodeGroup | null = null;
+    let pickedArea = Number.POSITIVE_INFINITY;
 
-    const ids = new Set(initialIds);
+    for (const group of groups) {
+      let bounds: NodeBounds | null = null;
+
+      if (get(editModeGroupId) === group.id && editModeGroupBounds) {
+        bounds = {
+          left: editModeGroupBounds.left * t.k + t.tx,
+          top: editModeGroupBounds.top * t.k + t.ty,
+          right: editModeGroupBounds.right * t.k + t.tx,
+          bottom: editModeGroupBounds.bottom * t.k + t.ty,
+        };
+      } else {
+        bounds = computeGroupFrameBounds(group, t);
+      }
+
+      if (!bounds) continue;
+      const inside = px >= bounds.left && px <= bounds.right && py >= bounds.top && py <= bounds.bottom;
+      if (!inside) continue;
+
+      const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
+      if (area < pickedArea) {
+        picked = group;
+        pickedArea = area;
+      }
+    }
+
+    return picked;
+  };
+
+  const addNodeToGroupChain = (groupId: string, nodeId: string) => {
+    const rootId = String(groupId ?? '');
+    const createdId = String(nodeId ?? '');
+    if (!rootId || !createdId) return;
+
+    const groupsSnapshot = get(nodeGroups);
+    const byId = new Map<string, NodeGroup>();
+    for (const g of groupsSnapshot) byId.set(String(g.id), g);
+
+    const targetAndAncestors = new Set<string>();
+    let cursor: string | null = rootId;
+    while (cursor) {
+      if (targetAndAncestors.has(cursor)) break;
+      targetAndAncestors.add(cursor);
+      const parent = byId.get(cursor)?.parentId ? String(byId.get(cursor)?.parentId) : '';
+      cursor = parent && byId.has(parent) ? parent : null;
+    }
+
+    const effectiveDisabled = Array.from(targetAndAncestors).some((id) => Boolean(byId.get(id)?.disabled));
+
+    let didAdd = false;
+    nodeGroups.update((groups) =>
+      groups.map((g) => {
+        if (!targetAndAncestors.has(String(g.id))) return g;
+        const set = new Set((g.nodeIds ?? []).map((id) => String(id)));
+        if (set.has(createdId)) return g;
+        set.add(createdId);
+        if (String(g.id) === rootId) didAdd = true;
+        return { ...g, nodeIds: Array.from(set) };
+      })
+    );
+
+    if (!didAdd) return;
+
+    recomputeDisabledNodes();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+
+    if (effectiveDisabled) stopDeployedLoopsIntersecting([createdId]);
+  };
+
+  const autoAddNodeToGroupFromPosition = (nodeId: string, graphPos: { x: number; y: number }) => {
+    const createdId = String(nodeId ?? '');
+    if (!createdId) return;
+
+    const t = readAreaTransform(opts.getAreaPlugin());
+    if (!t) return;
+
+    const gx = Number(graphPos?.x);
+    const gy = Number(graphPos?.y);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+
+    const px = gx * t.k + t.tx;
+    const py = gy * t.k + t.ty;
+
+    const groupsSnapshot = get(nodeGroups);
+    if (groupsSnapshot.length === 0) return;
+
+    const picked = pickGroupAtPoint(groupsSnapshot, px, py, t);
+    if (!picked) return;
+
+    addNodeToGroupChain(picked.id, createdId);
+  };
+
+  const autoAddNodeToGroupFromConnectDrop = (
+    initialNodeId: string,
+    newNodeId: string,
+    dropGraphPos: { x: number; y: number }
+  ) => {
+    const initialId = String(initialNodeId ?? '');
+    const createdId = String(newNodeId ?? '');
+    if (!initialId || !createdId) return;
+
+    const t = readAreaTransform(opts.getAreaPlugin());
+    if (!t) return;
+
+    const gx = Number(dropGraphPos?.x);
+    const gy = Number(dropGraphPos?.y);
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+
+    // Convert the pick/drop graph position into the overlay coordinate space (container pixels).
+    const px = gx * t.k + t.tx;
+    const py = gy * t.k + t.ty;
+
+    const candidates = get(nodeGroups).filter((g) => (g.nodeIds ?? []).some((id) => String(id) === initialId));
+    if (candidates.length === 0) return;
+
+    const picked = pickGroupAtPoint(candidates, px, py, t);
+
+    if (!picked) return;
+    addNodeToGroupChain(picked.id, createdId);
+  };
+
+  const createGroupFromSelection = () => {
+    const selected = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
+    if (selected.length === 0) return;
+
+    const groups = get(nodeGroups);
+    const byId = new Map<string, NodeGroup>();
+    const groupNodeSets = new Map<string, Set<string>>();
+    const nodeToGroupIds = new Map<string, string[]>();
+
+    for (const g of groups) {
+      const id = String(g.id);
+      byId.set(id, { ...g, id, parentId: g.parentId ? String(g.parentId) : null });
+      const set = new Set((g.nodeIds ?? []).map((nid) => String(nid)));
+      groupNodeSets.set(id, set);
+      for (const nid of set) {
+        const list = nodeToGroupIds.get(nid) ?? [];
+        list.push(id);
+        nodeToGroupIds.set(nid, list);
+      }
+    }
+
+    const depthCache = new Map<string, number>();
+    const getDepth = (groupId: string, visiting = new Set<string>()): number => {
+      const cached = depthCache.get(groupId);
+      if (cached !== undefined) return cached;
+      if (visiting.has(groupId)) return 0;
+      visiting.add(groupId);
+
+      const g = byId.get(groupId);
+      const parentId = g?.parentId && byId.has(String(g.parentId)) ? String(g.parentId) : null;
+      const depth = parentId ? getDepth(parentId, visiting) + 1 : 0;
+
+      visiting.delete(groupId);
+      depthCache.set(groupId, depth);
+      return depth;
+    };
+
+    const getPrimaryGroupIdForNode = (nodeId: string): string | null => {
+      const groupIds = nodeToGroupIds.get(String(nodeId)) ?? [];
+      if (groupIds.length === 0) return null;
+
+      let bestId: string | null = null;
+      let bestDepth = -1;
+      let bestSize = Number.POSITIVE_INFINITY;
+
+      for (const gid of groupIds) {
+        const depth = getDepth(gid);
+        const size = groupNodeSets.get(gid)?.size ?? Number.POSITIVE_INFINITY;
+        if (depth > bestDepth || (depth === bestDepth && size < bestSize)) {
+          bestId = gid;
+          bestDepth = depth;
+          bestSize = size;
+        }
+      }
+
+      return bestId;
+    };
+
+    let parentId: string | null = null;
+    let parentDepth = -1;
+    let parentSize = Number.POSITIVE_INFINITY;
+
+    for (const g of groups) {
+      const gid = String(g.id);
+      const set = groupNodeSets.get(gid);
+      if (!set) continue;
+      const containsAll = selected.every((id) => set.has(String(id)));
+      if (!containsAll) continue;
+
+      const depth = getDepth(gid);
+      const size = set.size;
+      if (depth > parentDepth || (depth === parentDepth && size < parentSize)) {
+        parentId = gid;
+        parentDepth = depth;
+        parentSize = size;
+      }
+    }
+
+    const denied: string[] = [];
+    const ids = new Set<string>();
+
+    for (const nodeId of selected) {
+      const primary = getPrimaryGroupIdForNode(nodeId);
+      const allowed = parentId ? primary === parentId : primary === null;
+      if (!allowed) {
+        denied.push(nodeId);
+        continue;
+      }
+      ids.add(nodeId);
+    }
+
+    if (denied.length > 0) showCanvasToast('无法创建跨组组合');
+    if (ids.size === 0) return;
+
+    const isEligibleLoopNode = (nodeId: string): boolean => {
+      const primary = getPrimaryGroupIdForNode(nodeId);
+      return parentId ? primary === parentId : primary === null;
+    };
+
     for (const loop of opts.getLocalLoops()) {
-      if (!loop?.nodeIds?.some((id) => ids.has(String(id)))) continue;
-      for (const nid of loop.nodeIds) ids.add(String(nid));
+      if (!loop?.nodeIds?.length) continue;
+      const loopIds = loop.nodeIds.map((id) => String(id));
+      if (!loopIds.some((id) => ids.has(id))) continue;
+      if (!loopIds.every((id) => isEligibleLoopNode(id))) continue;
+      for (const nid of loopIds) ids.add(nid);
     }
 
     const groupId = `group:${crypto.randomUUID?.() ?? Date.now()}`;
-    const nextName = `Group ${get(nodeGroups).length + 1}`;
+    const nextName = parentId
+      ? `Sub Group ${(groups.filter((g) => String(g.parentId ?? '') === String(parentId)).length ?? 0) + 1}`
+      : `Group ${groups.filter((g) => !g.parentId).length + 1}`;
+
     const group: NodeGroup = {
       id: groupId,
+      parentId,
       name: nextName,
       nodeIds: Array.from(ids),
       disabled: false,
     };
-    nodeGroups.set([...get(nodeGroups), group]);
+
+    nodeGroups.set([...groups, group]);
     recomputeDisabledNodes();
 
     groupSelectionNodeIds.set(new Set());
@@ -476,14 +1115,41 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const disassembleGroup = (groupId: string) => {
-    if (!groupId) return;
-    if (!get(nodeGroups).some((g) => g.id === groupId)) return;
-    if (get(editModeGroupId) === groupId) {
+    const rootId = String(groupId ?? '');
+    if (!rootId) return;
+
+    const groups = get(nodeGroups);
+    if (!groups.some((g) => String(g.id) === rootId)) return;
+
+    const childrenByParentId = new Map<string, string[]>();
+    for (const g of groups) {
+      const pid = g.parentId ? String(g.parentId) : '';
+      if (!pid) continue;
+      const list = childrenByParentId.get(pid) ?? [];
+      list.push(String(g.id));
+      childrenByParentId.set(pid, list);
+    }
+
+    const toRemove = new Set<string>();
+    const stack = [rootId];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (!id) continue;
+      if (toRemove.has(id)) continue;
+      toRemove.add(id);
+      const children = childrenByParentId.get(id) ?? [];
+      for (const childId of children) stack.push(childId);
+    }
+
+    const editingId = get(editModeGroupId);
+    if (editingId && toRemove.has(String(editingId))) {
       editModeGroupId.set(null);
       editModeGroupBounds = null;
       clearGroupEditToast();
+      opts.requestLoopFramesUpdate();
     }
-    nodeGroups.set(get(nodeGroups).filter((g) => g.id !== groupId));
+
+    nodeGroups.set(groups.filter((g) => !toRemove.has(String(g.id))));
     recomputeDisabledNodes(get(nodeGroups));
     opts.requestLoopFramesUpdate();
   };
@@ -537,7 +1203,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       groupFrames.set([]);
       return;
     }
-    if (get(nodeGroups).length === 0) {
+    const groups = get(nodeGroups);
+    if (groups.length === 0) {
       groupFrames.set([]);
       return;
     }
@@ -548,16 +1215,49 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       return;
     }
 
-    const paddingX = 52;
-    const paddingTop = 64;
-    const paddingBottom = 52;
+    const { byId, childrenByParentId } = buildGroupIndex(groups);
 
-    const loopPaddingX = 56;
-    const loopPaddingTop = 64;
-    const loopPaddingBottom = 64;
+    const depthCache = new Map<string, number>();
+    const getDepth = (groupId: string, visiting = new Set<string>()): number => {
+      const cached = depthCache.get(groupId);
+      if (cached !== undefined) return cached;
+      if (visiting.has(groupId)) return 0;
+      visiting.add(groupId);
+
+      const g = byId.get(groupId);
+      const parentId = g?.parentId && byId.has(String(g.parentId)) ? String(g.parentId) : null;
+      const depth = parentId ? getDepth(parentId, visiting) + 1 : 0;
+
+      visiting.delete(groupId);
+      depthCache.set(groupId, depth);
+      return depth;
+    };
+
+    const effectiveDisabledCache = new Map<string, boolean>();
+    const getEffectiveDisabled = (groupId: string, visiting = new Set<string>()): boolean => {
+      const cached = effectiveDisabledCache.get(groupId);
+      if (cached !== undefined) return cached;
+      if (visiting.has(groupId)) return false;
+      visiting.add(groupId);
+
+      const g = byId.get(groupId);
+      const parentId = g?.parentId && byId.has(String(g.parentId)) ? String(g.parentId) : null;
+      const effective = Boolean(g?.disabled) || (parentId ? getEffectiveDisabled(parentId, visiting) : false);
+
+      visiting.delete(groupId);
+      effectiveDisabledCache.set(groupId, effective);
+      return effective;
+    };
+
+    const boundsCache = new Map<string, NodeBounds | null>();
+    const computeBoundsCached = (groupId: string) =>
+      computeGroupFrameBoundsWithChildren(groupId, t, byId, childrenByParentId, boundsCache, new Set());
 
     const frames: GroupFrame[] = [];
-    for (const group of get(nodeGroups)) {
+    for (const group of groups) {
+      const depth = getDepth(String(group.id));
+      const effectiveDisabled = getEffectiveDisabled(String(group.id));
+
       if (get(editModeGroupId) === group.id && editModeGroupBounds) {
         const left = editModeGroupBounds.left * t.k + t.tx;
         const top = editModeGroupBounds.top * t.k + t.ty;
@@ -569,41 +1269,27 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
           top,
           width: right - left,
           height: bottom - top,
+          effectiveDisabled,
+          depth,
         });
         continue;
       }
 
-      const base = unionBounds(areaPlugin, group.nodeIds, t);
-      if (!base) continue;
-
-      let bounds = { ...base };
-      const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
-      for (const loop of opts.getLocalLoops()) {
-        if (!loop?.nodeIds?.length) continue;
-        const fullyContained = loop.nodeIds.every((id) => groupNodeSet.has(String(id)));
-        if (!fullyContained) continue;
-        const lb = unionBounds(areaPlugin, loop.nodeIds, t);
-        if (!lb) continue;
-        bounds.left = Math.min(bounds.left, lb.left - loopPaddingX);
-        bounds.top = Math.min(bounds.top, lb.top - loopPaddingTop);
-        bounds.right = Math.max(bounds.right, lb.right + loopPaddingX);
-        bounds.bottom = Math.max(bounds.bottom, lb.bottom + loopPaddingBottom);
-      }
-
-      const localLeft = bounds.left - paddingX;
-      const localTop = bounds.top - paddingTop;
-      const localWidth = bounds.right - bounds.left + paddingX * 2;
-      const localHeight = bounds.bottom - bounds.top + paddingTop + paddingBottom;
+      const bounds = computeBoundsCached(String(group.id));
+      if (!bounds) continue;
 
       frames.push({
         group,
-        left: localLeft,
-        top: localTop,
-        width: localWidth,
-        height: localHeight,
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.right - bounds.left,
+        height: bounds.bottom - bounds.top,
+        effectiveDisabled,
+        depth,
       });
     }
 
+    frames.sort((a, b) => a.depth - b.depth);
     groupFrames.set(frames);
   };
 
@@ -763,6 +1449,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     groupSelectionNodeIds,
     groupSelectionBounds,
     editModeGroupId,
+    canvasToast,
     groupEditToast,
     groupDisabledNodeIds,
     marqueeRect,
@@ -775,10 +1462,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     disassembleGroup,
     renameGroup,
     toggleGroupEditMode,
+    autoAddNodeToGroupFromPosition,
+    autoAddNodeToGroupFromConnectDrop,
     handleDroppedNodesAfterDrag,
     onPointerDown,
     destroy: () => {
       clearGroupEditToast();
+      clearCanvasToast();
       if (framesRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(framesRaf);
       framesRaf = 0;
       if (marqueeMoveHandler)
@@ -791,6 +1481,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       marqueeUpHandler = null;
     },
     isProgrammaticTranslate,
+    beginProgrammaticTranslate,
+    endProgrammaticTranslate,
     computeLoopFrameBounds,
     pushNodesOutOfBounds,
   };

@@ -249,6 +249,8 @@ export class NodeRuntime {
       outEdges.set(node.id, []);
     }
 
+    const uniqueEdges = new Set<string>();
+
     for (const conn of this.connections) {
       const targetNode = nodeMap.get(conn.targetNodeId);
       if (targetNode) {
@@ -256,6 +258,10 @@ export class NodeRuntime {
         const port = def?.inputs.find((p) => p.id === conn.targetPortId);
         if (port?.kind === 'sink') continue;
       }
+
+      const edgeKey = `${conn.sourceNodeId}::${conn.targetNodeId}`;
+      if (uniqueEdges.has(edgeKey)) continue;
+      uniqueEdges.add(edgeKey);
 
       inDegree.set(conn.targetNodeId, (inDegree.get(conn.targetNodeId) ?? 0) + 1);
       const outs = outEdges.get(conn.sourceNodeId) ?? [];
@@ -524,11 +530,26 @@ export class NodeRuntime {
       if (Object.keys(sinkInputs).length === 0) continue;
 
       let changed = false;
+      const prevSinkValues: Record<string, unknown> = {};
       for (const [portId, next] of Object.entries(sinkInputs)) {
-        if (!this.deepEqual(node.inputValues[portId], next)) changed = true;
+        const prev = node.inputValues[portId];
+        prevSinkValues[portId] = prev;
+        if (!this.deepEqual(prev, next)) changed = true;
         node.inputValues[portId] = next;
       }
       if (!changed) continue;
+
+      // Special-case: for "command" sink ports receiving multiple commands, only deliver the changed
+      // subset. This avoids re-triggering unrelated effects when one command in the bundle changes.
+      for (const [portId, next] of Object.entries(sinkInputs)) {
+        const port = def.inputs.find((p) => p.id === portId);
+        if (!port || port.kind !== 'sink' || port.type !== 'command') continue;
+
+        const prev = prevSinkValues[portId];
+        if (!Array.isArray(next) || !Array.isArray(prev)) continue;
+
+        sinkInputs[portId] = this.diffCommandArray(prev, next);
+      }
 
       // Count sink values for a simple burst watchdog.
       for (const value of Object.values(sinkInputs)) {
@@ -589,5 +610,51 @@ export class NodeRuntime {
       }
     }
     return false;
+  }
+
+  private diffCommandArray(prev: unknown[], next: unknown[]): unknown[] {
+    const signatureOf = (value: unknown): string => {
+      if (value === null) return 'null';
+      if (value === undefined) return 'undefined';
+      if (typeof value === 'string') return `str:${value}`;
+      if (typeof value === 'number') return Number.isFinite(value) ? `num:${value}` : `num:${String(value)}`;
+      if (typeof value === 'boolean') return `bool:${value}`;
+      try {
+        return `json:${JSON.stringify(value)}`;
+      } catch {
+        return `obj:${Object.prototype.toString.call(value)}`;
+      }
+    };
+
+    const keyFor = (cmd: any, counts: Map<string, number>): string => {
+      const action = typeof cmd?.action === 'string' ? String(cmd.action) : '';
+      if (!action) return '';
+      const idx = counts.get(action) ?? 0;
+      counts.set(action, idx + 1);
+      return `${action}#${idx}`;
+    };
+
+    const prevSignatures = new Map<string, string>();
+    const prevCounts = new Map<string, number>();
+    for (const cmd of prev) {
+      const key = keyFor(cmd, prevCounts);
+      if (!key) continue;
+      prevSignatures.set(key, signatureOf(cmd));
+    }
+
+    const changed: unknown[] = [];
+    const nextCounts = new Map<string, number>();
+    for (const cmd of next) {
+      const key = keyFor(cmd, nextCounts);
+      // If we can't key this command, treat it as changed (best-effort safety).
+      if (!key) {
+        changed.push(cmd);
+        continue;
+      }
+      const sig = signatureOf(cmd);
+      if (prevSignatures.get(key) !== sig) changed.push(cmd);
+    }
+
+    return changed;
   }
 }

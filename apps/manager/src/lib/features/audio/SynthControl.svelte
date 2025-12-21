@@ -9,6 +9,7 @@
   export let useSync = true;
   export let syncDelay = 500;
 
+  let playingStartAt = 0;
   let playingUntil = 0;
   let updateTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -34,6 +35,29 @@
     const lfo = Number($modLfo) || 12;
     const freq = Number($frequency) || 180;
     const vol = clamp01(Number($volume) || 0.7);
+
+    const localStartAt = useSync ? Date.now() + syncDelay : Date.now();
+    const active = Date.now() < playingUntil;
+
+    if (active) {
+      // If something is already playing, update parameters without re-triggering playback.
+      modulateSoundUpdate(
+        {
+          frequency: freq,
+          volume: vol,
+          waveform: $waveform,
+          modFrequency: depth > 0 ? lfo : undefined,
+          modDepth: depth > 0 ? depth : undefined,
+          durationMs: durMs,
+        },
+        toAll,
+        getExecuteAt()
+      );
+      // Keep the original start time, but allow duration changes to adjust the planned end.
+      playingUntil = (playingStartAt || localStartAt) + durMs + 200;
+      return;
+    }
+
     modulateSound(
       {
         frequency: freq,
@@ -46,7 +70,8 @@
       toAll,
       getExecuteAt()
     );
-    playingUntil = Date.now() + durMs + 200; // basic release buffer
+    playingStartAt = localStartAt;
+    playingUntil = localStartAt + durMs + 200; // basic release buffer
   }
 
   function queueUpdate() {
@@ -115,6 +140,7 @@
       <Button
         variant="ghost"
         on:click={() => {
+          playingStartAt = 0;
           playingUntil = 0;
           stopSound(false);
         }}
@@ -125,6 +151,7 @@
       <Button
         variant="ghost"
         on:click={() => {
+          playingStartAt = 0;
           playingUntil = 0;
           stopSound(true);
         }}

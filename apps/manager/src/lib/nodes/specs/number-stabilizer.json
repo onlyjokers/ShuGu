@@ -1,7 +1,7 @@
 {
   "type": "number-stabilizer",
   "label": "Number Stabilizer",
-  "category": "Math",
+  "category": "Logic",
   "inputs": [{ "id": "in", "label": "In", "type": "number", "defaultValue": 0 }],
   "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
   "configSchema": [

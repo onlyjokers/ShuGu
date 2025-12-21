@@ -28,10 +28,6 @@ export type MidiBindingTargetV1 =
       kind: 'param';
       path: string;
       mode: MidiBindingMode;
-    }
-  | {
-      kind: 'client-selection';
-      mode: 'range' | 'object';
     };
 
 export type MidiBindingTemplateV1 = {
@@ -164,6 +160,13 @@ export function detectMidiBindings(graph: GraphState): DetectedMidiBinding[] {
     const targetPortId = String(outConn.targetPortId);
     const targetType = String(targetNode.type);
 
+    if (
+      targetType === 'manager-select-clients-range' ||
+      targetType === 'manager-select-clients-object'
+    ) {
+      continue;
+    }
+
     const source = midiSourceFromNode(midiNode);
     const mapping = mapConfigFromNode(mapNode);
 
@@ -175,12 +178,6 @@ export function detectMidiBindings(graph: GraphState): DetectedMidiBinding[] {
       const mode: MidiBindingMode = modeRaw === 'MODULATION' ? 'MODULATION' : 'REMOTE';
       label = path ? `Parameter · ${path}` : 'Parameter · (unset)';
       target = { kind: 'param', path, mode };
-    } else if (targetType === 'manager-select-clients-range') {
-      label = 'Clients · Range';
-      target = { kind: 'client-selection', mode: 'range' };
-    } else if (targetType === 'manager-select-clients-object') {
-      label = 'Clients · Object';
-      target = { kind: 'client-selection', mode: 'object' };
     } else {
       target = { kind: 'node-input', nodeType: targetType, inputId: targetPortId, nodeConfig: { ...targetNode.config } };
     }
@@ -244,9 +241,6 @@ export function parseMidiTemplateFile(payload: unknown): MidiTemplateFileV1 | nu
       const modeRaw = String(targetRaw.mode ?? 'REMOTE');
       const mode: MidiBindingMode = modeRaw === 'MODULATION' ? 'MODULATION' : 'REMOTE';
       target = { kind: 'param', path, mode };
-    } else if (targetRaw.kind === 'client-selection') {
-      const mode = targetRaw.mode === 'object' ? 'object' : 'range';
-      target = { kind: 'client-selection', mode };
     } else if (targetRaw.kind === 'node-input') {
       const nodeType = typeof targetRaw.nodeType === 'string' ? targetRaw.nodeType : '';
       const inputId = typeof targetRaw.inputId === 'string' ? targetRaw.inputId : '';
@@ -337,13 +331,6 @@ export function instantiateMidiBinding(template: MidiBindingTemplateV1, opts: In
       mode: template.target.mode,
     });
     targetPortId = 'value';
-  } else if (template.target.kind === 'client-selection') {
-    const type =
-      template.target.mode === 'object'
-        ? 'manager-select-clients-object'
-        : 'manager-select-clients-range';
-    targetNodeId = instantiateNode(type, targetPos, {});
-    targetPortId = 'in';
   } else if (template.target.kind === 'node-input') {
     if (!template.target.nodeType || !template.target.inputId) return null;
     targetNodeId = instantiateNode(template.target.nodeType, targetPos, template.target.nodeConfig ?? {});
@@ -404,10 +391,7 @@ export function removeMidiBinding(binding: DetectedMidiBinding): void {
 
   // Only auto-remove "target" nodes if they are template-ish utility nodes.
   const targetType = nodeEngine.getNode(binding.targetNodeId)?.type;
-  const removableTarget =
-    targetType === 'param-set' ||
-    targetType === 'manager-select-clients-range' ||
-    targetType === 'manager-select-clients-object';
+  const removableTarget = targetType === 'param-set';
   if (removableTarget && !nodeHasEdges(binding.targetNodeId)) nodeEngine.removeNode(binding.targetNodeId);
 }
 
@@ -448,16 +432,6 @@ export function templateForNodeInput(opts: {
       inputId: opts.inputId,
       nodeConfig: opts.nodeConfig ?? {},
     },
-  };
-}
-
-export function templateForClientSelection(mode: 'range' | 'object'): MidiBindingTemplateV1 {
-  return {
-    id: generateId('tpl'),
-    label: mode === 'object' ? 'Clients · Object' : 'Clients · Range',
-    source: null,
-    mapping: { min: 0, max: 1, invert: false, round: false },
-    target: { kind: 'client-selection', mode },
   };
 }
 

@@ -13,7 +13,6 @@
     migrateLegacyMidiParamBindings,
     parseMidiTemplateFile,
     removeMidiBinding,
-    templateForClientSelection,
     templateForNodeInput,
     templateForParam,
     type DetectedMidiBinding,
@@ -32,10 +31,7 @@
   let graphUnsub: (() => void) | null = null;
   let unsubscribeRegistry: (() => void) | null = null;
 
-  type MidiTarget =
-    | { type: 'PARAM'; path: string }
-    | { type: 'CLIENT_RANGE' }
-    | { type: 'CLIENT_OBJECT' };
+  type MidiTarget = { type: 'PARAM'; path: string };
 
   type TargetOption = { id: string; label: string; target: MidiTarget };
   type ParamGroup = { key: string; label: string; params: TargetOption[] };
@@ -118,16 +114,7 @@
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
 
-    const clientGroup: ParamGroup = {
-      key: 'Clients',
-      label: 'Clients',
-      params: [
-        { id: 'clients:range', label: 'Range', target: { type: 'CLIENT_RANGE' } },
-        { id: 'clients:object', label: 'Object', target: { type: 'CLIENT_OBJECT' } },
-      ],
-    };
-
-    availableGroups = [clientGroup, ...nextGroups];
+    availableGroups = [...nextGroups];
 
     if (!availableGroups.some((g) => g.key === selectedGroupKey)) {
       selectedGroupKey = availableGroups[0]?.key ?? '';
@@ -182,9 +169,6 @@
   }
 
   function createTemplateForTarget(target: MidiTarget): MidiBindingTemplateV1 | null {
-    if (target.type === 'CLIENT_RANGE') return templateForClientSelection('range');
-    if (target.type === 'CLIENT_OBJECT') return templateForClientSelection('object');
-
     const param = parameterRegistry.get<number>(target.path) as Parameter<number> | undefined;
     if (!param) return null;
 

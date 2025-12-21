@@ -1,6 +1,6 @@
 import process from 'node:process';
 
-import { NodeExecutor } from '../../dist/node-executor.js';
+import { NodeExecutor } from '../../dist-out/node-executor.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

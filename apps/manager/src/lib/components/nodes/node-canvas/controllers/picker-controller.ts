@@ -16,6 +16,9 @@ export type PickerItem = {
   matchPort?: { id: string; label: string; side: 'input' | 'output'; type: PortType };
 };
 
+type UsageEntry = { count: number; lastUsed: number };
+type UsageMap = Record<string, UsageEntry>;
+
 type PickerControllerOptions = {
   nodeRegistry: NodeRegistry;
   getContainer: () => HTMLDivElement | null;
@@ -27,6 +30,30 @@ type PickerControllerOptions = {
   addConnection: (conn: EngineConnection) => void;
 };
 
+const PICKER_HISTORY_KEY = 'shugu.nodePickerHistory.v1';
+
+const readUsageMap = (): UsageMap => {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(PICKER_HISTORY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as UsageMap;
+  } catch {
+    return {};
+  }
+};
+
+const writeUsageMap = (next: UsageMap) => {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(PICKER_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+};
+
 export function createPickerController(opts: PickerControllerOptions) {
   const isOpen = writable(false);
   const mode = writable<PickerMode>('add');
@@ -35,6 +62,7 @@ export function createPickerController(opts: PickerControllerOptions) {
   const selectedCategory = writable('Objects');
   const query = writable('');
   const initialSocket = writable<SocketData | null>(null);
+  const usageMap = writable<UsageMap>(readUsageMap());
 
   let pickerElement: HTMLDivElement | null = null;
   let lastConnectPickerOpenedAt = 0;
@@ -96,15 +124,36 @@ export function createPickerController(opts: PickerControllerOptions) {
     return cats.includes('Objects') ? ['Objects', ...rest] : rest;
   });
 
-  const items = derived([itemsByCategory, selectedCategory], ([$itemsByCategory, $selectedCategory]) => {
-    return $itemsByCategory.get($selectedCategory) ?? [];
-  });
+  const items = derived(
+    [itemsByCategory, selectedCategory, usageMap],
+    ([$itemsByCategory, $selectedCategory, $usageMap]) => {
+      if (!$selectedCategory) {
+        const flat: PickerItem[] = [];
+        for (const list of $itemsByCategory.values()) {
+          for (const item of list) flat.push(item);
+        }
+
+        return flat.sort((a, b) => {
+          const aUsage = $usageMap[a.type];
+          const bUsage = $usageMap[b.type];
+          const aCount = aUsage?.count ?? 0;
+          const bCount = bUsage?.count ?? 0;
+          if (aCount !== bCount) return bCount - aCount;
+          const aLast = aUsage?.lastUsed ?? 0;
+          const bLast = bUsage?.lastUsed ?? 0;
+          if (aLast !== bLast) return bLast - aLast;
+          return a.label.localeCompare(b.label);
+        });
+      }
+
+      return $itemsByCategory.get($selectedCategory) ?? [];
+    }
+  );
 
   categories.subscribe((cats) => {
-    if (!get(isOpen)) return;
-    if (cats.length > 0 && !cats.includes(get(selectedCategory))) {
-      selectedCategory.set(cats[0] ?? '');
-    }
+    const current = get(selectedCategory);
+    if (!current) return; // allow "All"
+    if (cats.length > 0 && !cats.includes(current)) selectedCategory.set(cats[0] ?? '');
   });
 
   const clampPickerToBounds = async () => {
@@ -141,7 +190,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     mode.set(optsOpen.mode);
     initialSocket.set(optsOpen.initialSocket ?? null);
     query.set('');
-    selectedCategory.set('Objects');
+    selectedCategory.set(optsOpen.mode === 'connect' ? '' : 'Objects');
     isOpen.set(true);
     void clampPickerToBounds();
   };
@@ -162,6 +211,15 @@ export function createPickerController(opts: PickerControllerOptions) {
   const handlePick = (item: PickerItem) => {
     const nodeId = opts.addNode(item.type, get(graphPos));
     if (!nodeId) return;
+
+    const currentUsage = get(usageMap);
+    const prev = currentUsage[item.type] ?? { count: 0, lastUsed: 0 };
+    const nextUsage = {
+      ...currentUsage,
+      [item.type]: { count: prev.count + 1, lastUsed: Date.now() },
+    };
+    usageMap.set(nextUsage);
+    writeUsageMap(nextUsage);
 
     const initial = get(initialSocket);
     if (get(mode) === 'connect' && initial && item.matchPort) {

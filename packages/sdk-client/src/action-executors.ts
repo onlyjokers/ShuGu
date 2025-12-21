@@ -18,7 +18,12 @@ export class FlashlightController {
     private stream: MediaStream | null = null;
     private track: MediaStreamTrack | null = null;
     private blinkIntervalId: ReturnType<typeof setInterval> | null = null;
+    private blinkFrequency = 2;
+    private blinkDutyCycle = 0.5;
+    private blinkStartMs = 0;
+    private blinkState = false;
     private isOn = false;
+    private mode: FlashlightPayload['mode'] = 'off';
     private fallbackElement: HTMLElement | null = null;
 
     /**
@@ -58,22 +63,44 @@ export class FlashlightController {
      * Set flashlight mode
      */
     async setMode(payload: FlashlightPayload): Promise<void> {
+        const mode = payload.mode ?? 'off';
+
+        if (mode === 'blink') {
+            const frequency = this.clamp(payload.frequency ?? this.blinkFrequency, 0.1, 30);
+            const dutyCycle = this.clamp(payload.dutyCycle ?? this.blinkDutyCycle, 0.05, 0.95);
+            const modeChanged = this.mode !== 'blink';
+            this.mode = 'blink';
+            this.blinkFrequency = frequency;
+            this.blinkDutyCycle = dutyCycle;
+            if (modeChanged) {
+                this.blinkStartMs = 0;
+                this.blinkState = false;
+            }
+            // Preserve blink phase on parameter updates.
+            this.startBlinkLoop();
+            return;
+        }
+
+        this.mode = mode;
         this.stopBlink();
 
-        switch (payload.mode) {
-            case 'off':
-                await this.setTorch(false);
+        switch (mode) {
+            case 'off': {
+                if (this.isOn) {
+                    await this.setTorch(false);
+                }
                 this.hideFallback();
                 break;
-            case 'on':
-                {
+            }
+            case 'on': {
+                if (!this.isOn) {
                     const success = await this.setTorch(true);
                     if (!success) this.showFallback();
-                    break;
+                } else {
+                    this.hideFallback();
                 }
-            case 'blink':
-                this.startBlink(payload.frequency ?? 2, payload.dutyCycle ?? 0.5);
                 break;
+            }
         }
     }
 
@@ -108,22 +135,35 @@ export class FlashlightController {
         }
     }
 
-    private startBlink(frequency: number, dutyCycle: number): void {
+    private startBlinkLoop(): void {
+        if (this.blinkIntervalId) return;
+        this.tickBlink();
+        this.blinkIntervalId = setInterval(() => this.tickBlink(), 80);
+    }
+
+    private tickBlink(): void {
+        if (this.mode !== 'blink') return;
+        const frequency = this.clamp(this.blinkFrequency, 0.1, 30);
+        const dutyCycle = this.clamp(this.blinkDutyCycle, 0.05, 0.95);
         const period = 1000 / frequency;
-        const onTime = period * dutyCycle;
+        if (!this.blinkStartMs) this.blinkStartMs = Date.now();
+        const elapsed = Date.now() - this.blinkStartMs;
+        const phase = (elapsed % period) / period;
+        const shouldBeOn = phase < dutyCycle;
 
-        const doBlink = async () => {
-            const success = await this.setTorch(true);
+        if (shouldBeOn === this.blinkState) return;
+        this.blinkState = shouldBeOn;
+        void this.applyBlinkState(shouldBeOn);
+    }
+
+    private async applyBlinkState(shouldBeOn: boolean): Promise<void> {
+        const success = await this.setTorch(shouldBeOn);
+        if (shouldBeOn) {
             if (!success) this.showFallback();
-
-            setTimeout(async () => {
-                await this.setTorch(false);
-                this.hideFallback();
-            }, onTime);
-        };
-
-        doBlink();
-        this.blinkIntervalId = setInterval(doBlink, period);
+            else this.hideFallback();
+        } else {
+            this.hideFallback();
+        }
     }
 
     private stopBlink(): void {
@@ -131,6 +171,13 @@ export class FlashlightController {
             clearInterval(this.blinkIntervalId);
             this.blinkIntervalId = null;
         }
+        this.blinkStartMs = 0;
+        this.blinkState = false;
+    }
+
+    private clamp(value: number, min: number, max: number): number {
+        if (!Number.isFinite(value)) return min;
+        return Math.min(max, Math.max(min, value));
     }
 
     private showFallback(): void {
@@ -164,34 +211,77 @@ export class FlashlightController {
 export class ScreenController {
     private overlayElement: HTMLElement | null = null;
     private animationFrame: number | null = null;
-    private animationInterval: ReturnType<typeof setInterval> | null = null;
     private animationStart = 0;
+    private lastFrameTime = 0;
+    private phase = 0;
+    private mode: NonNullable<ScreenColorPayload['mode']> | 'solid' = 'solid';
+    private params = {
+        color: '#ffffff',
+        secondaryColor: '#ffffff',
+        opacity: 1,
+        minOpacity: 0,
+        maxOpacity: 1,
+        waveform: 'sine' as NonNullable<ScreenColorPayload['waveform']>,
+        frequencyHz: 1,
+        blinkFrequency: 2,
+        pulseDuration: 1200,
+        pulseMin: 0.25,
+        cycleColors: [] as string[],
+        cycleDuration: 4000,
+    };
 
     /**
      * Set screen color overlay
      */
     setColor(payload: ScreenColorPayload): void {
         this.ensureOverlay();
-        this.stopAnimation();
+        const nextMode = payload.mode ?? 'solid';
+        const modeChanged = nextMode !== this.mode;
+        const now = this.now();
+        const prevPhase = this.phase;
 
-        const mode = payload.mode ?? 'solid';
+        const opacity = this.clamp(payload.opacity ?? 1, 0, 1);
+        const maxOpacity = this.clamp(payload.maxOpacity ?? opacity, 0, 1);
+        const minOpacity = this.clamp(payload.minOpacity ?? payload.pulseMin ?? 0, 0, maxOpacity);
+        const waveform = payload.waveform ?? 'sine';
+        const frequencyHz = Number.isFinite(payload.frequencyHz) ? (payload.frequencyHz as number) : 1;
+        const blinkFrequency = Number.isFinite(payload.blinkFrequency) ? (payload.blinkFrequency as number) : 2;
+        const pulseDuration = Number.isFinite(payload.pulseDuration) ? (payload.pulseDuration as number) : 1200;
+        const pulseMin = this.clamp(payload.pulseMin ?? payload.minOpacity ?? 0.25, 0, 1);
+        const cycleDuration = Number.isFinite(payload.cycleDuration) ? (payload.cycleDuration as number) : 4000;
+        const cycleColors =
+            payload.cycleColors && payload.cycleColors.length >= 2
+                ? payload.cycleColors
+                : [payload.color, payload.color];
 
-        switch (mode) {
-            case 'blink':
-                this.startBlink(payload);
-                break;
-            case 'pulse':
-                this.startPulse(payload);
-                break;
-            case 'modulate':
-                this.startModulate(payload);
-                break;
-            case 'cycle':
-                this.startCycle(payload);
-                break;
-            default:
-                this.applySolid(payload.color, payload.opacity ?? 1);
+        this.mode = nextMode;
+        this.params = {
+            color: payload.color,
+            secondaryColor: payload.secondaryColor ?? payload.color,
+            opacity,
+            minOpacity,
+            maxOpacity,
+            waveform,
+            frequencyHz,
+            blinkFrequency,
+            pulseDuration,
+            pulseMin,
+            cycleColors,
+            cycleDuration,
+        };
+
+        if (nextMode === 'solid') {
+            this.stopAnimation();
+            this.applySolid(payload.color, opacity);
+            return;
         }
+
+        if (modeChanged) {
+            // Preserve phase across mode changes by remapping onto the new period.
+            const period = this.getModePeriodMs(nextMode);
+            this.animationStart = period > 0 ? now - prevPhase * period : 0;
+        }
+        this.startAnimationLoop();
     }
 
     /**
@@ -255,68 +345,9 @@ export class ScreenController {
             cancelAnimationFrame(this.animationFrame);
             this.animationFrame = null;
         }
-        if (this.animationInterval) {
-            clearInterval(this.animationInterval);
-            this.animationInterval = null;
-        }
         this.animationStart = 0;
     }
 
-    private startBlink(payload: ScreenColorPayload): void {
-        this.animationStart = 0;
-        const frequency = Math.max(0.2, payload.blinkFrequency ?? 2); // Hz
-        const period = 1000 / frequency;
-        const onTime = period * 0.5;
-
-        const tick = () => {
-            this.applySolid(payload.color, payload.opacity ?? 1);
-            setTimeout(() => {
-                this.overlayElement!.style.display = 'none';
-            }, onTime);
-        };
-
-        tick();
-        this.animationInterval = setInterval(tick, period);
-    }
-
-    private startPulse(payload: ScreenColorPayload): void {
-        this.animationStart = 0;
-        const duration = Math.max(300, payload.pulseDuration ?? 1200);
-        const frequencyHz = 1000 / duration;
-        this.startModulate({
-            ...payload,
-            mode: 'modulate',
-            frequencyHz,
-            waveform: payload.waveform ?? 'sine',
-            minOpacity: payload.pulseMin ?? payload.minOpacity ?? 0.25,
-            maxOpacity: payload.opacity ?? payload.maxOpacity ?? 1,
-        });
-    }
-
-    private startCycle(payload: ScreenColorPayload): void {
-        this.animationStart = 0;
-        const colors = payload.cycleColors && payload.cycleColors.length >= 2
-            ? payload.cycleColors
-            : [payload.color, payload.color];
-        const duration = Math.max(600, payload.cycleDuration ?? 4000);
-        const maxOpacity = Math.min(1, payload.opacity ?? 1);
-
-        const loop = (timestamp: number) => {
-            if (!this.animationStart) this.animationStart = timestamp;
-            const elapsed = (timestamp - this.animationStart) % duration;
-            const segment = duration / colors.length;
-            const index = Math.floor(elapsed / segment);
-            const nextIndex = (index + 1) % colors.length;
-            const localT = (elapsed % segment) / segment;
-
-            const mixed = this.mixColors(colors[index], colors[nextIndex], localT);
-            this.applySolid(mixed, maxOpacity);
-
-            this.animationFrame = requestAnimationFrame(loop);
-        };
-
-        this.animationFrame = requestAnimationFrame(loop);
-    }
 
     private mixColors(a: string, b: string, t: number): string {
         const ca = this.parseColor(a);
@@ -359,27 +390,82 @@ export class ScreenController {
         return null;
     }
 
-    private startModulate(payload: ScreenColorPayload): void {
-        this.animationStart = 0;
-        const freq = Math.max(0.1, payload.frequencyHz ?? 1);
-        const minOpacity = this.clamp(payload.minOpacity ?? payload.pulseMin ?? 0, 0, 1);
-        const maxOpacity = this.clamp(payload.maxOpacity ?? payload.opacity ?? 1, minOpacity, 1);
-        const primaryColor = payload.color;
-        const secondaryColor = payload.secondaryColor ?? payload.color;
-        const waveform = payload.waveform ?? 'sine';
+    private startAnimationLoop(): void {
+        if (this.animationFrame) return;
+        this.animationFrame = requestAnimationFrame((timestamp) => this.renderFrame(timestamp));
+    }
 
-        const loop = (timestamp: number) => {
-            if (!this.animationStart) this.animationStart = timestamp;
-            const elapsedMs = timestamp - this.animationStart;
-            const phase = (elapsedMs / 1000) * freq * Math.PI * 2;
-            const factor = this.waveformValue(waveform, phase); // 0..1
-            const opacity = minOpacity + (maxOpacity - minOpacity) * factor;
-            const mixed = this.mixColors(primaryColor, secondaryColor, factor);
-            this.applySolid(mixed, opacity);
-            this.animationFrame = requestAnimationFrame(loop);
-        };
+    private renderFrame(timestamp: number): void {
+        if (!this.overlayElement) {
+            this.animationFrame = null;
+            return;
+        }
 
-        this.animationFrame = requestAnimationFrame(loop);
+        this.lastFrameTime = timestamp;
+        if (!this.animationStart) this.animationStart = timestamp;
+        const elapsedMs = timestamp - this.animationStart;
+
+        switch (this.mode) {
+            case 'blink': {
+                const frequency = Math.max(0.2, this.params.blinkFrequency);
+                const period = 1000 / frequency;
+                const phase = (elapsedMs % period) / period;
+                this.phase = phase;
+                if (phase < 0.5) {
+                    this.applySolid(this.params.color, this.params.opacity);
+                } else {
+                    this.overlayElement.style.display = 'none';
+                }
+                break;
+            }
+            case 'pulse': {
+                const duration = Math.max(300, this.params.pulseDuration);
+                const frequencyHz = 1000 / duration;
+                const phase = (elapsedMs / 1000) * frequencyHz * Math.PI * 2;
+                const factor = this.waveformValue(this.params.waveform, phase);
+                this.phase = ((elapsedMs % duration) / duration);
+                const minOpacity = this.clamp(this.params.pulseMin, 0, this.params.maxOpacity);
+                const opacity = minOpacity + (this.params.maxOpacity - minOpacity) * factor;
+                const mixed = this.mixColors(this.params.color, this.params.secondaryColor, factor);
+                this.applySolid(mixed, opacity);
+                break;
+            }
+            case 'cycle': {
+                const colors =
+                    this.params.cycleColors && this.params.cycleColors.length >= 2
+                        ? this.params.cycleColors
+                        : [this.params.color, this.params.color];
+                const duration = Math.max(600, this.params.cycleDuration);
+                const segment = duration / colors.length;
+                const elapsed = elapsedMs % duration;
+                this.phase = elapsed / duration;
+                const index = Math.floor(elapsed / segment);
+                const nextIndex = (index + 1) % colors.length;
+                const localT = (elapsed % segment) / segment;
+                const mixed = this.mixColors(colors[index], colors[nextIndex], localT);
+                this.applySolid(mixed, this.params.opacity);
+                break;
+            }
+            case 'modulate': {
+                const freq = Math.max(0.1, this.params.frequencyHz);
+                const phase = (elapsedMs / 1000) * freq * Math.PI * 2;
+                const factor = this.waveformValue(this.params.waveform, phase);
+                const period = 1000 / freq;
+                this.phase = (elapsedMs % period) / period;
+                const minOpacity = this.clamp(this.params.minOpacity, 0, this.params.maxOpacity);
+                const opacity = minOpacity + (this.params.maxOpacity - minOpacity) * factor;
+                const mixed = this.mixColors(this.params.color, this.params.secondaryColor, factor);
+                this.applySolid(mixed, opacity);
+                break;
+            }
+            default: {
+                this.phase = 0;
+                this.applySolid(this.params.color, this.params.opacity);
+                break;
+            }
+        }
+
+        this.animationFrame = requestAnimationFrame((next) => this.renderFrame(next));
     }
 
     private waveformValue(type: NonNullable<ScreenColorPayload['waveform']>, phase: number): number {
@@ -404,6 +490,33 @@ export class ScreenController {
     private clamp(v: number, min: number, max: number): number {
         return Math.min(max, Math.max(min, v));
     }
+
+    private getModePeriodMs(mode: NonNullable<ScreenColorPayload['mode']> | 'solid'): number {
+        switch (mode) {
+            case 'blink': {
+                const frequency = Math.max(0.2, this.params.blinkFrequency);
+                return 1000 / frequency;
+            }
+            case 'pulse': {
+                return Math.max(300, this.params.pulseDuration);
+            }
+            case 'cycle': {
+                return Math.max(600, this.params.cycleDuration);
+            }
+            case 'modulate': {
+                const freq = Math.max(0.1, this.params.frequencyHz);
+                return 1000 / freq;
+            }
+            default:
+                return 0;
+        }
+    }
+
+    private now(): number {
+        if (this.lastFrameTime) return this.lastFrameTime;
+        if (typeof performance !== 'undefined' && performance.now) return performance.now();
+        return Date.now();
+    }
 }
 
 /**
@@ -412,6 +525,10 @@ export class ScreenController {
 export class VibrationController {
     private isSupported: boolean;
     private visualShakeInterval: ReturnType<typeof setInterval> | null = null;
+    private visualBaseTransform = '';
+    private currentPattern: number[] = [];
+    private patternStartMs: number | null = null;
+    private totalDurationMs = 0;
 
     constructor() {
         this.isSupported = typeof navigator !== 'undefined' && 'vibrate' in navigator;
@@ -429,26 +546,45 @@ export class VibrationController {
      * Trigger vibration pattern
      */
     vibrate(payload: VibratePayload): void {
-        let pattern = payload.pattern;
-
-        // Handle repeat
-        if (payload.repeat && payload.repeat > 1) {
-            const originalPattern = [...pattern];
-            for (let i = 1; i < payload.repeat; i++) {
-                pattern = [...pattern, ...originalPattern];
-            }
+        const nextPattern = this.normalizePattern(payload);
+        if (nextPattern.length === 0) {
+            this.stop();
+            return;
         }
+
+        const now = Date.now();
+        const nextTotal = this.totalDuration(nextPattern);
+
+        // Preserve phase when updating the pattern mid-play.
+        if (this.currentPattern.length > 0 && this.totalDurationMs > 0 && this.patternStartMs) {
+            const elapsed = now - this.patternStartMs;
+            const phase = (elapsed % this.totalDurationMs) / this.totalDurationMs;
+            this.patternStartMs = now - phase * nextTotal;
+        } else {
+            this.patternStartMs = now;
+        }
+
+        const unchanged = this.isSamePattern(this.currentPattern, nextPattern);
+        this.currentPattern = nextPattern;
+        this.totalDurationMs = nextTotal;
+
+        if (unchanged) return;
+
+        const offsetMs = Math.max(0, now - (this.patternStartMs ?? now));
+        const trimmed = this.buildPatternFromOffset(nextPattern, offsetMs);
 
         if (this.isSupported) {
             try {
-                navigator.vibrate(pattern);
+                navigator.vibrate(trimmed);
+                this.stopVisualVibration();
+                return;
             } catch (e) {
                 // Some browsers might throw even if 'vibrate' is in navigator
-                this.performVisualVibration(pattern);
+                this.ensureVisualVibration();
             }
         } else {
             console.log('[Vibration] Native vibration not supported, using visual fallback');
-            this.performVisualVibration(pattern);
+            this.ensureVisualVibration();
         }
     }
 
@@ -463,25 +599,28 @@ export class VibrationController {
                 // ignore
             }
         }
+        this.currentPattern = [];
+        this.patternStartMs = null;
+        this.totalDurationMs = 0;
         this.stopVisualVibration();
     }
 
     /**
      * Fallback visual vibration (shakes the screen)
      */
-    private performVisualVibration(pattern: number[]): void {
-        this.stopVisualVibration();
-        
+    private ensureVisualVibration(): void {
+        if (this.visualShakeInterval) return;
         const body = document.body;
-        const initialTransform = body.style.transform;
-        const startTime = Date.now();
-        
-        // Calculate total duration
-        const totalDuration = pattern.reduce((a, b) => a + b, 0);
-        
-        const shake = () => {
-            const elapsed = Date.now() - startTime;
-            if (elapsed >= totalDuration) {
+        this.visualBaseTransform = body.style.transform;
+
+        this.visualShakeInterval = setInterval(() => {
+            if (!this.patternStartMs || this.currentPattern.length === 0 || this.totalDurationMs <= 0) {
+                this.stopVisualVibration();
+                return;
+            }
+
+            const elapsed = Date.now() - this.patternStartMs;
+            if (elapsed >= this.totalDurationMs) {
                 this.stopVisualVibration();
                 return;
             }
@@ -489,12 +628,12 @@ export class VibrationController {
             // Find current phase based on elapsed time
             let timeSum = 0;
             let currentPhaseIndex = 0;
-            for (let i = 0; i < pattern.length; i++) {
-                if (elapsed < timeSum + pattern[i]) {
+            for (let i = 0; i < this.currentPattern.length; i++) {
+                if (elapsed < timeSum + this.currentPattern[i]) {
                     currentPhaseIndex = i;
                     break;
                 }
-                timeSum += pattern[i];
+                timeSum += this.currentPattern[i];
             }
 
             // Even index = vibrate, Odd index = pause
@@ -506,19 +645,66 @@ export class VibrationController {
                 const y = (Math.random() - 0.5) * intensity;
                 body.style.transform = `translate(${x}px, ${y}px)`;
             } else {
-                body.style.transform = initialTransform;
+                body.style.transform = this.visualBaseTransform;
             }
-        };
-
-        this.visualShakeInterval = setInterval(shake, 16); // ~60fps
+        }, 16); // ~60fps
     }
 
     private stopVisualVibration(): void {
         if (this.visualShakeInterval) {
             clearInterval(this.visualShakeInterval);
             this.visualShakeInterval = null;
-            document.body.style.transform = '';
+            document.body.style.transform = this.visualBaseTransform;
         }
+    }
+
+    private normalizePattern(payload: VibratePayload): number[] {
+        const base = Array.isArray(payload.pattern) ? payload.pattern.map((v) => Math.max(0, v)) : [];
+        if (base.length === 0) return [];
+
+        if (payload.repeat && payload.repeat > 1) {
+            const originalPattern = [...base];
+            for (let i = 1; i < payload.repeat; i++) {
+                base.push(...originalPattern);
+            }
+        }
+        return base;
+    }
+
+    private totalDuration(pattern: number[]): number {
+        return pattern.reduce((sum, value) => sum + value, 0);
+    }
+
+    private isSamePattern(a: number[], b: number[]): boolean {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) return false;
+        }
+        return true;
+    }
+
+    private buildPatternFromOffset(pattern: number[], offsetMs: number): number[] {
+        if (!Number.isFinite(offsetMs) || offsetMs <= 0) return [...pattern];
+        let remaining = offsetMs;
+        let idx = 0;
+        while (idx < pattern.length && remaining > pattern[idx]) {
+            remaining -= pattern[idx];
+            idx += 1;
+        }
+        if (idx >= pattern.length) return [...pattern];
+
+        const trimmed = pattern.slice(idx);
+        if (remaining > 0 && trimmed.length > 0) {
+            trimmed[0] = Math.max(0, trimmed[0] - remaining);
+        }
+
+        // If we land in a pause segment, prepend a 0ms vibration so we still start with a pause.
+        if (idx % 2 === 1) {
+            if (trimmed[0] === 0) trimmed.shift();
+            trimmed.unshift(0);
+        }
+
+        return trimmed.length === 0 ? [...pattern] : trimmed;
     }
 }
 
@@ -620,6 +806,33 @@ export class SoundPlayer {
     }
 
     /**
+     * Update current playback without restarting (volume/loop).
+     */
+    update(payload: PlaySoundPayload): boolean {
+        if (!payload?.url || payload.url !== this.currentUrl) return false;
+
+        if (this.currentSource) {
+            if (typeof payload.loop === 'boolean') this.currentSource.loop = payload.loop;
+            if (this.gainNode && typeof payload.volume === 'number') {
+                const next = Math.max(0, Math.min(1, payload.volume));
+                const now = this.audioContext?.currentTime ?? 0;
+                this.gainNode.gain.setValueAtTime(next, now);
+            }
+            return true;
+        }
+
+        if (this.htmlAudio) {
+            if (typeof payload.loop === 'boolean') this.htmlAudio.loop = payload.loop;
+            if (typeof payload.volume === 'number') {
+                this.htmlAudio.volume = Math.max(0, Math.min(1, payload.volume));
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Stop current playback
      */
     stop(): void {
@@ -684,6 +897,9 @@ export class ModulatedSoundPlayer {
     private lfo: OscillatorNode | null = null;
     private lfoGain: GainNode | null = null;
     private stopTimer: ReturnType<typeof setTimeout> | null = null;
+    private startAtSeconds: number | null = null;
+    private durationSeconds: number | null = null;
+    private releaseSeconds = 0.04;
 
     async play(payload: ModulateSoundPayload, sharedContext?: AudioContext | null, delaySeconds = 0): Promise<void> {
         await this.ensureContext(sharedContext);
@@ -710,6 +926,10 @@ export class ModulatedSoundPlayer {
         const waveform = payload.waveform ?? 'square';
         const modDepth = this.clamp(payload.modDepth ?? 0, 0, 1);
         const modFreq = payload.modFrequency ?? 12;
+
+        this.startAtSeconds = now;
+        this.durationSeconds = duration;
+        this.releaseSeconds = release;
 
         this.carrier = ctx.createOscillator();
         this.carrier.type = waveform;
@@ -738,9 +958,10 @@ export class ModulatedSoundPlayer {
         this.lfo?.start(now);
 
         // Schedule stop via timeout so we can reschedule on updates
-        const stopMs = (duration + release * 2) * 1000;
+        const stopAt = now + duration + release * 2;
+        const stopDelayMs = Math.max(10, (stopAt - ctx.currentTime) * 1000);
         if (this.stopTimer) clearTimeout(this.stopTimer);
-        this.stopTimer = setTimeout(() => this.stop(), Math.max(10, stopMs));
+        this.stopTimer = setTimeout(() => this.stop(), stopDelayMs);
     }
 
     stop(): void {
@@ -748,6 +969,8 @@ export class ModulatedSoundPlayer {
             clearTimeout(this.stopTimer);
             this.stopTimer = null;
         }
+        this.startAtSeconds = null;
+        this.durationSeconds = null;
 
         this.carrier?.disconnect();
         this.carrier?.stop();
@@ -833,9 +1056,12 @@ export class ModulatedSoundPlayer {
         // Reschedule stop if duration provided
         if (payload.durationMs !== undefined) {
             if (this.stopTimer) clearTimeout(this.stopTimer);
-            const release = 0.04; // keep minimal release to avoid click
             const durationSec = Math.max(0.02, payload.durationMs / 1000);
-            this.stopTimer = setTimeout(() => this.stop(), (durationSec + release * 2) * 1000);
+            const startAt = this.startAtSeconds ?? now;
+            this.durationSeconds = durationSec;
+            const stopAt = startAt + durationSec + this.releaseSeconds * 2;
+            const stopDelayMs = Math.max(10, (stopAt - now) * 1000);
+            this.stopTimer = setTimeout(() => this.stop(), stopDelayMs);
         }
     }
 

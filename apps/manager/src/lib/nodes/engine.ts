@@ -10,7 +10,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import { PROTOCOL_VERSION } from '@shugu/protocol';
 import { NodeRuntime } from '@shugu/node-core';
 
-import type { Connection, GraphState, NodeInstance } from './types';
+import type { Connection, GraphState, NodeInstance, PortType } from './types';
 import { nodeRegistry } from './registry';
 import { getSelectOptionsForInput } from './selection-options';
 import { parameterRegistry } from '../parameters/registry';
@@ -191,8 +191,23 @@ class NodeEngineClass {
     const targetPort = targetDef?.inputs.find((p) => p.id === connection.targetPortId);
 
     if (!sourcePort || !targetPort) return false;
-    const sourceType = sourcePort.type ?? 'any';
-    const targetType = targetPort.type ?? 'any';
+    let sourceType = (sourcePort.type ?? 'any') as PortType;
+    const targetType = (targetPort.type ?? 'any') as PortType;
+
+    // Sleep output adopts its input type and is inactive until the input is connected.
+    if (sourceNode.type === 'logic-sleep' && sourcePort.id === 'output') {
+      const inputConn = snapshot.connections.find(
+        (c) => c.targetNodeId === sourceNode.id && c.targetPortId === 'input'
+      );
+      if (!inputConn) {
+        this.lastError.set('Sleep output requires a connected input.');
+        return false;
+      }
+      const inputSourceNode = snapshot.nodes.find((n) => n.id === inputConn.sourceNodeId);
+      const inputSourceDef = inputSourceNode ? nodeRegistry.get(inputSourceNode.type) : null;
+      const inputSourcePort = inputSourceDef?.outputs.find((p) => p.id === inputConn.sourcePortId);
+      sourceType = (inputSourcePort?.type ?? 'any') as PortType;
+    }
     const typeMismatch = sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType;
     if (typeMismatch) {
       this.lastError.set(

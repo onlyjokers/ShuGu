@@ -28,6 +28,21 @@ type WhenCondition = { source: WhenSource; key: string; op: WhenOp; value: strin
 
 type ClampSpec = { min?: number; max?: number };
 
+type MidiBooleanState = {
+  value: boolean;
+  lastPressed: boolean;
+  sourceKey: string | null;
+};
+
+type ClientSelectionState = {
+  index: number;
+  range: number;
+  random: boolean;
+  baseRandomIds: string[];
+  selectedIds: string[];
+  clientsKey: string;
+};
+
 type CommandFieldMapping =
   | { kind: 'literal'; value: unknown; when?: WhenCondition }
   | {
@@ -84,6 +99,13 @@ type NodeRuntime =
   | { kind: 'number' }
   | { kind: 'number-stabilizer' }
   | { kind: 'math' }
+  | { kind: 'logic-add' }
+  | { kind: 'logic-multiple' }
+  | { kind: 'logic-subtract' }
+  | { kind: 'logic-divide' }
+  | { kind: 'logic-if' }
+  | { kind: 'logic-for' }
+  | { kind: 'logic-sleep' }
   | { kind: 'lfo' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
@@ -99,8 +121,6 @@ type NodeRuntime =
   | { kind: 'midi-map' }
   | { kind: 'midi-select-map' }
   | { kind: 'midi-color-map' }
-  | { kind: 'manager-select-clients-range' }
-  | { kind: 'manager-select-clients-object' }
   | CommandRuntime;
 
 export type NodeSpec = {
@@ -150,6 +170,13 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['number', pick('number')],
     ['number-stabilizer', pick('number-stabilizer')],
     ['math', pick('math')],
+    ['logic-add', pick('logic-add')],
+    ['logic-multiple', pick('logic-multiple')],
+    ['logic-subtract', pick('logic-subtract')],
+    ['logic-divide', pick('logic-divide')],
+    ['logic-if', pick('logic-if')],
+    ['logic-for', pick('logic-for')],
+    ['logic-sleep', pick('logic-sleep')],
     ['lfo', pick('lfo')],
     ['tone-osc', pick('tone-osc')],
     ['tone-delay', pick('tone-delay')],
@@ -174,6 +201,182 @@ function clampNumber(value: number, clamp: ClampSpec | undefined): number {
   if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
   if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
   return next;
+}
+
+// Track MIDI boolean toggles per node (edge-triggered on press).
+const midiBooleanState = new Map<string, MidiBooleanState>();
+// Track client selection offsets per node (index/range).
+const clientSelectionState = new Map<string, ClientSelectionState>();
+
+function midiSourceKey(source: MidiSource | null | undefined): string | null {
+  if (!source) return null;
+  const input = source.inputId ? `in:${source.inputId}` : 'in:*';
+  const number = source.type === 'pitchbend' ? 'pb' : String(source.number ?? 0);
+  return `${input}|${source.type}|ch:${source.channel}|num:${number}`;
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  // For selection indices/ranges we want "reach the next integer" behavior, not `.5` rounding.
+  const next = Math.floor(value);
+  return Math.max(min, Math.min(max, next));
+}
+
+function coerceBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+  return fallback;
+}
+
+function selectionEqual(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, idx) => id === b[idx]);
+}
+
+function buildAlternatingSelection(clients: string[], index: number, range: number): string[] {
+  const total = clients.length;
+  const picked: string[] = [];
+  const seen = new Set<number>();
+
+  const add = (pos: number) => {
+    if (pos < 1 || pos > total) return;
+    if (seen.has(pos)) return;
+    seen.add(pos);
+    picked.push(clients[pos - 1]);
+  };
+
+  add(index);
+  let offset = 1;
+  while (picked.length < range && (index + offset <= total || index - offset >= 1)) {
+    add(index + offset);
+    if (picked.length >= range) break;
+    add(index - offset);
+    offset += 1;
+  }
+
+  return picked;
+}
+
+function pickRandomIds(pool: string[], count: number): string[] {
+  if (count <= 0) return [];
+  const copy = pool.slice();
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, count);
+}
+
+function applyClientSelectionFromInputs(nodeId: string, inputs: Record<string, unknown>): void {
+  const indexRaw = inputs.index;
+  const rangeRaw = inputs.range;
+  const randomRaw = inputs.random;
+  const hasIndex = isFiniteNumber(indexRaw);
+  const hasRange = isFiniteNumber(rangeRaw);
+  const hasRandom = typeof randomRaw === 'boolean' || isFiniteNumber(randomRaw);
+
+  if (!hasIndex && !hasRange && !hasRandom) {
+    clientSelectionState.delete(nodeId);
+    return;
+  }
+
+  const prev =
+    clientSelectionState.get(nodeId) ??
+    ({
+      index: 1,
+      range: 1,
+      random: false,
+      baseRandomIds: [],
+      selectedIds: [],
+      clientsKey: '',
+    } as ClientSelectionState);
+  const indexValue = hasIndex ? Number(indexRaw) : prev.index;
+  const rangeValue = hasRange ? Number(rangeRaw) : prev.range;
+  const randomValue = hasRandom ? coerceBoolean(randomRaw, prev.random) : prev.random;
+  if (!Number.isFinite(indexValue) || !Number.isFinite(rangeValue)) return;
+
+  const clients = get(state).clients.map((c: any) => String(c.clientId ?? '')).filter(Boolean);
+  if (clients.length === 0) return;
+
+  const total = clients.length;
+  const rangeClamped = clampInt(rangeValue, 1, total);
+  const start = clampInt(indexValue, 1, total);
+  let next: string[] = [];
+  let baseRandomIds = prev.baseRandomIds ?? [];
+  const clientsKey = clients.join('|');
+
+  if (randomValue) {
+    const prevRandom = prev.random ?? false;
+    if (!prevRandom || prev.clientsKey !== clientsKey) {
+      baseRandomIds = [];
+    }
+
+    baseRandomIds = baseRandomIds.filter((id) => clients.includes(id));
+    if (baseRandomIds.length > rangeClamped) baseRandomIds = baseRandomIds.slice(0, rangeClamped);
+
+    if (baseRandomIds.length < rangeClamped) {
+      const remaining = clients.filter((id) => !baseRandomIds.includes(id));
+      const needed = rangeClamped - baseRandomIds.length;
+      baseRandomIds = [...baseRandomIds, ...pickRandomIds(remaining, needed)];
+    }
+
+    const offset = start - 1;
+    const seen = new Set<string>();
+    for (const baseId of baseRandomIds) {
+      const pos = clients.indexOf(baseId);
+      if (pos < 0) continue;
+      const nextId = clients[(pos + offset) % total];
+      if (!seen.has(nextId)) {
+        seen.add(nextId);
+        next.push(nextId);
+      }
+    }
+  } else {
+    next = buildAlternatingSelection(clients, start, rangeClamped);
+  }
+  const current = get(state).selectedClientIds.map(String).filter((id) => clients.includes(id));
+  const inputsChanged =
+    prev.index !== start ||
+    prev.range !== rangeClamped ||
+    prev.random !== randomValue ||
+    prev.clientsKey !== clientsKey;
+
+  let nextIndex = start;
+  let nextRange = rangeClamped;
+  let shouldSyncSelection = true;
+
+  if (!inputsChanged && !selectionEqual(current, next)) {
+    // Treat manual selection as the source of truth until inputs change.
+    next = current;
+    shouldSyncSelection = false;
+    if (next.length > 0) {
+      const firstId = next[0];
+      const idx = clients.indexOf(firstId);
+      if (idx >= 0) nextIndex = idx + 1;
+      nextRange = Math.max(1, Math.min(total, next.length));
+    }
+  }
+
+  if (shouldSyncSelection && !selectionEqual(current, next)) {
+    selectClients(next);
+  }
+
+  clientSelectionState.set(nodeId, {
+    index: nextIndex,
+    range: nextRange,
+    random: randomValue,
+    baseRandomIds,
+    selectedIds: next,
+    clientsKey,
+  });
+}
+
+function getSelectedClientIndexOut(): number {
+  const clients = get(state).clients.map((c: any) => String(c.clientId ?? '')).filter(Boolean);
+  if (clients.length === 0) return 0;
+  const selected = get(state).selectedClientIds.map(String);
+  const targetId = selected[0];
+  if (!targetId) return 0;
+  const idx = clients.indexOf(targetId);
+  return idx >= 0 ? idx + 1 : 0;
 }
 
 function getString(inputs: Record<string, unknown>, config: Record<string, unknown>, mapping: any): string {
@@ -343,11 +546,68 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
   };
 
   switch (spec.runtime.kind) {
-    case 'client-object':
+    case 'client-object': {
+      const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
+      if (!impl) {
+        throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
+      }
+      return {
+        ...base,
+        process: (inputs, config, context) => {
+          applyClientSelectionFromInputs(context.nodeId, inputs);
+          const out = impl.process(inputs, config, context);
+          const selection = clientSelectionState.get(context.nodeId);
+          const indexOut = selection ? selection.index : getSelectedClientIndexOut();
+          return { ...out, indexOut };
+        },
+        onSink: (inputs, config, context) => {
+          applyClientSelectionFromInputs(context.nodeId, inputs);
+
+          const clients = get(state).clients.map((c: any) => String(c.clientId ?? '')).filter(Boolean);
+          if (clients.length === 0) return;
+
+          const selection = clientSelectionState.get(context.nodeId);
+          const selectedIds =
+            selection && selection.selectedIds.length > 0
+              ? selection.selectedIds
+              : get(state).selectedClientIds.map(String).filter(Boolean);
+
+          const fallbackClientId = typeof (config as any)?.clientId === 'string' ? String((config as any).clientId) : '';
+          const targets = selectedIds.length > 0 ? selectedIds : fallbackClientId ? [fallbackClientId] : [];
+          if (targets.length === 0) return;
+
+          const raw = (inputs as any).in;
+          const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
+          if (commands.length === 0) return;
+
+          const sdk = getSDK();
+          if (!sdk) return;
+
+          for (const cmd of commands) {
+            if (!cmd || typeof cmd !== 'object') continue;
+            const action = (cmd as any).action as ControlAction | undefined;
+            if (!action) continue;
+            const payload = ((cmd as any).payload ?? {}) as ControlPayload;
+            const executeAt = (cmd as any).executeAt as number | undefined;
+
+            for (const clientId of targets) {
+              sdk.sendControl(targetClients([clientId]), action, payload, executeAt);
+            }
+          }
+        },
+      };
+    }
     case 'proc-client-sensors':
     case 'number':
     case 'number-stabilizer':
     case 'math':
+    case 'logic-add':
+    case 'logic-multiple':
+    case 'logic-subtract':
+    case 'logic-divide':
+    case 'logic-if':
+    case 'logic-for':
+    case 'logic-sleep':
     case 'lfo':
     case 'tone-osc':
     case 'tone-player':
@@ -428,16 +688,49 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
     case 'midi-boolean': {
       return {
         ...base,
-        process: (_inputs, config) => {
+        process: (_inputs, config, context) => {
           const source = (config.source ?? null) as MidiSource | null;
+          const key = midiSourceKey(source);
           const thresholdRaw = Number(config.threshold ?? 0.5);
           const threshold = Number.isFinite(thresholdRaw) ? thresholdRaw : 0.5;
 
-          const event = midiNodeBridge.getEvent(source);
-          if (!event) return { value: false };
+          if (!source || !key) {
+            midiBooleanState.delete(context.nodeId);
+            return { value: false };
+          }
 
-          if (event.type === 'note') return { value: Boolean(event.isPress) };
-          return { value: event.normalized >= threshold };
+          const state =
+            midiBooleanState.get(context.nodeId) ??
+            ({
+              value: false,
+              lastPressed: false,
+              sourceKey: key,
+            } as MidiBooleanState);
+
+          if (state.sourceKey !== key) {
+            state.value = false;
+            state.lastPressed = false;
+            state.sourceKey = key;
+          }
+
+          const event = midiNodeBridge.getEvent(source);
+          if (!event) {
+            state.lastPressed = false;
+            midiBooleanState.set(context.nodeId, state);
+            return { value: state.value };
+          }
+
+          const pressed =
+            event.type === 'note' ? Boolean(event.isPress) : event.normalized >= threshold;
+
+          if (pressed && !state.lastPressed) {
+            state.value = !state.value;
+          }
+
+          state.lastPressed = pressed;
+          midiBooleanState.set(context.nodeId, state);
+
+          return { value: state.value };
         },
       };
     }
@@ -540,62 +833,6 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
 
           const out: Rgb = { r: lerp(from.r, to.r, t), g: lerp(from.g, to.g, t), b: lerp(from.b, to.b, t) };
           return { out: toHex(out) };
-        },
-      };
-    }
-    case 'manager-select-clients-range': {
-      const selectionEqual = (a: string[], b: string[]) =>
-        a.length === b.length && a.every((id, idx) => id === b[idx]);
-
-      const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
-
-      return {
-        ...base,
-        process: () => ({}),
-        onSink: (inputs) => {
-          const raw = (inputs as any).in;
-          const value = Array.isArray(raw) ? raw[0] : raw;
-          const n = Number(value);
-          if (!Number.isFinite(n)) return;
-
-          const clients = get(state).clients.map((c: any) => String(c.clientId ?? ''));
-          const list = clients.filter(Boolean);
-          if (list.length === 0) return;
-
-          const t = clamp01(n);
-          const count = Math.min(list.length, Math.floor(t * (list.length + 1)));
-          const next = list.slice(0, count);
-          const current = get(state).selectedClientIds.map(String);
-          if (selectionEqual(current, next)) return;
-          selectClients(next);
-        },
-      };
-    }
-    case 'manager-select-clients-object': {
-      const selectionEqual = (a: string[], b: string[]) =>
-        a.length === b.length && a.every((id, idx) => id === b[idx]);
-
-      const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
-
-      return {
-        ...base,
-        process: () => ({}),
-        onSink: (inputs) => {
-          const raw = (inputs as any).in;
-          const value = Array.isArray(raw) ? raw[0] : raw;
-          const n = Number(value);
-          if (!Number.isFinite(n)) return;
-
-          const clients = get(state).clients.map((c: any) => String(c.clientId ?? ''));
-          const list = clients.filter(Boolean);
-          if (list.length === 0) return;
-
-          const t = clamp01(n);
-          const idx = Math.min(list.length - 1, Math.floor(t * list.length));
-          const next = [list[idx]!];
-          const current = get(state).selectedClientIds.map(String);
-          if (selectionEqual(current, next)) return;
-          selectClients(next);
         },
       };
     }

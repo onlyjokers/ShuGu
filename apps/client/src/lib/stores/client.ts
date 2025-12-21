@@ -392,7 +392,8 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           waveform: (payload as ModulateSoundPayload).waveform,
           modFrequency: (payload as ModulateSoundPayload).modFrequency,
           modDepth: (payload as ModulateSoundPayload).modDepth,
-          durationMs: (payload as ModulateSoundPayload).duration,
+          durationMs:
+            (payload as any).durationMs ?? (payload as ModulateSoundPayload).duration,
         });
         break;
 
@@ -408,24 +409,39 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(mediaPayload.url);
 
         if (isVideo) {
-          videoState.set({
+          const current = get(videoState);
+          const next = {
             url: mediaPayload.url,
             playing: true,
             muted: mediaPayload.muted ?? true,
             loop: mediaPayload.loop ?? false,
             volume: mediaPayload.volume ?? 1,
-          });
+          };
+          videoState.set(
+            current.url === next.url && current.playing
+              ? { ...current, ...next }
+              : next
+          );
         } else {
           // Fallback to audio
-          soundPlayer?.play(
-            {
+          const updated =
+            soundPlayer?.update({
               url: mediaPayload.url,
               volume: mediaPayload.volume,
               loop: mediaPayload.loop,
               fadeIn: mediaPayload.fadeIn,
-            },
-            delaySeconds
-          );
+            }) ?? false;
+          if (!updated) {
+            soundPlayer?.play(
+              {
+                url: mediaPayload.url,
+                volume: mediaPayload.volume,
+                loop: mediaPayload.loop,
+                fadeIn: mediaPayload.fadeIn,
+              },
+              delaySeconds
+            );
+          }
         }
         break;
       }

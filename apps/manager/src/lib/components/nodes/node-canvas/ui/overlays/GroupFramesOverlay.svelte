@@ -11,6 +11,7 @@
   export let onToggleEditMode: (groupId: string) => void = () => undefined;
   export let onDisassemble: (groupId: string) => void = () => undefined;
   export let onRename: (groupId: string, name: string) => void = () => undefined;
+  export let onHeaderPointerDown: (groupId: string, event: PointerEvent) => void = () => undefined;
 
   let editingGroupId: string | null = null;
   let draftName = '';
@@ -43,10 +44,13 @@
       {@const isEditing = editModeGroupId === group.id}
       {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
       <div
-        class="group-frame {group.disabled ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
+        class="group-frame {frame.effectiveDisabled ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
         style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
       >
-        <div class="group-frame-header" on:pointerdown|stopPropagation>
+        <div
+          class="group-frame-header"
+          on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
+        >
           {#if editingGroupId === group.id}
             <div class="group-frame-title editing">
               <input
