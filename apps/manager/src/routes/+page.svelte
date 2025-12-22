@@ -28,7 +28,7 @@
   import SceneControl from '$lib/features/visuals/SceneControl.svelte';
   import GeoControl from '$lib/features/location/GeoControl.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
-  import NodeCanvasRenderer from '$lib/components/nodes/NodeCanvasRenderer.svelte';
+  import NodeCanvas from '$lib/components/nodes/NodeCanvas.svelte';
   import AssetsManager from '$lib/components/AssetsManager.svelte';
 
   let serverUrl = 'https://localhost:3001';
@@ -372,7 +372,7 @@
 
       <div class="nodes-page" class:hide={activePage !== 'nodes'}>
         <div class="nodes-pane">
-          <NodeCanvasRenderer />
+          <NodeCanvas />
         </div>
       </div>
     </AppShell>

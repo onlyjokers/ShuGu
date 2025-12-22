@@ -1,23 +1,30 @@
 <!--
-Purpose: Node Graph 性能 + 权责（执行/权限）+ MIDI 批量 + 节点注册体系的改造计划（保持现有功能与外观尽量不变，允许去掉连线阴影）。
+Purpose: Node Graph（Rete）性能改造计划（不换技术栈；保持现有功能与外观尽量不变；允许去掉连线阴影）。
 Owner: ShuGu / Manager Node Graph
 Created: 2025-12-21
-Status: Draft
+Updated: 2025-12-22
+Status: In Progress
 -->
 
-本文档给出一份**事无巨细**的改造计划，用于解决你提出的 Node Graph 四大问题：
+# Node Graph（Rete）性能改造计划
 
-1) **信息发送结构不稳定 / 权责不清**（start/loop/group activate/deactivate 的行为混杂、补丁/override 的语义不清）；  
-2) **MIDI “一起传递”**（同一时刻多路输入希望合并下发，减少 server 压力与错开）；  
-3) **性能（最重要）**：>20 节点无论 start/stop 都卡；  
-4) **节点注册体系混乱**：node-core + JSON specs + register.ts 三套来源叠加，导致“JSON 标了但没功能/还要去 register 里再标”的体验。
+目标：解决你反馈的 **>20 节点无论 start/stop 都卡** 的问题，并把 Manager Node Graph 的交互性能推进到可承载更大规模节点系统。
 
-本计划按你的要求做了修订：
+明确约束：**不再引入/切换到任何新渲染器或新技术栈**（继续使用现有 **Rete + Svelte** 的 NodeCanvas）。
 
-- UI 渲染层：**去掉连线阴影**，并**迁移到 React Flow（XYFlow 系列）**来获得可见元素裁剪（virtualization）等高性能特性；同时保留一个 **WebGPU 渲染增强**的后备方案（前两步仍不理想时再进入）。
-- 权责/权限：采用你提出的“类似 CSS 的层叠权限（gate cascade）”思路，但补齐三个硬条件：**frame 树约束、跨 frame 连线语义、停/启生命周期**；并明确要反映到 Group 逻辑与 UI。
-- Loop：Loop 部署后，Manager **不再重复 compute/显示 live 值**；但 client 仍需要最小的 status 回报（deployed/stopped/error）以保证系统可观测与一致性。
-- JSON：不删除 JSON 的“可见性/约束（min/max/step）”优点；将 JSON 角色降级为 **UI overlay 层**，node-core 仍作为 **运行时唯一真相源（SOT）**。
+## 范围说明（本计划只做性能主线）
+
+本计划**只聚焦 UI/渲染/交互性能**（Manager NodeCanvas），包括：
+
+- edges 渲染成本（SVG 合成、阴影、数量级）
+- nodes/edges 的可见裁剪（viewport culling / virtualization）
+- 高频交互更新合并（rAF batching）
+- live values / overlays 的降频（减少无意义的重渲染）
+
+不在本计划范围（另起文档/另排期）：
+
+- 权责/权限（Gate cascade）、Loop/Client 数据流收敛
+- MIDI 批量下发、节点注册体系（node-core + JSON overlay）
 
 ---
 
@@ -25,7 +32,7 @@ Status: Draft
 
 ## 0.1 不影响现有功能（回归零容忍）
 
-在最终默认路径切换前，必须保证以下能力不回归：
+任何性能改动都不得破坏以下能力：
 
 - 节点：新增/删除/拖拽/多选/框选（marquee）/复制粘贴/导入导出
 - 连线：连线创建/替换/断开、端口类型兼容校验、sink 多连线
@@ -34,389 +41,101 @@ Status: Draft
 - patch：以 `audio-out` root 的 deploy/stop/remove
 - MIDI：learn、midi-fuzzy/midi-boolean/midi-map 等节点输出、MIDI 高亮链路
 - override：旋钮调参实时生效（TTL + commit）、部署后仍可调参
-- 现有外观：节点外观/布局/样式尽量保持；允许去掉连线 drop-shadow（你明确允许）
+- 外观：节点外观/布局/样式尽量保持（你允许“去掉连线阴影”这一项变化）
 
-## 0.2 外观不受影响（允许的例外）
-
-允许的视觉变化（仅限性能需要且你已同意）：
+## 0.2 允许的视觉变化（仅限性能需要且你已同意）
 
 - **去掉连线 drop-shadow/滤镜**（保留线条颜色、粗细、激活态高亮）
 
-其他外观变化必须被当作 bug 处理，除非你显式确认。
+---
 
-## 0.3 迁移必须可回滚（Feature Flag）
+# 1. 现状与根因（性能向）
 
-任何结构性重构必须具备：
+## 1.1 “不 start 也卡”的关键判断
 
-- 运行时 feature flag（默认仍走旧实现）
-- 可回滚到旧渲染器（Rete）或旧逻辑的开关
-- 明确的“验收门槛”和“切换条件”
+既然 stop 状态下仍卡，说明瓶颈主要在 **DOM/SVG 渲染与合成**（而非 runtime tick/compute）。
+
+## 1.2 高概率根因清单（按影响排序）
+
+1) **Edges：每条边一个 SVG**，且历史上存在超大画布与阴影滤镜导致合成成本指数级上涨  
+2) **节点/边数量增长时，DOM 结点数过多**（尤其 edges 每条独立组件）  
+3) **pointermove/drag/zoom/pan 触发过多同步更新**（多处 store/setState 叠加）  
+4) **live values 与 overlays（minimap/frames）更新频率过高**，导致渲染链路持续忙碌  
 
 ---
 
-# 1. 现状与根因（基于代码）
+# 2. 验收指标（必须量化）
 
-## 1.1 性能根因（“不 start 也卡”）
+## 2.1 交互性能指标（Manager UI）
 
-根据现有实现，>20 节点卡顿的主因很可能在 **DOM/SVG 渲染成本**（而非 runtime tick）：
+在常见开发机（Chrome）上：
 
-- 当前每条连线使用一个独立的 `<svg>`（并且 `width/height: 9999px`），同时给 `<path>` 加 `filter: drop-shadow(...)`（非常昂贵），见：
-  - `apps/manager/src/lib/components/nodes/node-canvas/rete/ReteConnection.svelte`
-- 这会导致：
-  - edges 数量增大时，GPU/CPU 合成压力巨大
-  - 即使 engine stop（runtime 不 tick），仍会卡（因为渲染/布局/滚动/缩放交互仍在）
-
-## 1.2 权责不清根因（状态机碎片化）
-
-目前“运行/停止”分散在多个机制中：
-
-- Graph 总开关（Start/Stop）
-- Group disable（通过 disabledNodeIds 影响 manager runtime）
-- Loop deploy（offloaded 只 skip sink，不 skip compute）
-- Patch deploy（独立于 group disable）
-- override TTL + commit（client executor 端的 overrides 可能残留）
-
-在 UI/逻辑上这些机制的优先级与组合语义未统一，导致“我关了但还在动”。
-
-## 1.3 节点注册混乱根因（多源定义叠加）
-
-Manager 当前是：
-
-- 先注册 node-core 的 default definitions
-- 再扫描 `apps/manager/src/lib/nodes/specs/**/*.json`
-- 但如果 node-core 已存在同名 type，就 `continue` 跳过 JSON spec（导致 JSON 不生效）
-
-这会造成“看起来有 JSON，但实际没用”的错觉，并迫使你在多个地方打补丁。
-
----
-
-# 2. 总体方案概览（你要的最终形态）
-
-## 2.1 渲染层：Rete → React Flow（XYFlow）+ 无阴影
-
-目标：把 Editor 渲染/交互迁移到 React Flow（XYFlow 系列）以获得：
-
-- only render visible elements（viewport culling / virtualization）
-- 更成熟的 edges 管理与性能优化路径
-- 更容易扩展到 canvas/WebGPU 的路线
-
-策略：
-
-- **先做：无阴影（Rete 立即止血）**
-- **再做：React Flow 渲染器（并行存在，flag 切换）**
-- 如果仍不理想：进入 WebGPU 增强思路（见 Step 7）
-
-> 说明：本仓库是 SvelteKit。实现 React Flow 有两条路：
-> - 路线 A（推荐，风险更低）：使用 XYFlow 的 Svelte 版本（同一生态/思路），避免引入 React runtime；  
-> - 路线 B（严格按“React Flow”字面）：在 Svelte 中嵌入 React root，React Flow 作为 client-only 子树运行。
->
-> 本计划默认以**路线 A 为主**（更符合“不影响外观/功能”），若你坚持“必须 React Flow”，可在 Step 2 的里程碑点改为路线 B。
-
-## 2.2 权责/权限：Gate Cascade（类似 CSS）
-
-将执行权限统一为一套“层叠 gate”规则：
-
-- 默认：Graph 处于 STOP（全停）
-- Graph START 后：root 层节点（不属于任何 frame）可运行
-- Group 是 gate：开启则其内部节点运行；关闭则**阻断**（节点停 + side-effect 停）
-- Loop/Patch 是 execution partition：部署到 client 后，manager 对其节点停止 compute，只保留“参数传递/override”能力与最小状态监控
-
-关键补齐（必须写死）：
-
-1) **Frame 树约束（tree invariant）**
-2) **跨 frame 连线语义**
-3) **停/启生命周期（stop semantics）**
-
-并且 UI 必须能解释这一切（用户一眼就知道为什么这个节点在跑/不跑）。
-
-## 2.3 Loop：部署后 manager 不再重复显示 live 值；client 只回传最小状态
-
-- 部署后 manager 不再 compute（避免重复与误导）
-- client 仍回传：
-  - deployed / started / stopped / removed / rejected / error
-  - watchdog（slow tick / compile error 等）
-- 不回传每节点数据/每 tick 数据（目前也没有这类回传；我们只需要保持 status）
-
-## 2.4 节点注册：node-core SOT + JSON UI overlay
-
-- node-core：唯一运行时定义（ports + config schema + process/onSink）
-- JSON：只做 UI overlay（label/category/可见性/约束补充/展示选项），不得定义运行时逻辑
-- 兼容：现有 JSON `runtime.kind` 逐步迁移/废弃，但先保证现有节点不破坏
-
-## 2.5 MIDI：批量下发（同 tick 合并为单包）
-
-满足你“同时按两个 MIDI，希望参数一起传过去”的要求：
-
-- manager 在同一 tick 内对同一 clientId 的多条 control 合并为一个 batch（单条网络消息）
-- client 解析 batch，在同一调度点执行（可共享 executeAt）
-- 可选：对“update 类 action”（例如 `modulateSoundUpdate`）做合并（同 tick 只保留最后值/merge 字段）
-
----
-
-# 3. 验收指标（必须量化）
-
-## 3.1 交互性能指标（Manager UI）
-
-在 Mac/常见开发机上（Chrome）：
-
-- 20 节点 / 30 edges：拖拽、缩放、平移稳定 55–60fps
-- 60 节点 / 120 edges：交互稳定 45fps+（无明显卡顿）
-- 100 节点 / 200 edges：交互 30fps+（可用、无长时间冻结）
+- 20 nodes / 30 edges：拖拽、缩放、平移稳定 55–60fps
+- 60 nodes / 120 edges：交互稳定 45fps+
+- 100 nodes / 200 edges：交互 30fps+（可用、无长时间冻结）
 
 硬门槛：
 
-- “不 start 也卡”的问题必须消失（stop 状态下不应有明显掉帧）
-
-## 3.2 网络指标（MIDI 批量）
-
-- 同一 tick（例如 33ms）内对同一 client 的多条 MIDI 驱动更新：
-  - server 侧应看到 **1 条 control 消息**（而不是 N 条）
-  - client 执行动作的 jitter 明显下降（肉眼可感）
-
-## 3.3 权责一致性指标（Gate）
-
-必须做到：
-
-- 任何节点“为什么在跑/不跑”可由 UI 解释（显示 gate path 与阻断原因）
-- group/loop/patch 状态变化不会出现“关了还在动”的悬空状态（尤其是 side-effect）
+- “stop 也卡”的问题必须显著缓解（stop 状态下不应有明显掉帧/冻结）
 
 ---
 
-# 4. 执行步骤（可打勾）
+# 3. 执行步骤（可打勾）
 
 ## [x] Step 0 — 基线、观测与安全网（先做，避免盲改）
 
-### [x] Step 0.1 建立基线用例（Graph Fixtures）
+### [x] Step 0.1 Graph Fixtures（用于性能对比/回归）
 
-新增固定 graph fixtures（JSON），用于：
+固定 graph fixtures（JSON），覆盖 20/60/100 nodes（含典型 edge 密度与 loop/group/patch/midi 节点）。
 
-- 性能对比（20/60/100 节点）
-- 回归测试（功能一致）
+### [x] Step 0.2 Perf Overlay（DEV 性能面板）
 
-建议放置：
+DEV-only 性能面板（FPS / nodes / edges / renderer / shadows），用于每一步量化对比。
 
-- `apps/manager/src/lib/components/nodes/node-canvas/fixtures/graph-20.json`
-- `.../graph-60.json`
-- `.../graph-100.json`
+### [x] Step 0.3 Feature Flags（DEV 开关 + localStorage 持久化）
 
-内容要求：
-
-- 包含典型 edges 密度（含 sink 多连线）
-- 至少包含：midi-*、math/lfo、proc-*、client-object、audio-out（patch）
-- 至少包含：一个 group + subgroup；一个 loop（可 deploy）；一个 patch（audio-out）
-
-### [x] Step 0.2 性能观测（Debug Overlay）
-
-新增一个 DEV-only 的性能面板（不影响生产）：
-
-- FPS（requestAnimationFrame 统计）
-- 交互延迟（pointermove 到视图更新的耗时粗测）
-- 渲染器类型（rete/xyflow）
-- 连接数、节点数
-- “是否启用阴影/滤镜”
-
-目的：每一步改动都能量化。
-
-### [x] Step 0.3 Feature Flags（必须）
-
-新增环境/URL 开关：
-
-- `NODE_GRAPH_RENDERER`：`rete`（默认） / `xyflow`
-- `NODE_GRAPH_EDGE_SHADOWS`：`on`（默认旧） / `off`（新默认）
-- `NODE_GRAPH_LIVE_VALUES`：`on/off`（后续可用于进一步优化，但先不改行为）
-
-在 UI 上也提供一个 DEV-only 的切换入口（避免改 env 才能试）。
+- `?ng_shadows=on/off`（连线阴影）
+- `?ng_live=on/off`（live port values）
+- `?ng_perf=on/off`（性能面板）
 
 ---
 
-## [x] Step 1 — 立即止血：去掉阴影 + 降低 edges 渲染开销（保持 Rete）
+## [x] Step 1 — 立即止血：先把 edges 成本砍下来（保持 Rete）
 
-> 目标：在不动大结构的情况下，先把“20 节点不 start 也卡”大幅缓解，为迁移争取时间。
+### [x] Step 1.1 去掉连线 drop-shadow
 
-### [x] Step 1.1 去掉连线 drop-shadow（你允许的外观变化）
+直接移除/默认关闭 `filter: drop-shadow(...)`，只保留颜色与粗细变化。
 
-修改：
+### [x] Step 1.2 把每条 edge 的 SVG 从“超大画布”收敛到 bbox
 
-- `apps/manager/src/lib/components/nodes/node-canvas/rete/ReteConnection.svelte`
-  - 移除 `filter: drop-shadow(...)`
-  - 保留 active/localLoop/deployedLoop 的颜色与粗细变化
-
-验收：
-
-- 20/60 节点 fixtures 下，stop 状态的平移/缩放明显变顺畅
-
-### [x] Step 1.2 修正“每条 edge 一个 9999px SVG”的极端开销（可选但强烈建议）
-
-这是一个高收益点，但改动可能稍多。两种策略二选一：
-
-#### 策略 A（低风险）：缩小 SVG 的 viewBox/尺寸
-
-- 将每个 edge 的 svg 尺寸限制在 start/end 的包围盒附近（加 padding）
-- 避免 9999x9999 的大区域参与合成
-
-#### 策略 B（中风险，高收益）：edges 统一画在单层（canvas 或单 SVG）
-
-- 用一个 overlay 层绘制所有 edges（每帧/每变更重画）
-- Rete 侧只保留 sockets hit-test
-
-本计划建议：
-
-- Step 1 先做策略 A（低风险）
-- Step 2 迁移到 XYFlow 后再考虑策略 B（因为 XYFlow 自带更合理的 edge 渲染）
-
-### [x] Step 1.3 保持功能不变的回归清单（Step 1）
-
-- 连线 hover/active 高亮仍可见
-- loop/deployed 高亮仍可见
-- 鼠标点击/拖拽连线不受影响
+把单条 connection 的 `<svg>` 视口限制在 start/end 的包围盒附近（加 padding），避免无意义的超大合成区域。
 
 ---
 
-## [/] Step 2 — 渲染器迁移：React Flow（XYFlow）并行上线（功能/外观不变）
+## [/] Step 2 — 主线优化：让 Rete 在更大规模节点下可交互
 
-> 目标：把性能从“勉强可用”提升到“可规模化”（>=100 nodes），并为后续 gate/权限重构提供更干净的 view 层。
+### [x] Step 2.1 View Adapter 抽象（为后续单层 edges / 裁剪做铺垫）
 
-### [x] Step 2.1 关键策略：先抽象 View Adapter，再换渲染器（避免一次性重写）
+把控制器/overlays 对 Rete 内部对象的直接依赖收敛到 adapter（避免后续优化牵一发动全身）。
 
-#### [x] Step 2.1.1 定义渲染器无关的接口（GraphViewAdapter）
+### [ ] Step 2.2 Edges 单层化（收益最大）
 
-新增一个渲染器抽象层（示例接口）：
+目标：把 “每条 edge 一个 `<svg>` 组件” 改为 “单层绘制”，减少 DOM 数量与合成层数量。
 
-- 获取节点/连线的可视对象（用于高亮状态）
-- 更新节点/连线的渲染状态（active/localLoop/deployedLoop/groupDisabled/selected…）
-- 读取/设置节点位置
-- 读取 viewport transform（k/tx/ty）
-- 框选/节点命中测试（用于 picker 与 group/marquee）
-- 请求一次 frames update（等价 requestAnimationFrame 合并）
+实现路线（二选一，推荐先 A）：
 
-目的：
+#### [ ] Step 2.2.A 单 SVG ConnectionsLayer（低风险优先）
 
-- 现有 group/loop/midi/minimap 控制器大量依赖 Rete `areaPlugin`、`nodeViews`、`update('node')` 等；  
-  先把这些依赖收敛到 adapter，才能同时支持 Rete 与 XYFlow。
+- 新增统一的 edges layer：一个 `<svg>` 绘制全部 edges（paths）
+- 高亮规则（active/localLoop/deployedLoop）保持不变
+- 交互优先级：以 sockets/节点为主；边点击/hover 可降级（或用一条 invisible hit-path）
 
-#### [x] Step 2.1.2 先实现 ReteAdapter（行为不变）
+#### [ ] Step 2.2.B Canvas2D EdgesLayer（高收益）
 
-把当前 NodeCanvas 中对 `areaPlugin/nodeMap/connectionMap` 的直接使用改为 adapter 调用：
-
-- `createGroupController`、`createLoopController`、`createMidiHighlightController`、`createMinimapController`
-- `LiveDOMSocketPosition` 的触发点（requestFramesUpdate）也接入 adapter
+- 用一个 `<canvas>` overlay 绘制全部 edges
+- 若实现成本过高，可接受“边不可点”，保留 sockets/节点交互即可
 
 验收：
-
-- renderer 仍是 Rete，但行为/外观完全一致（除了 Step 1 去掉阴影）
-
-### [x] Step 2.2 引入 XYFlow（React Flow 系列）作为新渲染器
-
-#### [x] Step 2.2.1 路线选择（A 推荐 / B 备选）
-
-路线 A（推荐）：
-
-- 使用 XYFlow 的 Svelte 集成包（同生态/同思路），避免在 SvelteKit 中嵌 React runtime  
-- 复用现有 Svelte node UI 组件与样式，达到“外观不变”的要求更容易
-
-路线 B（备选）：
-
-- 在 Svelte 组件中 `onMount` 创建 React root（client-only），React Flow 在其中运行  
-- 样式通过共享 CSS/变量保持一致
-
-本计划默认路线 A；如果你坚持 React Flow 字面实现，在开始 Step 2.2.2 前确认切换到路线 B。
-
-#### [x] Step 2.2.2 新增 XYFlowRenderer（并行存在）
-
-新增一个新的渲染器组件（不替换旧的，先并行）：
-
-- `apps/manager/src/lib/components/nodes/NodeCanvasXYFlow.svelte`（或类似命名）
-- 通过 `NODE_GRAPH_RENDERER=xyflow` 切换
-
-它负责：
-
-- 读取 `nodeEngine.graphState` 生成 XYFlow nodes/edges
-- 把用户交互（拖拽、连线、选择）回写到 `nodeEngine`（同现有接口）
-- 暴露 adapter 能力给 controllers（实现 `XYFlowAdapter`）
-
-#### [x] Step 2.2.3 节点外观与交互一致性
-
-要求：节点外观与现在 `ReteNode.svelte` 尽量一致。
-
-实施策略：
-
-- 抽取共享样式（例如 node 容器、title、ports 行、value badge）
-- XYFlow node component 复用这些 className/CSS（Svelte/React 版本同名 class）
-
-必须覆盖的交互：
-
-- inline 控件（number/string/boolean/color）
-- socket 点击/连线
-- 展示 live port values（先保持现状；后续可做开关/降频）
-
-#### [x] Step 2.2.4 Edges（连线）策略：无阴影 + 高亮保持
-
-在 XYFlow 中实现：
-
-- normal/localLoop/deployedLoop/active 的颜色/粗细变化保持与旧版一致
-- 默认不加 drop-shadow（性能优先）
-
-#### [x] Step 2.2.5 虚拟化（only render visible）
-
-必须启用：
-
-- onlyRenderVisibleElements（或等价能力）
-- 对 nodes/edges 做 viewport culling（这是迁移到 XYFlow 的核心价值）
-
-验收：
-
-- 100 节点 fixtures 在 stop 状态可顺畅缩放/平移
-
-### [x] Step 2.3 迁移现有 overlays 与工具面板（不改变 UX）
-
-需要逐个迁移/对齐：
-
-- NodePickerOverlay（add/connect 模式）
-- GroupFramesOverlay（显示 frame、按钮、拖拽 header）
-- LoopFramesOverlay（deploy/stop/logs）
-- MarqueeOverlay（框选后 create group）
-- Minimap（保持 UI 位置/大小/交互一致）
-- ExecutorLogsPanel（不变）
-- Toolbar（不变）
-
-关键点：
-
-- overlays 的坐标系必须与 viewport transform 一致（k/tx/ty）
-- adapter 提供 `getViewportTransform()` 统一坐标换算
-
----
-
-### [ ] Step 2.4 XYFlow parity（补齐 Rete 行为，不改默认路径）
-
-> 目标：让 `ng_renderer=xyflow` 真正可用（功能/外观不输 Rete），然后才讨论把默认渲染器切过去。
-
-#### [ ] Step 2.4.1 Patch / Override 逻辑抽取（renderer-agnostic）
-
-现状：Patch（`audio-out` root）deploy/stop/remove、override TTL/commit 目前主要写在 `NodeCanvas.svelte` 内。
-
-计划：把这些“非渲染器核心”的逻辑抽到独立 controller（例如 `node-canvas/controllers/runtime-controller.ts`）：
-
-- 输入：`nodeEngine`、`getSDK()`、selected clients、clock/tick（如需要）
-- 输出：`start/stop`、`applyOverride`、`commitOverrides`、`deployPatch/stopPatch/removePatch`
-- 两个渲染器都调用同一套 controller（避免 XYFlow 再复制一份）
-
-验收：
-
-- XYFlow 路径下：Start/Stop、Patch deploy/stop/remove、override 行为与 Rete 路径一致
-
-#### [ ] Step 2.4.2 Clipboard / Hotkeys（复制粘贴/删除/框选）
-
-补齐你在 Step 0.1 的回归项：
-
-- Cmd/Ctrl+C / V：复制粘贴选中节点（含内部连线恢复）
-- Backspace/Delete：删除选中节点/边
-- Esc：关闭 picker / 清 selection / 退出 edit mode（保持与 Rete 一致）
-
-建议：先把“graph editing commands”抽象成纯函数（接 `GraphState` + selection + cursorPos），再分别挂到 Rete/XYFlow 的事件系统。
-
-#### [ ] Step 2.4.3 切换条件（何时可以把默认渲染器切到 XYFlow）
-
-必须满足（全部）：
 
 - fixtures（20/60/100）下性能达标（见 Step 3.1）
 - Step 0.1 回归清单全通过（包含 patch、override、MIDI、group/loop）
@@ -688,52 +407,34 @@ UI 文案/状态：
 
 ## 5.1 必跑命令
 
-- `pnpm lint`
-- `pnpm dev:manager`（至少跑起来）
-- `pnpm dev:client`（验证 custom batch 与 node-executor 不回归）
+- `pnpm --filter @shugu/manager run check`
+- `pnpm --filter @shugu/manager run lint`（若当前 lint 对 warnings 也 fail，至少保证无新增 error）
 
-## 5.2 手动回归步骤（每个里程碑都要过一遍）
+## 4.2 手动性能回归步骤
 
 1) 打开 NodeCanvas，加载 graph-20/60/100 fixtures
-2) stop 状态下拖拽/缩放/平移
-3) start 后拖拽/缩放/平移
-4) 新增节点、连线、替换单连接输入
-5) 创建 group/subgroup，toggle gate，确认：
+2) stop 状态：拖拽/缩放/平移（观察 FPS 与卡顿）
+3) 新增节点、连线、替换单连接输入
+4) 创建 group/subgroup，toggle gate，确认：
    - 关闭后节点不再产生副作用
    - 重新开启后按规则恢复
-6) 生成 loop，deploy/stop/remove，确认：
+5) 生成 loop，deploy/stop/remove，确认：
    - deploy 后 manager 不再显示 loop 内 live 值
    - status events 正常更新
-7) patch（audio-out）deploy/stop/remove，确认 group gate 关闭能停止 patch
-8) MIDI：同时按两键，确认 server 侧消息数量减少且 client 变化同步
+6) patch（audio-out）deploy/stop/remove，确认 group gate 关闭能停止 patch
+7) MIDI：同时按两键，确认 server 侧消息数量减少且 client 变化同步
 
 ---
 
 # 6. 风险与对策
 
-## 6.1 XYFlow/React Flow 集成风险
-
-- 风险：引入新依赖导致 bundle 变大、Svelte/React 混用复杂
-- 对策：优先采用 Svelte 集成路线；且全程 feature flag，随时可回退 Rete
-
-## 6.2 Gate Cascade 的语义复杂
+## 6.1 Gate Cascade 的语义复杂
 
 - 风险：跨 frame 连线与 lifecycle 若不清晰，会出现新 bug
 - 对策：先写规则与测试（纯函数），再接 UI；并对关键节点（playMedia/sound/screen/flashlight）补齐 onDisable 行为
 
-## 6.3 JSON overlay 兼容风险
+## 6.2 JSON overlay 兼容风险
 
 - 风险：旧 JSON runtime.kind 与新 overlay schema 冲突
 - 对策：分阶段迁移；先“读取 overlay 而不破坏旧运行时”，再逐步废弃 runtime.kind
 
----
-
-# 7. 明确待你确认的决策点（开始实施前）
-
-1) React Flow 的“字面要求”是否必须：  
-   - A：接受 XYFlow 的 Svelte 集成（推荐、风险小）  
-   - B：必须使用 React Flow（将走 React 嵌入方案）
-2) stop 语义：节点停时输出清空（本计划默认），是否有例外需要“冻结最后值”？
-3) custom batch 的 action 选择：是否接受 `action:'custom'` + `kind:'control-batch'`？
-
-只要你对这三个点确认，本计划即可进入实施阶段（逐阶段落地）。

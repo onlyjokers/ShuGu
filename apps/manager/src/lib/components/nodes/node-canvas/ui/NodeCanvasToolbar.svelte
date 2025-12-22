@@ -6,12 +6,10 @@
   import { fly } from 'svelte/transition';
   import {
     nodeGraphEdgeShadows,
-    nodeGraphRenderer,
     nodeGraphLiveValues,
     nodeGraphPerfOverlay,
     nodeGraphFlags,
     setEdgeShadows,
-    setRenderer,
     setLiveValues,
     setPerfOverlay,
   } from '$lib/features/node-graph-flags';
@@ -143,13 +141,6 @@
             {#if showDevFlags}
               <div class="toolbar-menu-sep" />
               <div class="toolbar-menu-title">DEV</div>
-              <button
-                type="button"
-                class="toolbar-menu-item"
-                on:click={() => setRenderer($nodeGraphRenderer === 'xyflow' ? 'rete' : 'xyflow')}
-              >
-                Renderer: {$nodeGraphRenderer === 'xyflow' ? 'XYFlow' : 'Rete'}
-              </button>
               <button
                 type="button"
                 class="toolbar-menu-item"

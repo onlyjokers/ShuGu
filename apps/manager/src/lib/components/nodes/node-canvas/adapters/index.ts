@@ -5,5 +5,3 @@
  */
 export * from './graph-view-adapter';
 export { createReteAdapter, type ReteAdapterOptions } from './rete-adapter';
-export { createXYFlowAdapter, type XYFlowAdapterOptions } from './xyflow-adapter';
-

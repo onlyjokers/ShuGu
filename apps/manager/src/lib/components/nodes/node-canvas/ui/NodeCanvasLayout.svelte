@@ -88,7 +88,7 @@
     opacity: 1;
   }
 
-  /* --- Shared node/socket styles (Rete + XYFlow) --- */
+  /* --- Shared node/socket styles (NodeCanvas) --- */
   :global(.node-canvas-container .node) {
     background: rgba(17, 24, 39, 0.92) !important;
     border: 1px solid rgba(99, 102, 241, 0.35) !important;

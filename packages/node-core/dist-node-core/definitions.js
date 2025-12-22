@@ -109,7 +109,8 @@ function createAudioOutNode() {
         category: 'Audio',
         inputs: [
             { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-            { id: 'client', label: 'Client', type: 'client', kind: 'sink' },
+            // Backward-compat only (old wiring): `client-object(out) -> audio-out(client)`.
+            { id: 'client', label: 'Target (legacy)', type: 'client', kind: 'sink' },
         ],
         outputs: [
             // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
