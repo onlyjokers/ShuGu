@@ -2,24 +2,24 @@
     "name": "@shugu/sdk-manager",
     "version": "1.0.0",
     "description": "Manager SDK for Socket.io communication and state management",
-    "main": "./dist-out/index.js",
-    "module": "./dist-out/index.js",
-    "types": "./dist-out/index.d.ts",
+    "main": "./dist-sdk-manager-out/index.js",
+    "module": "./dist-sdk-manager-out/index.js",
+    "types": "./dist-sdk-manager-out/index.d.ts",
     "type": "module",
     "exports": {
         ".": {
-            "types": "./dist-out/index.d.ts",
-            "import": "./dist-out/index.js"
+            "types": "./dist-sdk-manager-out/index.d.ts",
+            "import": "./dist-sdk-manager-out/index.js"
         }
     },
     "scripts": {
         "build": "pnpm exec tsc",
         "dev": "pnpm exec tsc --watch",
-        "clean": "rm -rf dist-out",
+        "clean": "rm -rf dist-sdk-manager-out",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
     },
     "files": [
-        "dist-out"
+        "dist-sdk-manager-out"
     ],
     "dependencies": {
         "@shugu/protocol": "workspace:*",

@@ -84,7 +84,7 @@ type GroupControllerOptions = {
   requestLoopFramesUpdate: () => void;
   requestMinimapUpdate: () => void;
   isSyncingGraph: () => boolean;
-  stopLoop: (loop: LocalLoop) => void;
+  stopAndRemoveLoop: (loop: LocalLoop) => void;
 };
 
 export function createGroupController(opts: GroupControllerOptions): GroupController {
@@ -1034,7 +1034,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     for (const loop of opts.getLocalLoops()) {
       if (!opts.getDeployedLoopIds().has(loop.id)) continue;
       if (!loop.nodeIds.some((id) => set.has(String(id)))) continue;
-      opts.stopLoop(loop);
+      opts.stopAndRemoveLoop(loop);
     }
   };
 

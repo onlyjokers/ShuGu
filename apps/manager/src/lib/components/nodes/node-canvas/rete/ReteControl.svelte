@@ -204,6 +204,9 @@
   let fileIsUploading = false;
   let fileUploadError: string | null = null;
 
+  const isFiniteNumber = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+
   function openFilePicker() {
     if (data?.readonly) return;
     if (fileIsUploading) return;
@@ -329,6 +332,110 @@
   function clearMidiBinding(nodeId: string) {
     nodeEngine.updateNodeConfig(nodeId, { source: null });
   }
+
+  // ===== time-range control (dual cursor timeline) =====
+  let didRefreshAssetsForTimeRange = false;
+  $: if (data?.controlType === 'time-range' && !didRefreshAssetsForTimeRange) {
+    didRefreshAssetsForTimeRange = true;
+    void assetsStore.refresh();
+  }
+
+  let timeRangeNodeId = '';
+  let timeRangeConfigKey = '';
+  let timeRangeStartSec = 0;
+  let timeRangeEndSec = -1; // -1 means "to end"
+  let timeRangeMin = 0;
+  let timeRangeMax = 10;
+  let timeRangeStep = 0.01;
+  let timeRangeAssetDurationSec: number | null = null;
+  let timeRangeSliderStart = 0;
+  let timeRangeSliderEnd = 0;
+  let timeRangeStartPct = 0;
+  let timeRangeEndPct = 100;
+
+  $: if (data?.controlType === 'time-range') {
+    timeRangeNodeId = String(data?.nodeId ?? '');
+    timeRangeConfigKey = String(data?.configKey ?? '');
+
+    const raw = (data as any).value ?? {};
+    const start = typeof raw?.startSec === 'number' && Number.isFinite(raw.startSec) ? raw.startSec : 0;
+    const end = typeof raw?.endSec === 'number' && Number.isFinite(raw.endSec) ? raw.endSec : -1;
+    timeRangeStartSec = start;
+    timeRangeEndSec = end >= 0 ? Math.max(start, end) : -1;
+
+    timeRangeMin = isFiniteNumber((data as any).min) ? Number((data as any).min) : 0;
+    timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
+
+    const node = timeRangeNodeId
+      ? ($graphStateStore.nodes ?? []).find((n: any) => String(n.id) === timeRangeNodeId)
+      : null;
+    const assetId = typeof node?.config?.assetId === 'string' ? String(node.config.assetId) : '';
+    const asset = assetId ? ($assetsStore?.assets ?? []).find((a: any) => String(a?.id ?? '') === assetId) : null;
+    const durMs = asset?.durationMs;
+    timeRangeAssetDurationSec =
+      typeof durMs === 'number' && Number.isFinite(durMs) && durMs > 0 ? durMs / 1000 : null;
+
+    const maxFromAsset = timeRangeAssetDurationSec;
+    const maxFromField = isFiniteNumber((data as any).max) ? Number((data as any).max) : null;
+    const maxFallback = Math.max(10, timeRangeStartSec, timeRangeEndSec > 0 ? timeRangeEndSec : 0);
+    timeRangeMax = Math.max(timeRangeMin + timeRangeStep, maxFromAsset ?? maxFromField ?? maxFallback);
+
+    const clamp = (v: number) => Math.max(timeRangeMin, Math.min(timeRangeMax, v));
+    timeRangeSliderStart = clamp(timeRangeStartSec);
+    timeRangeSliderEnd = timeRangeEndSec < 0 ? timeRangeMax : clamp(timeRangeEndSec);
+    if (timeRangeSliderEnd < timeRangeSliderStart) timeRangeSliderEnd = timeRangeSliderStart;
+
+    const span = timeRangeMax - timeRangeMin;
+    timeRangeStartPct = span > 0 ? ((timeRangeSliderStart - timeRangeMin) / span) * 100 : 0;
+    timeRangeEndPct = span > 0 ? ((timeRangeSliderEnd - timeRangeMin) / span) * 100 : 100;
+  }
+
+  const setTimeRange = (startSec: number, endSec: number) => {
+    if (data?.readonly) return;
+    const start = Math.max(timeRangeMin, startSec);
+    const end = endSec >= 0 ? Math.max(start, endSec) : -1;
+    (data as any)?.setValue?.({ startSec: start, endSec: end });
+  };
+
+  const handleTimeRangeStartInput = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const n = Number(target.value);
+    if (!Number.isFinite(n)) return;
+    const nextStart = Math.max(timeRangeMin, n);
+    const nextEnd = timeRangeEndSec >= 0 ? Math.max(nextStart, timeRangeEndSec) : -1;
+    setTimeRange(nextStart, nextEnd);
+  };
+
+  const handleTimeRangeEndInput = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const raw = target.value.trim();
+    if (raw === '') {
+      setTimeRange(timeRangeStartSec, -1);
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const nextEnd = Math.max(timeRangeStartSec, Math.max(timeRangeMin, n));
+    setTimeRange(timeRangeStartSec, nextEnd);
+  };
+
+  const handleTimeRangeStartSlider = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const n = Number(target.value);
+    if (!Number.isFinite(n)) return;
+    const nextStart = Math.max(timeRangeMin, n);
+    const nextEnd = timeRangeEndSec >= 0 ? Math.max(nextStart, timeRangeEndSec) : -1;
+    setTimeRange(nextStart, nextEnd);
+  };
+
+  const handleTimeRangeEndSlider = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const n = Number(target.value);
+    if (!Number.isFinite(n)) return;
+    const nearEnd = Math.abs(n - timeRangeMax) <= timeRangeStep * 0.5;
+    const nextEnd = nearEnd ? -1 : Math.max(timeRangeStartSec, Math.max(timeRangeMin, n));
+    setTimeRange(timeRangeStartSec, nextEnd);
+  };
 </script>
 
 {#if data instanceof ClassicPreset.InputControl}
@@ -381,6 +488,76 @@
         <span class="toggle-label">{data.label}</span>
       {/if}
     </label>
+  </div>
+{:else if data?.controlType === 'time-range'}
+  <div class="time-range {isInline ? 'inline' : ''}">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+
+    <div class="time-range-row">
+      <label class="time-range-field" on:pointerdown|stopPropagation>
+        <span>Start</span>
+        <input
+          class="time-range-input"
+          type="number"
+          step={timeRangeStep}
+          min={timeRangeMin}
+          value={timeRangeStartSec}
+          disabled={data.readonly}
+          on:input={handleTimeRangeStartInput}
+        />
+      </label>
+
+      <label class="time-range-field" on:pointerdown|stopPropagation>
+        <span>End</span>
+        <input
+          class="time-range-input"
+          type="number"
+          step={timeRangeStep}
+          min={timeRangeMin}
+          value={timeRangeEndSec < 0 ? '' : timeRangeEndSec}
+          placeholder="(end)"
+          disabled={data.readonly}
+          on:input={handleTimeRangeEndInput}
+        />
+      </label>
+
+      <div class="time-range-meta" aria-hidden="true">
+        {#if timeRangeAssetDurationSec !== null}
+          <span>{timeRangeAssetDurationSec.toFixed(2)}s</span>
+        {:else}
+          <span>{timeRangeMax.toFixed(2)}s</span>
+        {/if}
+      </div>
+    </div>
+
+    <div class="time-range-slider" on:pointerdown|stopPropagation>
+      <div
+        class="time-range-highlight"
+        style="left: {timeRangeStartPct}%; width: {Math.max(0, timeRangeEndPct - timeRangeStartPct)}%;"
+      />
+      <input
+        class="time-range-slider-input start"
+        type="range"
+        min={timeRangeMin}
+        max={timeRangeMax}
+        step={timeRangeStep}
+        value={timeRangeSliderStart}
+        disabled={data.readonly}
+        on:input={handleTimeRangeStartSlider}
+      />
+      <input
+        class="time-range-slider-input end"
+        type="range"
+        min={timeRangeMin}
+        max={timeRangeMax}
+        step={timeRangeStep}
+        value={timeRangeSliderEnd}
+        disabled={data.readonly}
+        on:input={handleTimeRangeEndSlider}
+      />
+    </div>
   </div>
 {:else if data?.controlType === 'file-picker'}
   <div class="file-picker {isInline ? 'inline' : ''}">
@@ -619,6 +796,125 @@
   .toggle-label {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.84);
+  }
+
+  .time-range {
+    padding: 6px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .time-range-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .time-range-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .time-range-input {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.92);
+    outline: none;
+    font-size: 12px;
+  }
+
+  .time-range-input:focus {
+    border-color: rgba(99, 102, 241, 0.7);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  }
+
+  .time-range-input:disabled {
+    background: rgba(2, 6, 23, 0.22);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.58);
+  }
+
+  .time-range-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    padding-bottom: 6px;
+    white-space: nowrap;
+  }
+
+  .time-range-slider {
+    position: relative;
+    height: 28px;
+    padding: 0 2px;
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+  }
+
+  .time-range-highlight {
+    position: absolute;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(14, 165, 233, 0.7);
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .time-range-slider-input {
+    -webkit-appearance: none;
+    appearance: none;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    width: calc(100% - 16px);
+    height: 28px;
+    background: transparent;
+    pointer-events: none;
+  }
+
+  .time-range-slider-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    pointer-events: auto;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 2px solid rgba(14, 165, 233, 0.95);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  .time-range-slider-input::-moz-range-thumb {
+    pointer-events: auto;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    border: 2px solid rgba(14, 165, 233, 0.95);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+
+  .time-range-slider-input::-webkit-slider-runnable-track {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+  }
+
+  .time-range-slider-input::-moz-range-track {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
   }
 
   .client-picker {

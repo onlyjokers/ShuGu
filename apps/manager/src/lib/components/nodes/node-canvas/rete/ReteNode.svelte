@@ -9,6 +9,8 @@
     height?: number;
     localLoop?: boolean;
     deployedLoop?: boolean;
+    deployedPatch?: boolean;
+    stopped?: boolean;
     groupDisabled?: boolean;
     groupSelected?: boolean;
   };
@@ -35,6 +37,8 @@
   $: isActive = Boolean((data as any).active);
   $: activeInputs = new Set<string>((((data as any).activeInputs ?? []) as string[]).map(String));
   $: activeOutputs = new Set<string>((((data as any).activeOutputs ?? []) as string[]).map(String));
+  $: isDeployedPatch = Boolean((data as any).deployedPatch);
+  $: isStopped = Boolean((data as any).stopped);
   $: isGroupDisabled = Boolean((data as any).groupDisabled);
   $: isGroupSelected = Boolean((data as any).groupSelected);
 
@@ -140,6 +144,9 @@
   let portValueText: PortValueText = { inputs: {}, outputs: {} };
 
   $: if (nodeId) {
+    if (Boolean((data as any).deployedLoop) || isDeployedPatch) {
+      portValueText = { inputs: {}, outputs: {} };
+    } else {
     // Depend on tickTimeStore to refresh live values (MIDI/sensors/etc).
     const _tick = $tickTimeStore;
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -162,13 +169,14 @@
     }
 
     portValueText = { inputs: nextInputs, outputs: nextOutputs };
+    }
   } else {
     portValueText = { inputs: {}, outputs: {} };
   }
 </script>
 
 <div
-  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isActive ? 'active' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
+  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"

@@ -17,10 +17,13 @@ export type PatchExportResult = {
 function normalizeAssetRef(raw: string): string | null {
   const s = raw.trim();
   if (!s) return null;
-  if (s.startsWith('asset:')) return s;
+  if (s.startsWith('asset:')) {
+    const id = s.slice('asset:'.length).trim().split(/[?#]/)[0]?.trim() ?? '';
+    return id ? `asset:${id}` : null;
+  }
   const p = 'shugu://asset/';
   if (s.startsWith(p)) {
-    const id = s.slice(p.length).trim();
+    const id = s.slice(p.length).trim().split(/[?#]/)[0]?.trim() ?? '';
     return id ? `asset:${id}` : null;
   }
   return null;

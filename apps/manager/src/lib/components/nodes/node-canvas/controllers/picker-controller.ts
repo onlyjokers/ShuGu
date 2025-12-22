@@ -32,50 +32,6 @@ type PickerControllerOptions = {
 
 const PICKER_HISTORY_KEY = 'shugu.nodePickerHistory.v1';
 
-const CATEGORY_ORDER = [
-  'Core',
-  'Audio',
-  'Assets',
-  'Media',
-  'Control',
-  'MIDI',
-  'Logic',
-  'Parameters',
-  'Other',
-] as const;
-
-const normalizeCategory = (raw: unknown): string => {
-  const s = typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim();
-  return s || 'Other';
-};
-
-const displayCategoryForNodeType = (type: string, rawCategory: string): string => {
-  const t = String(type ?? '').trim();
-  if (!t) return normalizeCategory(rawCategory);
-
-  if (t === 'audio-out') return 'Core';
-  if (t === 'client-object') return 'Core';
-
-  if (t.startsWith('tone-')) return 'Audio';
-
-  if (t === 'play-media') return 'Media';
-  if (t.startsWith('load-media-') || t === 'load-audio-from-assets') return 'Assets';
-
-  if (t.startsWith('proc-')) return 'Control';
-
-  if (t.startsWith('midi-')) return 'MIDI';
-  if (t.startsWith('param-')) return 'Parameters';
-
-  // Collapse compute nodes into a single "Logic" bucket to keep the picker tidy.
-  if (rawCategory === 'Logic' || rawCategory === 'Generators' || rawCategory === 'Values') return 'Logic';
-
-  // Legacy/alias categories (for spec-defined nodes).
-  if (rawCategory === 'Objects') return 'Core';
-  if (rawCategory === 'Processors') return 'Control';
-
-  return normalizeCategory(rawCategory);
-};
-
 const readUsageMap = (): UsageMap => {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined') return {};
   try {
@@ -103,7 +59,7 @@ export function createPickerController(opts: PickerControllerOptions) {
   const mode = writable<PickerMode>('add');
   const anchor = writable({ x: 0, y: 0 });
   const graphPos = writable({ x: 0, y: 0 });
-  const selectedCategory = writable('Audio');
+  const selectedCategory = writable('Objects');
   const query = writable('');
   const initialSocket = writable<SocketData | null>(null);
   const usageMap = writable<UsageMap>(readUsageMap());
@@ -139,7 +95,7 @@ export function createPickerController(opts: PickerControllerOptions) {
         addItem({
           type: def.type,
           label: def.label,
-          category: displayCategoryForNodeType(def.type, def.category),
+          category: def.category,
           matchPort: {
             id: match.id,
             label: match.label ?? match.id,
@@ -150,11 +106,7 @@ export function createPickerController(opts: PickerControllerOptions) {
       }
     } else {
       for (const def of opts.nodeRegistry.list()) {
-        addItem({
-          type: def.type,
-          label: def.label,
-          category: displayCategoryForNodeType(def.type, def.category),
-        });
+        addItem({ type: def.type, label: def.label, category: def.category });
       }
     }
 
@@ -166,17 +118,26 @@ export function createPickerController(opts: PickerControllerOptions) {
     return map;
   });
 
+  const CATEGORY_ORDER = [
+    'Objects',
+    'Assets',
+    'Audio',
+    'MIDI',
+    'Values',
+    'Generators',
+    'Logic',
+    'Parameters',
+    'Processors',
+  ] as const;
+
   const categories = derived(itemsByCategory, ($itemsByCategory) => {
-    const cats = Array.from($itemsByCategory.keys()).map((c) => normalizeCategory(c));
-    const unique = Array.from(new Set(cats));
-
-    const orderIndex = (cat: string) => {
-      const idx = CATEGORY_ORDER.indexOf(cat as any);
-      return idx >= 0 ? idx : CATEGORY_ORDER.length;
-    };
-
-    unique.sort((a, b) => orderIndex(a) - orderIndex(b) || a.localeCompare(b));
-    return unique;
+    const cats = Array.from($itemsByCategory.keys());
+    const normalized = cats.filter((c) => c && typeof c === 'string');
+    const ordered = CATEGORY_ORDER.filter((c) => normalized.includes(c));
+    const rest = normalized
+      .filter((c) => !ordered.includes(c as any))
+      .sort((a, b) => a.localeCompare(b));
+    return [...ordered, ...rest];
   });
 
   const items = derived(
@@ -245,7 +206,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     mode.set(optsOpen.mode);
     initialSocket.set(optsOpen.initialSocket ?? null);
     query.set('');
-    selectedCategory.set(optsOpen.mode === 'connect' ? '' : 'Audio');
+    selectedCategory.set(optsOpen.mode === 'connect' ? '' : 'Objects');
     isOpen.set(true);
     void clampPickerToBounds();
   };

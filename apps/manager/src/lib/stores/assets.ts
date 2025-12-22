@@ -17,6 +17,9 @@ export type AssetRecord = {
   originalName: string;
   createdAt: number;
   updatedAt: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 };
 
 type AssetsState = {
@@ -101,4 +104,3 @@ export const assetsStore = {
   subscribe: store.subscribe,
   refresh,
 };
-

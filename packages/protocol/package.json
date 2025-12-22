@@ -2,24 +2,24 @@
     "name": "@shugu/protocol",
     "version": "1.0.0",
     "description": "Shared protocol definitions and types",
-    "main": "./dist-out/index.js",
-    "module": "./dist-out/index.js",
-    "types": "./dist-out/index.d.ts",
+    "main": "./dist-protocol-out/index.js",
+    "module": "./dist-protocol-out/index.js",
+    "types": "./dist-protocol-out/index.d.ts",
     "type": "module",
     "exports": {
         ".": {
-            "types": "./dist-out/index.d.ts",
-            "import": "./dist-out/index.js"
+            "types": "./dist-protocol-out/index.d.ts",
+            "import": "./dist-protocol-out/index.js"
         }
     },
     "scripts": {
         "build": "pnpm exec tsc",
         "dev": "pnpm exec tsc --watch",
-        "clean": "rm -rf dist-out",
+        "clean": "rm -rf dist-protocol-out",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
     },
     "files": [
-        "dist-out"
+        "dist-protocol-out"
     ],
     "devDependencies": {
         "typescript": "^5.3.0"

@@ -1,27 +1,29 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "Asset Upload (File Picker) → Tone Player → Audio Patch to Client",
-  "purpose": "体验 file-picker 节点的“上传到 Asset Service 并写入 asset:<id>” + Tone.Player 播放 + Patch Deploy",
+  "title": "Load Audio From Assets (Timeline/Loop/Play) → Tone Player → Audio Patch to Client",
+  "purpose": "体验 Load Audio From Assets 的 Timeline 双游标 + Loop + Play(Pause) 控制，并让 Tone.Player 仅播放片段（不重新加载音频）",
   "notes": [
-    "需要 manager 已设置 `shugu-server-url` 和 `shugu-asset-write-token`（否则上传会报 401/503）。",
-    "导入后先点 ▶ Start，再在 Load Media Sound 节点点击 Load Audio 选择文件。"
+    "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
+    "Manager 需要配置 `shugu-server-url` + `shugu-asset-write-token`（用于列出 assets）。",
+    "Start/End 端口是 number：可以接 MIDI Map 等数值节点进行精确控制。"
   ],
   "howTo": [
     "1) client 点 Start（启用 ToneAudioEngine）。",
     "2) manager Node Graph 点 ▶ Start。",
-    "3) Load Media Sound → Load Audio 选一个音频文件（会自动上传并把图里写成 asset:<id>）。",
-    "4) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
-    "5) Patch 会自动部署到该 client。"
+    "3) 在 Load Audio From Assets 里选择一个已上传的音频资产。",
+    "4) 拖动 Timeline 双游标选择片段，或输入 Start/End（秒）。",
+    "5) Loop：循环片段；Play：false 暂停，true 恢复。",
+    "6) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。"
   ],
   "graph": {
     "nodes": [
       {
-        "id": "node-load-media-sound",
-        "type": "load-media-sound",
+        "id": "node-load-audio",
+        "type": "load-audio-from-assets",
         "position": { "x": 120, "y": 180 },
-        "config": { "url": "" },
-        "inputValues": {},
+        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
+        "inputValues": { "loop": false, "play": true },
         "outputValues": {}
       },
       {
@@ -30,13 +32,13 @@
         "position": { "x": 480, "y": 180 },
         "config": {
           "url": "",
-          "loop": true,
-          "autostart": true,
+          "loop": false,
+          "autostart": false,
           "playbackRate": 1,
           "detune": 0,
           "volume": 0.9,
           "bus": "main",
-          "enabled": true
+          "enabled": false
         },
         "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
         "outputValues": {}
@@ -61,8 +63,8 @@
     "connections": [
       {
         "id": "conn-load-url-to-player",
-        "sourceNodeId": "node-load-media-sound",
-        "sourcePortId": "url",
+        "sourceNodeId": "node-load-audio",
+        "sourcePortId": "ref",
         "targetNodeId": "node-tone-player",
         "targetPortId": "url"
       },

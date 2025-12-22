@@ -40,7 +40,6 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'tone-granular') return 'sound';
   if (type === 'tone-player') return 'sound';
   if (type === 'play-media') return 'sound';
-  if (type === 'load-media-sound') return 'sound';
   if (type === 'proc-scene-switch') return 'visual';
   if (type === 'audio-out') return 'sound';
   if (type === 'load-audio-from-assets') return 'sound';
@@ -58,8 +57,9 @@ function hashString(input: string): string {
 class NodeEngineClass {
   private runtime: NodeRuntime;
 
-  // Nodes that are offloaded to the client runtime (skip execution + sinks on manager)
+  // Nodes that are offloaded to a client runtime (skip execution on manager)
   private offloadedNodeIds = new Set<string>();
+  private offloadedPatchNodeIds = new Set<string>();
   private deployedLoopIds = new Set<string>();
   private disabledNodeIds = new Set<string>();
 
@@ -76,8 +76,9 @@ class NodeEngineClass {
     this.runtime = new NodeRuntime(nodeRegistry, {
       tickIntervalMs: TICK_INTERVAL,
       isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(nodeId),
-      // Allow offloaded nodes to compute for UI visibility, but skip sink side-effects.
-      isSinkEnabled: (nodeId) => !this.offloadedNodeIds.has(nodeId),
+      isComputeEnabled: (nodeId) =>
+        !this.offloadedNodeIds.has(nodeId) && !this.offloadedPatchNodeIds.has(nodeId),
+      isSinkEnabled: () => true,
       onTick: ({ time }) => {
         this.tickTime.set(time);
       },
@@ -315,6 +316,7 @@ class NodeEngineClass {
     this.stop();
     this.runtime.clear();
     this.offloadedNodeIds.clear();
+    this.offloadedPatchNodeIds.clear();
     this.deployedLoopIds.clear();
     this.disabledNodeIds.clear();
     this.syncGraphState();
@@ -344,6 +346,7 @@ class NodeEngineClass {
     const prepared = this.applySelectionMapOptions(sanitized);
     this.runtime.loadGraph(prepared);
     this.offloadedNodeIds.clear();
+    this.offloadedPatchNodeIds.clear();
     this.deployedLoopIds.clear();
     this.disabledNodeIds.clear();
     this.syncGraphState();
@@ -515,6 +518,13 @@ class NodeEngineClass {
   }
 
   /**
+   * Sync patch offload nodeIds (manager will stop executing these nodes locally while the patch is deployed).
+   */
+  setPatchOffloadedNodeIds(nodeIds: string[]): void {
+    this.offloadedPatchNodeIds = new Set((nodeIds ?? []).map((id) => String(id)).filter(Boolean));
+  }
+
+  /**
    * Export a minimal loop subgraph for client-side execution.
    * Throws if the loop contains node types outside the client whitelist.
    */
@@ -550,7 +560,6 @@ class NodeEngineClass {
       'tone-granular',
       'tone-player',
       'play-media',
-      'load-media-sound',
     ]);
 
     const nodes: GraphState['nodes'] = [];
@@ -629,7 +638,6 @@ class NodeEngineClass {
       'tone-granular',
       'tone-player',
       'play-media',
-      'load-media-sound',
       // Patch root
       'audio-out',
     ]);

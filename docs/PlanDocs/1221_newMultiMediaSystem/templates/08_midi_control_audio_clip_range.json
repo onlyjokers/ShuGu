@@ -1,0 +1,163 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "MIDI → (Start/End Sec) → Load Audio From Assets (Timeline) → Tone Player",
+  "purpose": "演示 Start/End 端口可接 MIDI 数字口：用 manager-only MIDI 节点通过 override bridge 实时控制 client 侧的片段播放范围。",
+  "notes": [
+    "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
+    "本模板包含 MIDI 节点：它们不会部署到 client，只在 manager 运行并通过 override-set 写入 patch。",
+    "你需要在两个 MIDI Fuzzy 节点分别 Learn 两个不同的 MIDI 控制（例如两个旋钮 CC）。"
+  ],
+  "howTo": [
+    "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
+    "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
+    "3) Load Audio From Assets 选择一个音频资产。",
+    "4) MIDI Start / MIDI End 节点分别点 Learn，绑定两个 MIDI 控制。",
+    "5) 转动 MIDI 控制：StartSec/EndSec 会实时更新；client 只播放该片段。",
+    "6) 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-load-audio",
+        "type": "load-audio-from-assets",
+        "position": { "x": 520, "y": 220 },
+        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
+        "inputValues": { "loop": true, "play": true },
+        "outputValues": {}
+      },
+      {
+        "id": "node-tone-player",
+        "type": "tone-player",
+        "position": { "x": 880, "y": 220 },
+        "config": {
+          "url": "",
+          "loop": false,
+          "autostart": false,
+          "playbackRate": 1,
+          "detune": 0,
+          "volume": 0.9,
+          "bus": "main",
+          "enabled": false
+        },
+        "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-delay",
+        "type": "tone-delay",
+        "position": { "x": 1180, "y": 220 },
+        "config": { "time": 0.2, "feedback": 0.2, "wet": 0.25, "bus": "main", "order": 10, "enabled": true },
+        "inputValues": { "time": 0.2, "feedback": 0.2, "wet": 0.25 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 1460, "y": 220 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 1460, "y": 360 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-start",
+        "type": "midi-fuzzy",
+        "position": { "x": 120, "y": 140 },
+        "config": { "source": null },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-start-map",
+        "type": "midi-map",
+        "position": { "x": 320, "y": 140 },
+        "config": { "min": 0, "max": 5, "curve": 1 },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-end",
+        "type": "midi-fuzzy",
+        "position": { "x": 120, "y": 300 },
+        "config": { "source": null },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-end-map",
+        "type": "midi-map",
+        "position": { "x": 320, "y": 300 },
+        "config": { "min": 1, "max": 10, "curve": 1 },
+        "inputValues": {},
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-assetref-to-player",
+        "sourceNodeId": "node-load-audio",
+        "sourcePortId": "ref",
+        "targetNodeId": "node-tone-player",
+        "targetPortId": "url"
+      },
+      {
+        "id": "conn-player-to-delay",
+        "sourceNodeId": "node-tone-player",
+        "sourcePortId": "value",
+        "targetNodeId": "node-delay",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-delay-to-out",
+        "sourceNodeId": "node-delay",
+        "sourcePortId": "out",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-midi-start-to-map",
+        "sourceNodeId": "node-midi-start",
+        "sourcePortId": "out",
+        "targetNodeId": "node-midi-start-map",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-midi-map-to-startSec",
+        "sourceNodeId": "node-midi-start-map",
+        "sourcePortId": "out",
+        "targetNodeId": "node-load-audio",
+        "targetPortId": "startSec"
+      },
+      {
+        "id": "conn-midi-end-to-map",
+        "sourceNodeId": "node-midi-end",
+        "sourcePortId": "out",
+        "targetNodeId": "node-midi-end-map",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-midi-map-to-endSec",
+        "sourceNodeId": "node-midi-end-map",
+        "sourcePortId": "out",
+        "targetNodeId": "node-load-audio",
+        "targetPortId": "endSec"
+      }
+    ]
+  }
+}
+

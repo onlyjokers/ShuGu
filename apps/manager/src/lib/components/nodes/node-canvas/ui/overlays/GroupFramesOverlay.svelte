@@ -6,6 +6,7 @@
 
   export let frames: any[] = [];
   export let areaTransform: { k: number; tx: number; ty: number } | null = null;
+  export let isRunning = false;
   export let editModeGroupId: string | null = null;
   export let toast: { groupId: string; message: string } | null = null;
   export let onToggleDisabled: (groupId: string) => void = () => undefined;
@@ -54,8 +55,16 @@
       {@const isEditing = editModeGroupId === group.id}
       {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
       {@const showCount = !isTiny}
+      {@const gateClosed = !isRunning || frame.effectiveDisabled}
+      {@const gateReason = !isRunning
+        ? 'Graph STOP'
+        : frame.effectiveDisabled
+          ? group.disabled
+            ? 'Gate closed'
+            : 'Parent gate closed'
+          : 'Gate open'}
       <div
-        class="group-frame {frame.effectiveDisabled ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
+        class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
         style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
       >
         <div
@@ -84,11 +93,15 @@
               on:keydown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') startEdit(group);
               }}
+              title={gateReason}
             >
               <span class="group-frame-title-name">{group.name ?? 'Group'}</span>
               {#if showCount}
                 <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
               {/if}
+              <span class="group-frame-gate {gateClosed ? 'closed' : 'open'}">
+                {gateClosed ? 'Gate: Closed' : 'Gate: Open'}
+              </span>
             </button>
           {/if}
           <div class="group-frame-actions">
@@ -213,6 +226,32 @@
   .group-frame-title-count {
     color: rgba(148, 163, 184, 0.95);
     font-variant-numeric: tabular-nums;
+  }
+
+  .group-frame-gate {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.82);
+  }
+
+  .group-frame-gate.open {
+    border-color: rgba(34, 197, 94, 0.45);
+    background: rgba(34, 197, 94, 0.14);
+    color: rgba(187, 247, 208, 0.95);
+  }
+
+  .group-frame-gate.closed {
+    border-color: rgba(148, 163, 184, 0.4);
+    background: rgba(148, 163, 184, 0.12);
+    color: rgba(226, 232, 240, 0.92);
   }
 
   .group-frame-title-input {

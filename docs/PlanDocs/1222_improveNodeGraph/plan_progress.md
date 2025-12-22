@@ -1,13 +1,4 @@
-<!--
-Purpose: Node Graph（Rete）性能改造计划的执行进度跟踪（与 plan.md 对齐）。
-Updated: 2025-12-22
--->
-
-# Node Graph（Rete）性能改造 - 执行进度
-
-## 变更记录
-
-- 2025-12-22：计划收敛为“只做 Rete 性能优化，不换技术栈”；移除所有“引入新渲染器/切换渲染器”的相关内容。
+# Node Graph Improvement Plan - 执行进度
 
 ## 执行时间线
 
@@ -15,23 +6,27 @@ Updated: 2025-12-22
 
 #### Step 0 — 基线、观测与安全网 ✅
 #### Step 1 — 立即止血 ✅
-#### Step 2 — 主线优化（Rete 扩容） 🔄
 
-**已完成：**
-- [x] Step 2.1：View Adapter 抽象（为后续 edges 单层化/裁剪做铺垫）
+#### Step 3 — Gate Cascade（CSS-like 权限）✅
 
-**待完成：**
-- [ ] Step 2.2：Edges 单层化（单 SVG 或 Canvas2D）
-- [ ] Step 2.3：可见裁剪（viewport culling / virtualization）
-- [ ] Step 2.4：高频更新合并与降频（rAF batching）
-- [ ] Step 2.5：量化验收与回归（fixtures 20/60/100）
+**已完成:**
+- [x] Gate 规则落地：`graphRunning` + `groupGateOpen` + `deploymentMode(local/remote)` 统一 compute/sink 行为
+- [x] Stop 语义收敛：stop=无输出；新增 `onDisable` 撤销副作用（client-object 下发 stopSound/stopMedia/hideImage/flashlight off/screen reset）
+- [x] group gate 关闭：stop/remove 相交的 deployed loop/patch，并清理 manager 侧 offload/highlight 状态
+- [x] UI：GroupFramesOverlay 显示 Gate Open/Closed + reason；Node 增加 `stopped`/`deployedPatch` 样式；remote 节点不再展示 live values；LoopFramesOverlay 文案更清晰
 
-#### Step 3 — WebGPU/Canvas 增强（兜底） ⏳
+**验证:**
+- `pnpm lint` ✅（0 errors）
+- `pnpm e2e:node-executor:offline` ✅
 
----
-
-## 关键产物（已落地）
-
-- `apps/manager/src/lib/features/node-graph-flags.ts`：`ng_shadows/ng_live/ng_perf`（含 localStorage 持久化）
-- `apps/manager/src/lib/components/nodes/node-canvas/ui/PerformanceDebugOverlay.svelte`：性能面板（右下角）
-- `apps/manager/src/lib/components/nodes/node-canvas/rete/ReteConnection.svelte`：默认无阴影 + 单条 edge SVG bbox 收敛
+**涉及文件（核心）:**
+- `packages/node-core/src/runtime.ts`
+- `packages/node-core/src/types.ts`
+- `packages/node-core/src/definitions.ts`
+- `apps/manager/src/lib/nodes/engine.ts`
+- `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+- `apps/manager/src/lib/components/nodes/node-canvas/controllers/group-controller.ts`
+- `apps/manager/src/lib/components/nodes/node-canvas/ui/overlays/GroupFramesOverlay.svelte`
+- `apps/manager/src/lib/components/nodes/node-canvas/ui/overlays/LoopFramesOverlay.svelte`
+- `apps/manager/src/lib/components/nodes/node-canvas/rete/ReteNode.svelte`
+- `apps/manager/src/lib/components/nodes/node-canvas/ui/NodeCanvasLayout.svelte`

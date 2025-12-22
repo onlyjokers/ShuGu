@@ -140,6 +140,8 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
       groupSelected: Boolean((node as any).groupSelected),
       localLoop: Boolean((node as any).localLoop),
       deployedLoop: Boolean((node as any).deployedLoop),
+      deployedPatch: Boolean((node as any).deployedPatch),
+      stopped: Boolean((node as any).stopped),
       active: Boolean((node as any).active),
       activeInputs: normalizeStringArray((node as any).activeInputs),
       activeOutputs: normalizeStringArray((node as any).activeOutputs),
@@ -191,6 +193,22 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
       const next = Boolean(patch.deployedLoop);
       if (Boolean((node as any).deployedLoop) !== next) {
         (node as any).deployedLoop = next;
+        changed = true;
+      }
+    }
+
+    if ('deployedPatch' in patch) {
+      const next = Boolean(patch.deployedPatch);
+      if (Boolean((node as any).deployedPatch) !== next) {
+        (node as any).deployedPatch = next;
+        changed = true;
+      }
+    }
+
+    if ('stopped' in patch) {
+      const next = Boolean(patch.stopped);
+      if (Boolean((node as any).stopped) !== next) {
+        (node as any).stopped = next;
         changed = true;
       }
     }

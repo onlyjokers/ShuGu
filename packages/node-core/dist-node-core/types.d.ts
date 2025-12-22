@@ -27,7 +27,7 @@ export interface NodePort {
 export interface ConfigField {
     key: string;
     label: string;
-    type: 'string' | 'number' | 'boolean' | 'select' | 'param-path' | 'midi-source' | 'client-picker' | 'asset-picker' | 'file';
+    type: 'string' | 'number' | 'boolean' | 'time-range' | 'select' | 'param-path' | 'midi-source' | 'client-picker' | 'asset-picker' | 'file';
     defaultValue?: unknown;
     options?: {
         value: string;
@@ -54,6 +54,11 @@ export interface NodeDefinition {
     configSchema: ConfigField[];
     process: (inputs: Record<string, unknown>, config: Record<string, unknown>, context: ProcessContext) => Record<string, unknown>;
     onSink?: (inputs: Record<string, unknown>, config: Record<string, unknown>, context: ProcessContext) => void;
+    /**
+     * Optional lifecycle hook invoked when a node stops executing due to a gate closing
+     * (e.g. graph stop / group gate closed). Use this to undo side-effects.
+     */
+    onDisable?: (inputs: Record<string, unknown>, config: Record<string, unknown>, context: ProcessContext) => void;
 }
 export interface NodeInstance {
     id: string;

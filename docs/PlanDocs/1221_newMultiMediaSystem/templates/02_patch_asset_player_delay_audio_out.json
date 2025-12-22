@@ -1,27 +1,27 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "Patch: Load Media Sound → Tone Player → Tone Delay → Audio Patch to Client",
-  "purpose": "体验上传到 Asset Service（asset:<id>）+ Tone.Player 播放 + Delay 效果 + Patch Deploy",
+  "title": "Patch: Load Audio From Assets → Tone Player → Tone Delay → Audio Patch to Client",
+  "purpose": "体验 asset:<id> 引用 + Tone.Player 播放 + Delay 效果 + Patch Deploy（不走大文件 msg）",
   "notes": [
-    "导入后需要在 `Load Media Sound` 节点里选择一个音频文件（会上传到 Asset Service，返回 asset:<id>）。",
-    "需要配置 `shugu-server-url` + `shugu-asset-write-token`（Manager connect 页）。"
+    "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
+    "Manager 需要配置 `shugu-server-url` + `shugu-asset-write-token`（用于列出 assets）。"
   ],
   "howTo": [
     "1) client 点 Start（启用 ToneAudioEngine）。",
     "2) manager Node Graph 点 ▶ Start。",
-    "3) 在 Load Media Sound 里选择音频文件（上传后自动得到 assetRef）。",
+    "3) 在 Load Audio From Assets 里选择一个已上传的音频资产，并用 Timeline/Loop/Play 控制片段播放。",
     "4) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
     "5) Patch 会自动部署到该 client；调 Tone Delay 的 Time/Wet/Feedback（实时生效，松手后保持）。"
   ],
   "graph": {
     "nodes": [
       {
-        "id": "node-load-media-sound",
-        "type": "load-media-sound",
+        "id": "node-load-audio",
+        "type": "load-audio-from-assets",
         "position": { "x": 120, "y": 180 },
-        "config": { "url": "" },
-        "inputValues": {},
+        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
+        "inputValues": { "loop": false, "play": true },
         "outputValues": {}
       },
       {
@@ -30,13 +30,13 @@
         "position": { "x": 460, "y": 180 },
         "config": {
           "url": "",
-          "loop": true,
-          "autostart": true,
+          "loop": false,
+          "autostart": false,
           "playbackRate": 1,
           "detune": 0,
           "volume": 0.9,
           "bus": "main",
-          "enabled": true
+          "enabled": false
         },
         "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
         "outputValues": {}
@@ -69,8 +69,8 @@
     "connections": [
       {
         "id": "conn-assetref-to-player",
-        "sourceNodeId": "node-load-media-sound",
-        "sourcePortId": "url",
+        "sourceNodeId": "node-load-audio",
+        "sourcePortId": "ref",
         "targetNodeId": "node-tone-player",
         "targetPortId": "url"
       },

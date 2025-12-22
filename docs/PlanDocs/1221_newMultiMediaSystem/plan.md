@@ -709,18 +709,17 @@ UI 层（NodeCanvas）：
 
 ---
 
-### Phase 2 - Manager 集成：文件选择 => 上传 => 写入 assetRef（禁止 DataURL 入图）
+### Phase 2 - Manager 集成：Assets Manager 上传 + NodeGraph 只引用 assetId（禁止 DataURL 入图）
 
 1) UI 交互
-- [x] 改造 `file` 控件：选择文件后显示 uploading/progress（最少显示“Uploading…”）
-- [x] 上传成功后：把 config 值写成 `asset:<id>`（而不是 base64）
-- [x] 上传失败：显示错误 + 不写入
-- [x] 上传鉴权：`POST /api/assets` 必须带 `Authorization: Bearer <ASSET_WRITE_TOKEN>`（token 存在 manager 配置里，不写入 graph）
+- [x] 上传入口收敛：NodeGraph 不再上传/不写入 DataURL；统一在 `Assets Manager` 页面上传
 - [x] 新增独立页面 `Assets Manager`：list/upload/delete（不干扰 Node Graph）
+- [x] NodeGraph 仅保存 `assetId`（运行时派生 `asset:<id>`），部署 payload 与资源大小解耦
+- [x] 上传鉴权：`POST /api/assets` 必须带 `Authorization: Bearer <ASSET_WRITE_TOKEN>`（token 存在 manager 配置里，不写入 graph）
 
 2) 节点层面
-- [x] `load-media-sound` 节点从“data URL loader”语义变为“asset loader”（输出 assetRef string）
-- [x] 为图片/视频做同类节点（或通用 `load-asset` 节点：kind=audio/image/video）
+- [x] 新增 `Load Audio From Assets / Load Image From Assets / Load Video From Assets`（asset-picker 输出 assetRef）
+- [x] 取消 `Load Media Sound / Load Media Image / Load Media Video`（NodeGraph 不再上传）
 
 3) 兼容旧项目
 - [x] 增加“迁移工具”（按钮或脚本）：DataURL -> 上传 -> assetRef
@@ -780,6 +779,27 @@ UI 层（NodeCanvas）：
 验收（你最关心的感知点）：
 - Tone Delay/Tone Player 等节点的输入输出在 Manager UI 里不再显示为“数字线”，而是明确的 `audio` 线
 - 连接错误在 UI 侧就能被阻止（而不是连上了没声才猜）
+
+---
+
+### Phase 2.6 - Load Audio From Assets：Timeline/Loop/Play（片段播放）
+
+> 目标：在 Node Graph 里像 Max/MSP 一样“节点化操纵音频播放片段”，Manager 改参数，Client 实时反映。
+
+- [x] node-core：`load-audio-from-assets`
+  - 增加 Timeline 配置（`time-range`：双游标 + 精确输入）
+  - 增加可接线输入：`startSec/endSec`（number）、`loop/play`（boolean）
+  - 输出 `assetRef` 扩展为：`asset:<id>#t=start,end&loop=0|1&play=0|1`
+- [x] manager：新增 `time-range` 控件渲染（双游标 slider + Start/End 数值输入）
+- [x] sdk-client：Tone.Player 支持解析 `#t/loop/play`，并实现：
+  - 片段播放（只播放 start/end 区间）
+  - Loop（循环 start/end 区间）
+  - Play=false 暂停、Play=true 恢复（不因参数变化触发重新加载）
+- [x] templates：更新/新增可直接导入验证的模板（Timeline + MIDI 控制）
+
+验收：
+- 导入 `03_load_audio_from_assets_timeline.json`：选择音频资产，拖动 Timeline 双游标，client 只播放该片段
+- 导入 `08_midi_control_audio_clip_range.json`：绑定 MIDI 后可实时控制 Start/End（manager-only → override bridge）
 
 ---
 

@@ -13,6 +13,7 @@ import {
   FilePickerControl,
   MidiLearnControl,
   SelectControl,
+  TimeRangeControl,
 } from './rete-controls';
 
 type ReteSocketMap = Record<string, ClassicPreset.Socket>;
@@ -372,6 +373,27 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         );
       } else if (field.type === 'midi-source') {
         node.addControl(key, new MidiLearnControl({ nodeId: instance.id, label: field.label }));
+      } else if (field.type === 'time-range') {
+        const raw = current as any;
+        const startSec =
+          typeof raw?.startSec === 'number' && Number.isFinite(raw.startSec) ? raw.startSec : 0;
+        const endSec = typeof raw?.endSec === 'number' && Number.isFinite(raw.endSec) ? raw.endSec : -1;
+
+        const control: any = new TimeRangeControl({
+          label: field.label,
+          initial: { startSec, endSec },
+          min: field.min,
+          max: field.max,
+          step: field.step,
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
+        });
+        control.nodeId = instance.id;
+        control.nodeType = instance.type;
+        control.configKey = key;
+        node.addControl(key, control);
       } else {
         const control: any = new ClassicPreset.InputControl('text', {
           initial: String(current ?? ''),

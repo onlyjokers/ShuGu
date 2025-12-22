@@ -11,7 +11,9 @@ export class NodeRuntime {
     onTick = null;
     onWatchdog = null;
     isNodeEnabled = null;
+    isComputeEnabled = null;
     isSinkEnabled = null;
+    lastEnabledStateByNode = new Map();
     // Remote overrides (manager-driven) that take precedence over connections and local inputs.
     // Overrides are NOT written into node.inputValues / node.config so TTL expiry restores base values.
     overridesByNode = new Map();
@@ -35,6 +37,7 @@ export class NodeRuntime {
         }
         this.onTick = options?.onTick ?? null;
         this.onWatchdog = options?.onWatchdog ?? null;
+        this.isComputeEnabled = options?.isComputeEnabled ?? null;
         this.isNodeEnabled = options?.isNodeEnabled ?? null;
         this.isSinkEnabled = options?.isSinkEnabled ?? null;
         const maxSink = options?.watchdog?.maxSinkValuesPerTick;
@@ -109,6 +112,7 @@ export class NodeRuntime {
         this.sinkSignatureHistory.clear();
         this.lastComputedInputsByNode.clear();
         this.lastOnSinkStateByNode.clear();
+        this.lastEnabledStateByNode.clear();
     }
     getNode(nodeId) {
         return this.nodes.get(nodeId);
@@ -138,6 +142,15 @@ export class NodeRuntime {
     stop() {
         if (!this.timer)
             return;
+        const now = Date.now();
+        this.runDisableHooks(now);
+        for (const node of this.nodes.values()) {
+            node.outputValues = {};
+        }
+        this.lastComputedInputsByNode.clear();
+        this.lastOnSinkStateByNode.clear();
+        this.lastEnabledStateByNode.clear();
+        this.lastTickTime = 0;
         clearInterval(this.timer);
         this.timer = null;
     }
@@ -152,6 +165,38 @@ export class NodeRuntime {
         this.sinkSignatureHistory.clear();
         this.lastComputedInputsByNode.clear();
         this.lastOnSinkStateByNode.clear();
+        this.lastEnabledStateByNode.clear();
+    }
+    runDisableHooks(now) {
+        const nodesInOrder = this.executionOrder.length > 0 ? this.executionOrder : Array.from(this.nodes.values());
+        const context = { nodeId: '', time: now, deltaTime: 0 };
+        for (const node of nodesInOrder) {
+            const def = this.registry.get(node.type);
+            if (!def?.onDisable)
+                continue;
+            context.nodeId = node.id;
+            const computedInputs = this.lastComputedInputsByNode.get(node.id) ?? null;
+            const fullInputs = {};
+            for (const port of def.inputs) {
+                if (port.kind === 'sink') {
+                    fullInputs[port.id] = node.inputValues[port.id];
+                    continue;
+                }
+                if (computedInputs && Object.prototype.hasOwnProperty.call(computedInputs, port.id)) {
+                    fullInputs[port.id] = computedInputs[port.id];
+                }
+                else {
+                    fullInputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
+                }
+            }
+            try {
+                const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
+                def.onDisable(fullInputs, effectiveConfig, context);
+            }
+            catch (err) {
+                console.error(`[NodeRuntime] onDisable error in ${node.type} (${node.id})`, err);
+            }
+        }
     }
     applyOverride(nodeId, kind, key, value, ttlMs) {
         if (!nodeId || !key)
@@ -394,7 +439,42 @@ export class NodeRuntime {
         const context = { nodeId: '', time: now, deltaTime };
         // Compute pass
         for (const node of this.executionOrder) {
-            if (this.isNodeEnabled && !this.isNodeEnabled(node.id)) {
+            const enabled = this.isNodeEnabled ? this.isNodeEnabled(node.id) : true;
+            if (!enabled) {
+                const prev = this.lastEnabledStateByNode.get(node.id);
+                if (prev !== false) {
+                    const def = this.registry.get(node.type);
+                    if (def?.onDisable) {
+                        const computedInputs = this.lastComputedInputsByNode.get(node.id) ?? null;
+                        const fullInputs = {};
+                        for (const port of def.inputs) {
+                            if (port.kind === 'sink') {
+                                fullInputs[port.id] = node.inputValues[port.id];
+                                continue;
+                            }
+                            if (computedInputs && Object.prototype.hasOwnProperty.call(computedInputs, port.id)) {
+                                fullInputs[port.id] = computedInputs[port.id];
+                            }
+                            else {
+                                fullInputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
+                            }
+                        }
+                        try {
+                            context.nodeId = node.id;
+                            const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
+                            def.onDisable(fullInputs, effectiveConfig, context);
+                        }
+                        catch (err) {
+                            console.error(`[NodeRuntime] onDisable error in ${node.type} (${node.id})`, err);
+                        }
+                    }
+                }
+                this.lastEnabledStateByNode.set(node.id, false);
+                node.outputValues = {};
+                continue;
+            }
+            this.lastEnabledStateByNode.set(node.id, true);
+            if (this.isComputeEnabled && !this.isComputeEnabled(node.id)) {
                 node.outputValues = {};
                 continue;
             }
@@ -433,6 +513,8 @@ export class NodeRuntime {
         // Sink pass
         for (const node of this.executionOrder) {
             if (this.isNodeEnabled && !this.isNodeEnabled(node.id))
+                continue;
+            if (this.isComputeEnabled && !this.isComputeEnabled(node.id))
                 continue;
             const def = this.registry.get(node.type);
             if (!def?.onSink)

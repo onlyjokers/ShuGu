@@ -59,6 +59,8 @@
   let graphUnsub: (() => void) | null = null;
   let paramsUnsub: (() => void) | null = null;
   let tickUnsub: (() => void) | null = null;
+  let runningUnsub: (() => void) | null = null;
+  let groupDisabledUnsub: (() => void) | null = null;
   let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   let wheelHandler: ((event: WheelEvent) => void) | null = null;
   let contextMenuHandler: ((event: MouseEvent) => void) | null = null;
@@ -135,7 +137,7 @@
     requestLoopFramesUpdate: () => requestFramesUpdate(),
     requestMinimapUpdate: () => minimapController?.requestUpdate(),
     isSyncingGraph: () => isSyncingRef.value,
-    stopLoop: (loop: LocalLoop) => loopController?.loopActions.stopLoop(loop),
+    stopAndRemoveLoop: (loop: LocalLoop) => loopController?.loopActions.removeLoop(loop),
   });
 
   minimapController = createMinimapController({
@@ -256,6 +258,38 @@
   let patchDeployTimer: ReturnType<typeof setTimeout> | null = null;
   let patchLastTopologySignature: string | null = null;
   let patchLastTargetsKey = '';
+
+  const getDeployedPatch = (): DeployedPatch | null => {
+    const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
+    return first ?? null;
+  };
+
+  const applyStoppedHighlights = async (running: boolean) => {
+    const stopped = !running;
+    for (const node of graphState.nodes ?? []) {
+      const id = String(node.id);
+      if (!id) continue;
+      const prev = viewAdapter.getNodeVisualState(id);
+      if (Boolean(prev?.stopped) !== stopped) await viewAdapter.setNodeVisualState(id, { stopped });
+    }
+  };
+
+  const applyPatchHighlights = async (patchNodeIds: Set<string>) => {
+    const ids = patchNodeIds ?? new Set<string>();
+    for (const node of graphState.nodes ?? []) {
+      const id = String(node.id);
+      if (!id) continue;
+      const deployedPatch = ids.has(id);
+      const prev = viewAdapter.getNodeVisualState(id);
+      if (Boolean(prev?.deployedPatch) !== deployedPatch) {
+        await viewAdapter.setNodeVisualState(id, { deployedPatch });
+      }
+    }
+  };
+
+  const syncPatchOffloadState = (patchNodeIds: Set<string>) => {
+    nodeEngine.setPatchOffloadedNodeIds(Array.from(patchNodeIds ?? []));
+  };
 
   type MidiBridgeRoute = {
     sourceNodeId: string;
@@ -495,15 +529,10 @@
 
     const connections = graphState.connections ?? [];
 
-    // Preferred routing (new): `audio-out(cmd) -> client-object(in)`.
-    // Backward-compatible routing (old): `client-object(out) -> audio-out(client)`.
+    // Patch target routing: `audio-out(cmd) -> client-object(in)`.
     const deployToClientConns = connections.filter(
       (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
     );
-
-    const legacyClientInConns = deployToClientConns.length
-      ? []
-      : connections.filter((c) => String(c.targetNodeId) === rootId && String(c.targetPortId) === 'client');
 
     const out: string[] = [];
     const seen = new Set<string>();
@@ -525,15 +554,6 @@
       const runtimeNode = nodeEngine.getNode(targetNodeId);
       if (String(runtimeNode?.type ?? '') !== 'client-object') continue;
       const id = resolveClientId(targetNodeId, 'out');
-      if (!id || !connected.has(id) || seen.has(id)) continue;
-      seen.add(id);
-      out.push(id);
-    }
-
-    for (const c of legacyClientInConns) {
-      const sourceNodeId = String(c.sourceNodeId);
-      const sourcePortId = String(c.sourcePortId);
-      const id = resolveClientId(sourceNodeId, sourcePortId);
       if (!id || !connected.has(id) || seen.has(id)) continue;
       seen.add(id);
       out.push(id);
@@ -564,6 +584,8 @@
     patchLastTopologySignature = null;
     patchLastTargetsKey = '';
     clearMidiBridgeState();
+    syncPatchOffloadState(new Set());
+    void applyPatchHighlights(new Set());
   };
 
   const reconcilePatchDeployment = (reason: string) => {
@@ -594,6 +616,13 @@
     const topologySignature = computeTopologySignature(payload.graph ?? {});
     const patchId = String(payload?.meta?.loopId ?? '');
     const nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
+
+    const disabled = get(groupController.groupDisabledNodeIds);
+    const hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
+    if (hasDisabledNodes) {
+      stopAllDeployedPatches();
+      return;
+    }
 
     let needRedeployAll =
       patchLastTopologySignature !== topologySignature || patchLastTargetsKey !== targetsKey;
@@ -635,6 +664,8 @@
 
       // MIDI wiring is manager-only; keep bridge routes in sync even when the deploy graph is unchanged.
       syncMidiBridgeRoutes(patchId, nodeIds);
+      syncPatchOffloadState(nodeIds);
+      void applyPatchHighlights(nodeIds);
       return;
     }
 
@@ -661,6 +692,8 @@
       });
     }
 
+    syncPatchOffloadState(nodeIds);
+    void applyPatchHighlights(nodeIds);
     syncMidiBridgeRoutes(patchId, nodeIds);
     console.log('[patch] deployed', { reason, patchId, targets });
   };
@@ -1504,6 +1537,24 @@
       sendMidiBridgeOverrides();
     });
 
+    runningUnsub = isRunningStore.subscribe((running) => {
+      void applyStoppedHighlights(Boolean(running));
+      if (!running) {
+        loopController?.loopActions.stopAllClientEffects();
+        loopController?.loopActions.stopAllDeployedLoops();
+        stopAllDeployedPatches();
+      }
+    });
+
+    groupDisabledUnsub = groupController.groupDisabledNodeIds.subscribe((disabled) => {
+      const patch = getDeployedPatch();
+      if (patch) {
+        const hasDisabledNodes = Array.from(patch.nodeIds).some((id) => disabled.has(id));
+        if (hasDisabledNodes) stopAllDeployedPatches();
+      }
+      schedulePatchReconcile('group-gate');
+    });
+
     editor = new NodeEditor('fluffy-rete');
     areaPlugin = new AreaPlugin(container);
     const connection: any = new ConnectionPlugin();
@@ -1602,6 +1653,16 @@
         void loopController?.applyHighlights();
         void groupController.applyHighlights();
         void midiController.applyHighlights();
+        void applyStoppedHighlights(get(isRunningStore));
+
+        const patch = getDeployedPatch();
+        if (patch) {
+          syncPatchOffloadState(patch.nodeIds);
+          void applyPatchHighlights(patch.nodeIds);
+        } else {
+          syncPatchOffloadState(new Set());
+          void applyPatchHighlights(new Set());
+        }
       },
       isSyncingRef,
     });
@@ -1935,6 +1996,8 @@
     graphUnsub?.();
     paramsUnsub?.();
     tickUnsub?.();
+    runningUnsub?.();
+    groupDisabledUnsub?.();
     managerUnsub?.();
     midiController.stop();
     if (patchDeployTimer) clearTimeout(patchDeployTimer);
@@ -2087,6 +2150,7 @@
     <GroupFramesOverlay
       frames={$groupFrames}
       areaTransform={canvasTransform}
+      isRunning={$isRunningStore}
       editModeGroupId={$editModeGroupId}
       toast={$groupEditToast}
       onToggleDisabled={groupController.toggleGroupDisabled}

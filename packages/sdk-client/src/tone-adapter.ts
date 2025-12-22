@@ -98,10 +98,15 @@ type TonePlayerInstance = {
   bus: string;
   enabled: boolean;
   started: boolean;
+  startedAt: number;
+  startOffsetSec: number;
+  startDurationSec: number | null;
+  pausedOffsetSec: number | null;
   autostarted: boolean;
   lastTrigger: boolean;
   loading: boolean;
   lastUrl: string | null;
+  lastClip: { startSec: number; endSec: number; loop: boolean } | null;
   lastParams: Record<string, number | string | boolean | null>;
 };
 
@@ -158,9 +163,72 @@ function toString(value: unknown, fallback: string): string {
 
 function toBoolean(value: unknown, fallback: boolean): boolean {
   if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') return value.toLowerCase() === 'true';
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    const num = Number(normalized);
+    if (Number.isFinite(num)) return num > 0;
+    return fallback;
+  }
   if (typeof value === 'number') return value > 0;
   return fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  if (!Number.isFinite(min)) return value;
+  if (!Number.isFinite(max)) return value;
+  return Math.max(min, Math.min(max, value));
+}
+
+type ToneClipParams = {
+  baseUrl: string;
+  startSec: number;
+  endSec: number;
+  loop: boolean | null;
+  play: boolean | null;
+};
+
+function parseToneClipParams(raw: string): ToneClipParams {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { baseUrl: '', startSec: 0, endSec: -1, loop: null, play: null };
+  }
+
+  const hashIndex = trimmed.indexOf('#');
+  if (hashIndex < 0) {
+    return { baseUrl: trimmed, startSec: 0, endSec: -1, loop: null, play: null };
+  }
+
+  const baseUrl = trimmed.slice(0, hashIndex).trim();
+  const hash = trimmed.slice(hashIndex + 1);
+  const params = new URLSearchParams(hash);
+
+  const tRaw = params.get('t');
+  let startSec = 0;
+  let endSec = -1;
+  if (tRaw !== null) {
+    const parts = tRaw.split(',');
+    const startCandidate = parts[0]?.trim() ?? '';
+    const endCandidate = parts[1]?.trim() ?? '';
+    startSec = toNumber(startCandidate, 0);
+    if (parts.length > 1) {
+      endSec = endCandidate ? toNumber(endCandidate, -1) : -1;
+    }
+  }
+
+  const loopRaw = params.get('loop');
+  const playRaw = params.get('play');
+
+  return {
+    baseUrl,
+    startSec: Number.isFinite(startSec) ? startSec : 0,
+    endSec: Number.isFinite(endSec) ? endSec : -1,
+    loop: loopRaw === null ? null : toBoolean(loopRaw, false),
+    play: playRaw === null ? null : toBoolean(playRaw, true),
+  };
 }
 
 function loopKeyOf(raw: unknown): string | null {
@@ -1037,13 +1105,6 @@ function createPlayerInstance(
       const inst = playerInstances.get(nodeId);
       if (!inst) return;
       inst.loading = false;
-      if (inst.enabled) {
-        try {
-          player.start();
-        } catch {
-          // ignore
-        }
-      }
     },
   } as any);
 
@@ -1057,10 +1118,15 @@ function createPlayerInstance(
     bus: bus.name,
     enabled: Boolean(params.enabled),
     started: false,
+    startedAt: 0,
+    startOffsetSec: 0,
+    startDurationSec: null,
+    pausedOffsetSec: null,
     autostarted: false,
     lastTrigger: false,
     loading: true,
     lastUrl: url,
+    lastClip: null,
     lastParams: { ...params },
   };
 
@@ -1587,16 +1653,20 @@ export function registerToneClientDefinitions(
     ],
     process: (inputs, config, context) => {
       const urlRaw = toString(inputs.url ?? config.url, '');
-      const url = deps.resolveAssetRef ? deps.resolveAssetRef(urlRaw) : urlRaw;
+      const clipParams = parseToneClipParams(urlRaw);
+      const baseUrlRaw = clipParams.baseUrl;
+      const url = deps.resolveAssetRef ? deps.resolveAssetRef(baseUrlRaw) : baseUrlRaw;
       const triggerRaw = inputs.trigger;
       const triggerActive =
         typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);
       const playbackRate = toNumber(inputs.playbackRate ?? config.playbackRate, 1);
       const detune = toNumber(inputs.detune ?? config.detune, 0);
       const volume = toNumber(inputs.volume ?? config.volume, 1);
-      const loop = toBoolean(config.loop, false);
-      const autostart = toBoolean(config.autostart, false);
-      const enabled = toBoolean(config.enabled, false);
+      const loop = clipParams.loop ?? toBoolean(config.loop, false);
+      const playGate = clipParams.play;
+      const enabledConfig = toBoolean(config.enabled, false);
+      const enabled = playGate ?? enabledConfig;
+      const autostart = playGate !== null ? false : toBoolean(config.autostart, false);
       const busName = toString(config.bus, DEFAULT_BUS);
 
       if (!toneAudioEngine.isEnabled()) {
@@ -1633,6 +1703,11 @@ export function registerToneClientDefinitions(
         instance.loading = true;
         instance.autostarted = false;
         instance.started = false;
+        instance.startedAt = 0;
+        instance.startOffsetSec = 0;
+        instance.startDurationSec = null;
+        instance.pausedOffsetSec = null;
+        instance.lastClip = null;
         try {
           instance.player.stop();
         } catch {
@@ -1642,14 +1717,6 @@ export function registerToneClientDefinitions(
           .load(url)
           .then(() => {
             instance.loading = false;
-            if (instance.enabled || autostart) {
-              try {
-                instance.player.start();
-                instance.started = true;
-              } catch {
-                // ignore
-              }
-            }
           })
           .catch((error: unknown) => {
             instance.loading = false;
@@ -1675,57 +1742,165 @@ export function registerToneClientDefinitions(
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
       if (instance.lastParams.volume !== volume) instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
 
+      const clipStart = Math.max(0, toNumber(clipParams.startSec, 0));
+      const clipEndRaw = toNumber(clipParams.endSec, -1);
+      const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
+      const nextClip = { startSec: clipStart, endSec: clipEnd, loop };
+      const clipChanged =
+        !instance.lastClip ||
+        instance.lastClip.startSec !== nextClip.startSec ||
+        instance.lastClip.endSec !== nextClip.endSec ||
+        instance.lastClip.loop !== nextClip.loop;
+
+      const bufferDuration = (() => {
+        try {
+          const dur = instance.player?.buffer?.duration;
+          return typeof dur === 'number' && Number.isFinite(dur) && dur > 0 ? dur : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      const resolvedClipEnd = clipEnd >= 0 ? clipEnd : (bufferDuration ?? null);
+      const resolvedClipDuration =
+        resolvedClipEnd !== null ? Math.max(0, resolvedClipEnd - clipStart) : null;
+
+      const applyClipToPlayer = () => {
+        try {
+          instance.player.loop = loop;
+        } catch {
+          // ignore
+        }
+        try {
+          instance.player.loopStart = clipStart;
+        } catch {
+          // ignore
+        }
+        if (resolvedClipEnd !== null) {
+          try {
+            instance.player.loopEnd = resolvedClipEnd;
+          } catch {
+            // ignore
+          }
+        }
+      };
+
+      if (!instance.loading) applyClipToPlayer();
+
       const triggered = triggerActive && !instance.lastTrigger;
-      if (triggered) {
+
+      const stopAndMaybePause = () => {
+        if (!instance.started) return;
+        const now = toneModule!.now();
+        const elapsed = instance.startedAt > 0 ? Math.max(0, now - instance.startedAt) : 0;
+        const rawOffset = instance.startOffsetSec + elapsed * playbackRate;
+        let pausedOffset = rawOffset;
+        if (loop && resolvedClipDuration && resolvedClipDuration > 0) {
+          const rel = rawOffset - clipStart;
+          const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
+          pausedOffset = clipStart + wrapped;
+        } else if (resolvedClipEnd !== null) {
+          pausedOffset = clamp(pausedOffset, clipStart, resolvedClipEnd);
+        } else {
+          pausedOffset = Math.max(clipStart, pausedOffset);
+        }
+
+        instance.pausedOffsetSec = pausedOffset;
+        try {
+          instance.player.stop();
+        } catch {
+          // ignore
+        }
+        instance.started = false;
+        instance.startedAt = 0;
+        instance.startOffsetSec = 0;
+        instance.startDurationSec = null;
+      };
+
+      const startFromOffset = (offset: number, reason: string) => {
+        if (instance.loading) return;
+        applyClipToPlayer();
+        const nextOffset = Math.max(0, offset);
+        const dur =
+          !loop && resolvedClipEnd !== null ? Math.max(0, resolvedClipEnd - nextOffset) : null;
+
         try {
           if (instance.started) instance.player.stop();
         } catch {
           // ignore
         }
-        if (!instance.loading) {
-          try {
-            instance.player.start();
-            instance.started = true;
-          } catch {
-            // ignore
-          }
-        }
-      }
 
-      if (!instance.autostarted && autostart && !instance.loading) {
-        if (!instance.started) {
-          try {
-            instance.player.start();
-            instance.started = true;
-          } catch {
-            // ignore
-          }
-        }
-        instance.autostarted = true;
-      }
-
-      if (enabled && !instance.started && !instance.loading) {
         try {
-          instance.player.start();
+          if (dur !== null) instance.player.start(undefined, nextOffset, dur);
+          else instance.player.start(undefined, nextOffset);
           instance.started = true;
-        } catch {
-          // ignore
+          instance.startedAt = toneModule!.now();
+          instance.startOffsetSec = nextOffset;
+          instance.startDurationSec = dur;
+          instance.pausedOffsetSec = null;
+        } catch (err) {
+          console.warn('[tone-adapter] player start failed', { reason }, err);
         }
-      }
+      };
 
-      if (!enabled && instance.enabled) {
-        if (instance.started) {
-          try {
-            instance.player.stop();
-          } catch {
-            // ignore
+      if (playGate !== null) {
+        if (!enabled) {
+          stopAndMaybePause();
+        } else {
+          if (triggered) {
+            instance.pausedOffsetSec = null;
+            startFromOffset(clipStart, 'trigger');
+          } else if (clipChanged && instance.started) {
+            instance.pausedOffsetSec = null;
+            startFromOffset(clipStart, 'clip-change');
+          } else if (!instance.started && !instance.loading) {
+            const resumeOffset = instance.pausedOffsetSec ?? clipStart;
+            const clamped =
+              resolvedClipEnd !== null ? clamp(resumeOffset, clipStart, resolvedClipEnd) : Math.max(clipStart, resumeOffset);
+            startFromOffset(clamped, instance.pausedOffsetSec ? 'resume' : 'start');
           }
-          instance.started = false;
+        }
+      } else {
+        if (triggered) {
+          instance.pausedOffsetSec = null;
+          startFromOffset(clipStart, 'trigger');
+        }
+
+        if (clipChanged && instance.started && !instance.loading) {
+          instance.pausedOffsetSec = null;
+          startFromOffset(clipStart, 'clip-change');
+        }
+
+        if (!instance.autostarted && autostart && !instance.loading) {
+          if (!instance.started) {
+            startFromOffset(clipStart, 'autostart');
+          }
+          instance.autostarted = true;
+        }
+
+        if (enabled && !instance.started && !instance.loading) {
+          startFromOffset(clipStart, 'enabled');
+        }
+
+        if (!enabled && instance.enabled) {
+          if (instance.started) {
+            try {
+              instance.player.stop();
+            } catch {
+              // ignore
+            }
+            instance.started = false;
+            instance.startedAt = 0;
+            instance.startOffsetSec = 0;
+            instance.startDurationSec = null;
+            instance.pausedOffsetSec = null;
+          }
         }
       }
 
       instance.enabled = enabled;
       instance.lastTrigger = triggerActive;
+      instance.lastClip = nextClip;
       instance.lastParams = { ...instance.lastParams, ...params };
 
       return { value: volume };

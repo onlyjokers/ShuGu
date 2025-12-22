@@ -44,6 +44,7 @@ export interface ConfigField {
     | 'string'
     | 'number'
     | 'boolean'
+    | 'time-range'
     | 'select'
     | 'param-path'
     | 'midi-source'
@@ -79,6 +80,15 @@ export interface NodeDefinition {
     context: ProcessContext
   ) => Record<string, unknown>;
   onSink?: (
+    inputs: Record<string, unknown>,
+    config: Record<string, unknown>,
+    context: ProcessContext
+  ) => void;
+  /**
+   * Optional lifecycle hook invoked when a node stops executing due to a gate closing
+   * (e.g. graph stop / group gate closed). Use this to undo side-effects.
+   */
+  onDisable?: (
     inputs: Record<string, unknown>,
     config: Record<string, unknown>,
     context: ProcessContext

@@ -21,13 +21,13 @@ export function normalizeAssetRef(raw: string): string | null {
   if (!s) return null;
 
   if (s.startsWith('asset:')) {
-    const id = s.slice('asset:'.length).trim();
+    const id = s.slice('asset:'.length).trim().split(/[?#]/)[0]?.trim() ?? '';
     return id ? `asset:${id}` : null;
   }
 
   const shuguPrefix = 'shugu://asset/';
   if (s.startsWith(shuguPrefix)) {
-    const id = s.slice(shuguPrefix.length).trim();
+    const id = s.slice(shuguPrefix.length).trim().split(/[?#]/)[0]?.trim() ?? '';
     return id ? `asset:${id}` : null;
   }
 
@@ -63,4 +63,3 @@ export function resolveAssetRefToUrl(raw: string, opts: ResolveAssetRefOptions):
   if (token) url.searchParams.set('token', token);
   return url.toString();
 }
-

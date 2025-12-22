@@ -88,7 +88,7 @@
     opacity: 1;
   }
 
-  /* --- Shared node/socket styles (NodeCanvas) --- */
+  /* --- Shared node/socket styles (Rete + XYFlow) --- */
   :global(.node-canvas-container .node) {
     background: rgba(17, 24, 39, 0.92) !important;
     border: 1px solid rgba(99, 102, 241, 0.35) !important;
@@ -114,6 +114,16 @@
   :global(.node-canvas-container .node.deployed-loop) {
     border-color: rgba(20, 184, 166, 0.95) !important;
     box-shadow: 0 18px 56px rgba(20, 184, 166, 0.16) !important;
+  }
+
+  :global(.node-canvas-container .node.deployed-patch) {
+    border-color: rgba(14, 165, 233, 0.95) !important;
+    box-shadow: 0 18px 56px rgba(14, 165, 233, 0.16) !important;
+  }
+
+  :global(.node-canvas-container .node.stopped:not(.group-disabled)) {
+    opacity: 0.62;
+    filter: grayscale(0.6) saturate(0.6);
   }
 
   :global(.node-canvas-container .node .title) {

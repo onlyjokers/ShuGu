@@ -149,6 +149,47 @@ export class FilePickerControl extends ClassicPreset.Control {
   }
 }
 
+export type TimeRangeValue = { startSec: number; endSec: number };
+
+export class TimeRangeControl extends ClassicPreset.Control {
+  controlType = 'time-range' as const;
+  label?: string;
+  value: TimeRangeValue;
+  min: number;
+  max?: number;
+  step: number;
+  readonly: boolean;
+  nodeId?: string;
+  nodeType?: string;
+  configKey?: string;
+  private onChange?: (value: TimeRangeValue) => void;
+
+  constructor(opts: {
+    label?: string;
+    initial?: TimeRangeValue;
+    min?: number;
+    max?: number;
+    step?: number;
+    readonly?: boolean;
+    change?: (value: TimeRangeValue) => void;
+  }) {
+    super();
+    this.label = opts.label;
+    this.value = opts.initial ?? { startSec: 0, endSec: -1 };
+    this.min = typeof opts.min === 'number' && Number.isFinite(opts.min) ? opts.min : 0;
+    this.max = typeof opts.max === 'number' && Number.isFinite(opts.max) ? opts.max : undefined;
+    this.step = typeof opts.step === 'number' && Number.isFinite(opts.step) ? opts.step : 0.01;
+    this.readonly = Boolean(opts.readonly);
+    this.onChange = opts.change;
+  }
+
+  setValue(value: TimeRangeValue): void {
+    if (this.readonly) return;
+    this.value = value;
+    this.onChange?.(value);
+  }
+}
+
 export class ClientSensorValueControl extends ClassicPreset.Control {
   controlType = 'client-sensor-value' as const;
   nodeId: string;

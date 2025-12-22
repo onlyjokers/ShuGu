@@ -55,7 +55,7 @@
             </span>
 
             <span class="executor-meta">
-              exec:
+              Remote:
               {#if status}
                 <span class="executor-badge {status.running ? 'running' : 'stopped'}">
                   {status.running ? 'running' : 'stopped'}

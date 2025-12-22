@@ -115,7 +115,6 @@ type NodeRuntime =
   | { kind: 'tone-granular' }
   | { kind: 'tone-player' }
   | { kind: 'play-media' }
-  | { kind: 'load-media-sound' }
   | { kind: 'midi-fuzzy' }
   | { kind: 'midi-boolean' }
   | { kind: 'midi-map' }
@@ -186,7 +185,6 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['tone-granular', pick('tone-granular')],
     ['tone-player', pick('tone-player')],
     ['play-media', pick('play-media')],
-    ['load-media-sound', pick('load-media-sound')],
   ]);
 })();
 
@@ -612,7 +610,7 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
     case 'tone-osc':
     case 'tone-player':
     case 'play-media':
-    case 'load-media-sound': {
+    {
       const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
       if (!impl) {
         throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
@@ -895,7 +893,12 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
     type: 'load-audio-from-assets',
     label: 'Load Audio From Assets',
     category: 'Assets',
-    inputs: [],
+    inputs: [
+      { id: 'startSec', label: 'Start (s)', type: 'number' },
+      { id: 'endSec', label: 'End (s)', type: 'number' },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+    ],
     outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
     configSchema: [
       {
@@ -903,6 +906,89 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
         label: 'Audio Asset',
         type: 'asset-picker',
         assetKind: 'audio',
+        defaultValue: '',
+      },
+      {
+        key: 'range',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+    ],
+    process: (inputs, config) => {
+      const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
+      const rangeRaw = (config as any)?.range;
+      const range = typeof rangeRaw === 'object' && rangeRaw ? rangeRaw : {};
+      const startFallback =
+        typeof (range as any).startSec === 'number' && Number.isFinite((range as any).startSec)
+          ? Number((range as any).startSec)
+          : 0;
+      const endFallback =
+        typeof (range as any).endSec === 'number' && Number.isFinite((range as any).endSec)
+          ? Number((range as any).endSec)
+          : -1;
+
+      const startSec =
+        typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
+          ? Number((inputs as any).startSec)
+          : startFallback;
+      const endSec =
+        typeof (inputs as any)?.endSec === 'number' && Number.isFinite((inputs as any).endSec)
+          ? Number((inputs as any).endSec)
+          : endFallback;
+
+      const loopRaw = (inputs as any)?.loop;
+      const playRaw = (inputs as any)?.play;
+      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+
+      const startClamped = Math.max(0, startSec);
+      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+
+      return { ref: assetId ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}` : '' };
+    },
+  });
+}
+
+if (!nodeRegistry.get('load-image-from-assets')) {
+  nodeRegistry.register({
+    type: 'load-image-from-assets',
+    label: 'Load Image From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Image Asset',
+        type: 'asset-picker',
+        assetKind: 'image',
+        defaultValue: '',
+      },
+    ],
+    process: (_inputs, config) => {
+      const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
+      return { ref: assetId ? `asset:${assetId}` : '' };
+    },
+  });
+}
+
+if (!nodeRegistry.get('load-video-from-assets')) {
+  nodeRegistry.register({
+    type: 'load-video-from-assets',
+    label: 'Load Video From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Video Asset',
+        type: 'asset-picker',
+        assetKind: 'video',
         defaultValue: '',
       },
     ],

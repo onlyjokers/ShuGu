@@ -15,13 +15,13 @@ How to import:
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标（不再使用 Toolbar Patch）。
 
 - `02_patch_asset_player_delay_audio_out.json`
-  - Load Media Sound (upload) → Tone Player → Tone Delay → Audio Patch to Client
-  - Requires picking an audio file in the `Load Media Sound` node (will upload to Asset Service).
+  - Load Audio From Assets → Tone Player → Tone Delay → Audio Patch to Client
+  - Requires uploading an audio asset first in `Assets Manager`, then picking it via `Load Audio From Assets`.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
-- `03_filepicker_upload_to_tone_player.json`
-  - Load Media Sound (file picker upload) → Tone Player → Audio Patch to Client
-  - Requires `shugu-server-url` + `shugu-asset-write-token` set in manager.
+- `03_load_audio_from_assets_timeline.json`
+  - Load Audio From Assets（Timeline/Loop/Play）→ Tone Player → Audio Patch to Client
+  - Shows the new clip range Timeline (2 cursors) + Loop + Play(Pause) controls.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `07_patch_midi_map_delay_time.json`
@@ -29,13 +29,17 @@ How to import:
   - MIDI 节点在 manager 运行（manager-only），不会被部署到 client；通过 override bridge 写入 patch 参数。
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
+- `08_midi_control_audio_clip_range.json`
+  - MIDI → (Start/End Sec) → Load Audio From Assets → Tone Player
+  - 演示 `startSec/endSec` 端口可接 MIDI 数字口（manager-only MIDI → override bridge）。
+
 ## Media (Manager command path)
 
 - `04_media_image_show.json`
-  - Load Media Image → Play Media(showImage) → Client
+  - Load Image From Assets → Play Media(showImage) → Client
 
 - `05_media_video_play.json`
-  - Load Media Video → Play Media(video) → Client
+  - Load Video From Assets → Play Media(video) → Client
 
 ## Synth(Update) (Tone single engine)
 

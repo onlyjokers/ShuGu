@@ -732,7 +732,7 @@
 - Templates 更新（解决你指出的“没有 client 节点无法指定播放目标”）
   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/01_patch_osc_delay_audio_out.json`
   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/02_patch_asset_player_delay_audio_out.json`
-  - `docs/PlanDocs/1221_newMultiMediaSystem/templates/03_filepicker_upload_to_tone_player.json`
+  - `docs/PlanDocs/1221_newMultiMediaSystem/templates/03_load_audio_from_assets_timeline.json`
     - 都已内置 `client-object`，并使用 `audio-out(Deploy) → client-object(In)`，导入后即可直接指定 client 播放。
 
 对应勾选已更新：
@@ -757,3 +757,65 @@
 - `docs/PlanDocs/1221_newMultiMediaSystem/templates/07_patch_midi_map_delay_time.json`
   - `midi-fuzzy → midi-map → tone-delay(time)`（桥接 override）+ `tone-osc → tone-delay → audio-out`
   - 通过 `audio-out(Deploy) → client-object(In)` 指定目标 client（并兼容旧连法）
+
+---
+
+## ✅ Phase 2.6：Load Audio From Assets（Timeline/Loop/Play）+ 取消 Load Media* 节点
+
+你要求「Load Audio From Assets 必须有 Timeline（双游标）+ Loop + Play/Pause，并且 Start/End 可接 MIDI 数字口」。本阶段完成了完整链路：
+
+### 新增能力
+
+1) **Load Audio From Assets 变为“Audio Clip Ref”**
+   - `packages/node-core/src/definitions.ts`
+     - `load-audio-from-assets` 增加输入：`startSec/endSec/loop/play`
+     - 增加配置：`range`（`time-range` 控件，双游标 + Start/End 精确输入）
+     - 输出 `ref` 扩展为：`asset:<id>#t=start,end&loop=0|1&play=0|1`
+
+2) **Manager 新增 time-range UI 控件**
+   - `apps/manager/src/lib/components/nodes/node-canvas/rete/rete-controls.ts`
+   - `apps/manager/src/lib/components/nodes/node-canvas/rete/rete-builder.ts`
+   - `apps/manager/src/lib/components/nodes/node-canvas/rete/ReteControl.svelte`
+   - 表现：Timeline 双游标 slider + Start/End 数值输入；End 为空表示“到结尾”（内部用 `-1` 表示）
+
+3) **Client Tone.Player 支持片段播放/Loop/Play(Pause)（不重新加载）**
+   - `packages/sdk-client/src/tone-adapter.ts`
+     - 解析 `#t/loop/play`
+     - `play=false` 会暂停并记录 offset；`play=true` 恢复
+     - 片段范围变化不会触发重新加载（只在 base URL 变化时 load）
+
+4) **AssetRef 解析兼容 hash/query（避免 `asset:<id>#...` 失效）**
+   - `packages/multimedia-core/src/asset-url-resolver.ts`
+   - `apps/manager/src/lib/nodes/asset-manifest.ts`
+   - `apps/manager/src/lib/nodes/patch-export.ts`
+
+5) **取消 Load Media Sound/Image/Video（NodeGraph 不再上传）**
+   - `packages/node-core/src/definitions.ts`
+     - 移除 `load-media-sound/load-media-image/load-media-video` 节点注册与实现
+     - 新增 `load-image-from-assets/load-video-from-assets`（与 audio 同一套 asset-picker 语义）
+   - `apps/manager/src/lib/nodes/specs/register.ts`
+     - 移除 `load-media-sound` runtime kind 与 core runtime pick
+   - 删除：`apps/manager/src/lib/nodes/specs/load-media-sound.json`
+
+6) **Templates 更新（可直接导入验证）**
+   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/02_patch_asset_player_delay_audio_out.json`
+   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/03_load_audio_from_assets_timeline.json`
+   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/04_media_image_show.json`
+   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/05_media_video_play.json`
+   - 新增：`docs/PlanDocs/1221_newMultiMediaSystem/templates/08_midi_control_audio_clip_range.json`
+   - `docs/PlanDocs/1221_newMultiMediaSystem/templates/README.md` 同步更新
+
+---
+
+### 你如何验证（推荐按顺序）
+
+1) **Timeline/Loop/Play 基础验证**
+   - 导入：`docs/PlanDocs/1221_newMultiMediaSystem/templates/03_load_audio_from_assets_timeline.json`
+   - Assets Manager 先上传音频 → Load Audio From Assets 选择它
+   - 拖动 Timeline 双游标（或输入 Start/End 秒）
+   - 切换 `Loop` / `Play`：client 端应立即反映（Play=false 暂停，true 恢复）
+
+2) **MIDI 控制 Start/End 验证**
+   - 导入：`docs/PlanDocs/1221_newMultiMediaSystem/templates/08_midi_control_audio_clip_range.json`
+   - 分别 Learn 两个 MIDI 控制（Start/End）
+   - 转动 MIDI：StartSec/EndSec 会通过 override bridge 写入 client patch，片段范围实时变化

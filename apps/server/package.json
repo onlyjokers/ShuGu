@@ -2,14 +2,14 @@
     "name": "@shugu/server",
     "version": "1.0.0",
     "description": "Socket.io server for interactive art system",
-    "main": "./dist-server/main.js",
+    "main": "./dist-out/main.js",
     "type": "module",
     "scripts": {
         "build": "pnpm exec nest build",
         "dev": "pnpm exec nest start --watch --path tsconfig.dev.json",
         "dev:dlx": "pnpm dlx @nestjs/cli@^10 nest start --watch --path tsconfig.dev.json",
-        "start": "node dist-server/main.js",
-        "start:prod": "node dist-server/main.js",
+        "start": "node dist-out/main.js",
+        "start:prod": "node dist-out/main.js",
         "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\"",
         "clean": "rm -rf dist-local dist-dev"
     },

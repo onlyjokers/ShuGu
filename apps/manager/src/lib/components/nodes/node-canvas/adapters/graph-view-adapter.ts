@@ -2,7 +2,7 @@
  * GraphViewAdapter - Renderer-agnostic interface for Node Graph view operations.
  *
  * This abstraction allows controllers (group, loop, minimap, midi-highlight) to
- * operate independently of the underlying renderer (currently Rete).
+ * operate independently of the underlying renderer (Rete or XYFlow).
  */
 
 export interface ViewportTransform {
@@ -27,6 +27,8 @@ export type NodeVisualState = {
   groupSelected?: boolean;
   localLoop?: boolean;
   deployedLoop?: boolean;
+  deployedPatch?: boolean;
+  stopped?: boolean;
   active?: boolean;
   activeInputs?: string[];
   activeOutputs?: string[];

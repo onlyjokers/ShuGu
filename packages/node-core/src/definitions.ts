@@ -148,9 +148,8 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createTonePlayerNode());
   // Media playback helpers.
   registry.register(createLoadAudioFromAssetsNode());
-  registry.register(createLoadMediaSoundNode());
-  registry.register(createLoadMediaImageNode());
-  registry.register(createLoadMediaVideoNode());
+  registry.register(createLoadImageFromAssetsNode());
+  registry.register(createLoadVideoFromAssetsNode());
   registry.register(createPlayMediaNode());
   // Patch root sinks (Max/MSP style).
   registry.register(createAudioOutNode());
@@ -165,7 +164,12 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
     type: 'load-audio-from-assets',
     label: 'Load Audio From Assets',
     category: 'Assets',
-    inputs: [],
+    inputs: [
+      { id: 'startSec', label: 'Start (s)', type: 'number' },
+      { id: 'endSec', label: 'End (s)', type: 'number' },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+    ],
     outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
     configSchema: [
       {
@@ -173,6 +177,83 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
         label: 'Audio Asset',
         type: 'asset-picker',
         assetKind: 'audio',
+        defaultValue: '',
+      },
+      {
+        key: 'range',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+    ],
+    process: (inputs, config) => {
+      const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
+
+      const rangeRaw = config.range;
+      const range = typeof rangeRaw === 'object' && rangeRaw ? (rangeRaw as any) : {};
+      const startFallback = typeof range.startSec === 'number' && Number.isFinite(range.startSec) ? range.startSec : 0;
+      const endFallback = typeof range.endSec === 'number' && Number.isFinite(range.endSec) ? range.endSec : -1;
+
+      const startSecRaw = inputs.startSec;
+      const endSecRaw = inputs.endSec;
+      const startSec =
+        typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : startFallback;
+      const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : endFallback;
+
+      const loopRaw = inputs.loop;
+      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+      const playRaw = inputs.play;
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+
+      const startClamped = Math.max(0, startSec);
+      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+
+      return {
+        ref: assetId ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}` : '',
+      };
+    },
+  };
+}
+
+function createLoadImageFromAssetsNode(): NodeDefinition {
+  return {
+    type: 'load-image-from-assets',
+    label: 'Load Image From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Image Asset',
+        type: 'asset-picker',
+        assetKind: 'image',
+        defaultValue: '',
+      },
+    ],
+    process: (_inputs, config) => {
+      const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
+      return { ref: assetId ? `asset:${assetId}` : '' };
+    },
+  };
+}
+
+function createLoadVideoFromAssetsNode(): NodeDefinition {
+  return {
+    type: 'load-video-from-assets',
+    label: 'Load Video From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Video Asset',
+        type: 'asset-picker',
+        assetKind: 'video',
         defaultValue: '',
       },
     ],
@@ -188,11 +269,7 @@ function createAudioOutNode(): NodeDefinition {
     type: 'audio-out',
     label: 'Audio Patch to Client',
     category: 'Audio',
-    inputs: [
-      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-      // Backward-compat only (old wiring): `client-object(out) -> audio-out(client)`.
-      { id: 'client', label: 'Target (legacy)', type: 'client', kind: 'sink' },
-    ],
+    inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
     outputs: [
       // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
       // This output is not part of the exported client patch subgraph.
@@ -286,6 +363,46 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
           if (deps.executeCommandForClientId) deps.executeCommandForClientId(clientId, next);
           else deps.executeCommand(next);
         }
+      }
+    },
+    onDisable: (inputs, config, context) => {
+      const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
+
+      const available = deps.getAllClientIds?.() ?? [];
+      const selection = selectClientIdsForNode(context.nodeId, available, {
+        index: (inputs as any).index,
+        range: (inputs as any).range,
+        random: (inputs as any).random,
+      });
+
+      const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
+      const fallbackSingle = deps.getClientId() ?? configured;
+      const targets =
+        selection.selectedIds.length > 0
+          ? selection.selectedIds
+          : fallbackSelected.length > 0
+            ? fallbackSelected
+            : fallbackSingle
+              ? [fallbackSingle]
+              : [];
+      if (targets.length === 0) return;
+
+      const send = (clientId: string, cmd: NodeCommand) => {
+        if (!clientId) return;
+        if (deps.executeCommandForClientId) deps.executeCommandForClientId(clientId, cmd);
+        else deps.executeCommand(cmd);
+      };
+
+      const cleanupCommands: NodeCommand[] = [
+        { action: 'stopSound', payload: {} },
+        { action: 'stopMedia', payload: {} },
+        { action: 'hideImage', payload: {} },
+        { action: 'flashlight', payload: { mode: 'off' } },
+        { action: 'screenColor', payload: { color: '#000000', opacity: 0, mode: 'solid' } },
+      ];
+
+      for (const clientId of targets) {
+        for (const cmd of cleanupCommands) send(clientId, cmd);
       }
     },
   };
@@ -984,78 +1101,6 @@ function createToneGranularNode(): NodeDefinition {
 
 const playMediaTriggerState = new Map<string, boolean>();
 const playMediaCommandCache = new Map<string, { signature: string; cmd: NodeCommand | null }>();
-
-function createLoadMediaSoundNode(): NodeDefinition {
-  return {
-    type: 'load-media-sound',
-    label: 'Load Media Sound',
-    category: 'Audio',
-    inputs: [],
-    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
-    configSchema: [
-      {
-        key: 'url',
-        label: 'Audio File',
-        type: 'file',
-        defaultValue: '',
-        accept: 'audio/*',
-        buttonLabel: 'Load Audio',
-      },
-    ],
-    process: (_inputs, config) => {
-      const url = typeof config.url === 'string' ? String(config.url) : '';
-      return { url };
-    },
-  };
-}
-
-function createLoadMediaImageNode(): NodeDefinition {
-  return {
-    type: 'load-media-image',
-    label: 'Load Media Image',
-    category: 'Media',
-    inputs: [],
-    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
-    configSchema: [
-      {
-        key: 'url',
-        label: 'Image File',
-        type: 'file',
-        defaultValue: '',
-        accept: 'image/*',
-        buttonLabel: 'Load Image',
-      },
-    ],
-    process: (_inputs, config) => {
-      const url = typeof config.url === 'string' ? String(config.url) : '';
-      return { url };
-    },
-  };
-}
-
-function createLoadMediaVideoNode(): NodeDefinition {
-  return {
-    type: 'load-media-video',
-    label: 'Load Media Video',
-    category: 'Media',
-    inputs: [],
-    outputs: [{ id: 'url', label: 'URL', type: 'string' }],
-    configSchema: [
-      {
-        key: 'url',
-        label: 'Video File',
-        type: 'file',
-        defaultValue: '',
-        accept: 'video/*',
-        buttonLabel: 'Load Video',
-      },
-    ],
-    process: (_inputs, config) => {
-      const url = typeof config.url === 'string' ? String(config.url) : '';
-      return { url };
-    },
-  };
-}
 
 function createPlayMediaNode(): NodeDefinition {
   const resolveUrl = (inputs: Record<string, unknown>, config: Record<string, unknown>, key: string): string => {

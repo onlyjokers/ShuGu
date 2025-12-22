@@ -1,12 +1,12 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "Upload Video (Asset Service) → Play Media(video) → Client",
-  "purpose": "体验视频上传到 Asset Service + client 侧 MediaEngine(video) 播放链路（Range/ETag/Cache）",
+  "title": "Load Video From Assets → Play Media(video) → Client",
+  "purpose": "体验 asset:<id> 引用 + client 侧 MediaEngine(video) 播放链路（Range/ETag/Cache）",
   "howTo": [
     "1) manager Node Graph 点 ▶ Start。",
     "2) 选择 Client 节点（Clients）目标（或用 Manager 顶部选择的 client）。",
-    "3) Load Media Video → Load Video 选视频（会上传并写入 asset:<id>）。",
+    "3) 先在 Assets Manager 上传视频，然后在 Load Video From Assets 里选择该视频。",
     "4) client 会播放视频；可调 muted/loop/volume。"
   ],
   "graph": {
@@ -21,9 +21,9 @@
       },
       {
         "id": "node-load-video",
-        "type": "load-media-video",
+        "type": "load-video-from-assets",
         "position": { "x": 120, "y": 260 },
-        "config": { "url": "" },
+        "config": { "assetId": "" },
         "inputValues": {},
         "outputValues": {}
       },
@@ -49,7 +49,7 @@
       {
         "id": "conn-video-url",
         "sourceNodeId": "node-load-video",
-        "sourcePortId": "url",
+        "sourcePortId": "ref",
         "targetNodeId": "node-play-media",
         "targetPortId": "videoUrl"
       },
@@ -63,4 +63,3 @@
     ]
   }
 }
-

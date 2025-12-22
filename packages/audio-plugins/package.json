@@ -2,24 +2,24 @@
     "name": "@shugu/audio-plugins",
     "version": "1.0.0",
     "description": "Audio processing plugins for spectral analysis and feature extraction",
-    "main": "./dist-out/index.js",
-    "module": "./dist-out/index.js",
-    "types": "./dist-out/index.d.ts",
+    "main": "./dist-audio-plugins-out/index.js",
+    "module": "./dist-audio-plugins-out/index.js",
+    "types": "./dist-audio-plugins-out/index.d.ts",
     "type": "module",
     "exports": {
         ".": {
-            "types": "./dist-out/index.d.ts",
-            "import": "./dist-out/index.js"
+            "types": "./dist-audio-plugins-out/index.d.ts",
+            "import": "./dist-audio-plugins-out/index.js"
         }
     },
     "scripts": {
         "build": "pnpm exec tsc",
         "dev": "pnpm exec tsc --watch",
-        "clean": "rm -rf dist-out",
+        "clean": "rm -rf dist-audio-plugins-out",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
     },
     "files": [
-        "dist-out"
+        "dist-audio-plugins-out"
     ],
     "dependencies": {
         "@shugu/protocol": "workspace:*"

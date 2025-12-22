@@ -8,7 +8,7 @@
 
   export let nodeCount: number = 0;
   export let connectionCount: number = 0;
-  export let rendererType: string = 'rete';
+  export let rendererType: 'rete' | 'xyflow' = 'rete';
   export let shadowsEnabled: boolean = true;
   export let visible: boolean = false;
 
@@ -71,8 +71,8 @@
 <style>
   .perf-overlay {
     position: absolute;
-    right: 8px;
-    bottom: 8px;
+    top: 8px;
+    left: 8px;
     z-index: 1000;
     background: rgba(0, 0, 0, 0.85);
     border-radius: 6px;

@@ -1,7 +1,7 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "./dist-out",
+        "outDir": "./dist-sdk-manager-out",
         "rootDir": "./src"
     },
     "include": [

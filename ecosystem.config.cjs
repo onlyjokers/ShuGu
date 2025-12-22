@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'shugu-server',
-      script: './apps/server/dist-local/main.js',
+      script: './apps/server/dist-out/main.js',
       env: {
         NODE_ENV: 'production',
         PORT: 3001

@@ -2,16 +2,20 @@
  * Node Graph Feature Flags
  *
  * Runtime and URL-based feature flags for Node Graph improvements.
- * Controls performance-related toggles without changing UX.
+ * Allows switching between renderers and controlling performance optimizations.
  *
  * Usage:
- *   - URL params: ?ng_shadows=off&ng_perf=on&ng_live=off
+ *   - URL params: ?ng_renderer=xyflow&ng_shadows=off&ng_perf=on
  *   - Or toggle via the DEV UI in NodeCanvasToolbar
  */
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 
+export type RendererType = 'rete' | 'xyflow';
+
 interface NodeGraphFlags {
+  /** Which renderer to use: 'rete' (current) or 'xyflow' (new) */
+  renderer: RendererType;
   /** Whether edge drop-shadows are enabled (performance impact) */
   edgeShadows: boolean;
   /** Whether to show live port values (can impact performance) */
@@ -21,6 +25,7 @@ interface NodeGraphFlags {
 }
 
 const DEFAULT_FLAGS: NodeGraphFlags = {
+  renderer: 'rete',
   edgeShadows: false,  // OFF by default for performance (Step 1.1 - shadows removed)
   liveValues: true,
   perfOverlay: false,
@@ -34,6 +39,11 @@ function parseUrlFlags(): Partial<NodeGraphFlags> {
 
   const params = new URLSearchParams(window.location.search);
   const flags: Partial<NodeGraphFlags> = {};
+
+  const renderer = params.get('ng_renderer');
+  if (renderer === 'rete' || renderer === 'xyflow') {
+    flags.renderer = renderer;
+  }
 
   const shadows = params.get('ng_shadows');
   if (shadows === 'on') flags.edgeShadows = true;
@@ -62,6 +72,9 @@ function loadStoredFlags(): Partial<NodeGraphFlags> {
     const parsed = JSON.parse(raw);
     const flags: Partial<NodeGraphFlags> = {};
 
+    if (parsed.renderer === 'rete' || parsed.renderer === 'xyflow') {
+      flags.renderer = parsed.renderer;
+    }
     if (typeof parsed.edgeShadows === 'boolean') {
       flags.edgeShadows = parsed.edgeShadows;
     }
@@ -117,11 +130,16 @@ if (browser) {
 }
 
 // Derived stores for individual flags
+export const nodeGraphRenderer = derived(flagsStore, ($flags) => $flags.renderer);
 export const nodeGraphEdgeShadows = derived(flagsStore, ($flags) => $flags.edgeShadows);
 export const nodeGraphLiveValues = derived(flagsStore, ($flags) => $flags.liveValues);
 export const nodeGraphPerfOverlay = derived(flagsStore, ($flags) => $flags.perfOverlay);
 
 // Update functions
+export function setRenderer(renderer: RendererType): void {
+  flagsStore.update((flags) => ({ ...flags, renderer }));
+}
+
 export function setEdgeShadows(enabled: boolean): void {
   flagsStore.update((flags) => ({ ...flags, edgeShadows: enabled }));
 }

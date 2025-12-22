@@ -1,7 +1,7 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "./dist-out",
+        "outDir": "./dist-audio-plugins-out",
         "rootDir": "./src",
         "lib": [
             "ES2020",

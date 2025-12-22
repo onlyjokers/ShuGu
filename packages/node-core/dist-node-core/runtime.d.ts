@@ -17,7 +17,9 @@ export declare class NodeRuntime {
     private onTick;
     private onWatchdog;
     private isNodeEnabled;
+    private isComputeEnabled;
     private isSinkEnabled;
+    private lastEnabledStateByNode;
     private overridesByNode;
     private maxSinkValuesPerTick;
     private sinkValuesThisTick;
@@ -32,6 +34,14 @@ export declare class NodeRuntime {
             time: number;
         }) => void;
         onWatchdog?: (info: NodeRuntimeWatchdogInfo) => void;
+        /**
+         * Gate for compute execution only. When false, compute and sinks are skipped and outputs are cleared,
+         * but the node is not considered "disabled" for lifecycle purposes.
+         */
+        isComputeEnabled?: (nodeId: string) => boolean;
+        /**
+         * Gate for full node enable/disable. When false, the node is treated as stopped and `onDisable` may fire.
+         */
         isNodeEnabled?: (nodeId: string) => boolean;
         isSinkEnabled?: (nodeId: string) => boolean;
         watchdog?: {
@@ -53,6 +63,7 @@ export declare class NodeRuntime {
     start(): void;
     stop(): void;
     clear(): void;
+    private runDisableHooks;
     applyOverride(nodeId: string, kind: 'input' | 'config', key: string, value: unknown, ttlMs?: number): void;
     removeOverride(nodeId: string, kind: 'input' | 'config', key: string): void;
     clearOverrides(): void;
