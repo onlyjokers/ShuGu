@@ -3,6 +3,7 @@
  */
 import type { Connection, NodeInstance, NodeRegistry, ProcessContext } from '@shugu/node-core';
 import type { ClientSDK } from './client-sdk.js';
+import { toneAudioEngine } from '@shugu/multimedia-core';
 
 type ToneModule = typeof import('tone');
 
@@ -133,9 +134,6 @@ const AUDIO_OUTPUT_PORTS = new Map<ToneNodeKind, string[]>([
 ]);
 
 let toneModule: ToneModule | null = null;
-let toneLoadPromise: Promise<ToneModule> | null = null;
-let audioEnabled = false;
-let lastEnableError: string | null = null;
 let masterGain: any | null = null;
 const transportState: TransportStartState = { started: false, scheduledAtMs: null };
 
@@ -191,10 +189,26 @@ function isEffectKind(type: string): type is ToneEffectKind {
   );
 }
 
-function isAudioConnection(conn: Connection, nodesById: Map<string, NodeInstance>): boolean {
+function isAudioConnection(
+  conn: Connection,
+  nodesById: Map<string, NodeInstance>,
+  registry: NodeRegistry | null
+): boolean {
   const source = nodesById.get(conn.sourceNodeId);
   const target = nodesById.get(conn.targetNodeId);
   if (!source || !target) return false;
+
+  // Prefer port typing from the single source of truth (node registry definitions).
+  // If ports are explicitly typed as `audio`, treat it as an audio connection.
+  if (registry) {
+    const sourceDef = registry.get(source.type);
+    const targetDef = registry.get(target.type);
+    const outPort = sourceDef?.outputs?.find((p) => p.id === conn.sourcePortId);
+    const inPort = targetDef?.inputs?.find((p) => p.id === conn.targetPortId);
+    if (outPort?.type === 'audio' && inPort?.type === 'audio') return true;
+  }
+
+  // Fallback for older graphs/definitions: use a conservative allowlist.
   if (!isAudioNodeKind(source.type) || !isAudioNodeKind(target.type)) return false;
   const sourcePorts = AUDIO_OUTPUT_PORTS.get(source.type);
   const targetPorts = AUDIO_INPUT_PORTS.get(target.type);
@@ -202,11 +216,15 @@ function isAudioConnection(conn: Connection, nodesById: Map<string, NodeInstance
   return sourcePorts.includes(conn.sourcePortId) && targetPorts.includes(conn.targetPortId);
 }
 
-function updateAudioGraphSnapshot(nodes: NodeInstance[], connections: Connection[]): void {
+function updateAudioGraphSnapshot(
+  registry: NodeRegistry | null,
+  nodes: NodeInstance[],
+  connections: Connection[]
+): void {
   latestGraphNodesById = new Map(nodes.map((node) => [node.id, node]));
   const nextConnections = Array.isArray(connections) ? connections : [];
   latestAudioConnections = nextConnections.filter((conn) =>
-    isAudioConnection(conn, latestGraphNodesById)
+    isAudioConnection(conn, latestGraphNodesById, registry)
   );
 
   latestExplicitNodeIds = new Set();
@@ -284,7 +302,8 @@ function reconnectSourcesToBus(): void {
 
 // Rebuild explicit audio connections from the last deployed graph snapshot.
 function applyGraphWiring(): boolean {
-  if (!toneModule || !audioEnabled) return false;
+  if (!toneModule) return false;
+  if (!toneAudioEngine.isEnabled()) return false;
   if (latestAudioConnections.length === 0) return true;
 
   for (const inst of effectInstances.values()) {
@@ -313,8 +332,26 @@ function applyGraphWiring(): boolean {
 
   for (const conn of latestAudioConnections) {
     const output = getAudioOutputNode(conn.sourceNodeId);
+    if (!output) {
+      missing = true;
+      continue;
+    }
+
+    const target = latestGraphNodesById.get(conn.targetNodeId);
+    if (target?.type === 'audio-out') {
+      ensureMasterGain();
+      try {
+        output.connect(masterGain ?? toneModule.Destination);
+        outgoingCounts.set(conn.sourceNodeId, (outgoingCounts.get(conn.sourceNodeId) ?? 0) + 1);
+      } catch (error) {
+        missing = true;
+        console.warn('[tone-adapter] audio connect to audio-out failed', error);
+      }
+      continue;
+    }
+
     const input = getAudioInputNode(conn.targetNodeId);
-    if (!output || !input) {
+    if (!input) {
       missing = true;
       continue;
     }
@@ -349,24 +386,16 @@ function applyGraphWiring(): boolean {
 // Mark the audio graph as dirty and rebuild if Tone is ready.
 function scheduleGraphWiring(): void {
   if (latestAudioConnections.length === 0) return;
-  if (!toneModule || !audioEnabled) return;
+  if (!toneModule) return;
+  if (!toneAudioEngine.isEnabled()) return;
   applyGraphWiring();
 }
 
 async function ensureTone(): Promise<ToneModule> {
   if (toneModule) return toneModule;
-  if (!toneLoadPromise) {
-    toneLoadPromise = import('tone')
-      .then((mod) => {
-        toneModule = (mod as any).default ?? mod;
-        return toneModule as ToneModule;
-      })
-      .catch((error) => {
-        lastEnableError = error instanceof Error ? error.message : String(error);
-        throw error;
-      });
-  }
-  return toneLoadPromise;
+  const tone = (await toneAudioEngine.ensureLoaded()) as unknown as ToneModule;
+  toneModule = (toneAudioEngine.getToneModule() as unknown as ToneModule | null) ?? tone;
+  return tone;
 }
 
 function ensureMasterGain(): void {
@@ -1043,28 +1072,23 @@ function createPlayerInstance(
 
 export async function enableToneAudio(): Promise<{ enabled: boolean; error?: string } | null> {
   if (typeof window === 'undefined') return null;
-  try {
-    const tone = await ensureTone();
-    await tone.start();
-    const state = tone.getContext().state;
-    audioEnabled = state === 'running';
-    if (audioEnabled) {
-      ensureMasterGain();
-      scheduleGraphWiring();
-    }
-    return { enabled: audioEnabled };
-  } catch (error) {
-    lastEnableError = error instanceof Error ? error.message : String(error);
-    return { enabled: false, error: lastEnableError };
+  const result = await toneAudioEngine.start();
+  if (result.enabled) {
+    await ensureTone();
+    ensureMasterGain();
+    scheduleGraphWiring();
   }
+  return { enabled: result.enabled, error: result.error };
 }
 
 export function isToneAudioEnabled(): boolean {
-  return audioEnabled;
+  return toneAudioEngine.isEnabled();
 }
 
 export function getToneAudioStatus(): { enabled: boolean; loaded: boolean; error?: string } {
-  return { enabled: audioEnabled, loaded: Boolean(toneModule), error: lastEnableError ?? undefined };
+  const status = toneAudioEngine.getStatus();
+  // Note: toneModule may be lazily imported; rely on ToneAudioEngine as the source of truth.
+  return { enabled: status.enabled, loaded: status.loaded, error: status.error ?? undefined };
 }
 
 function disposeOscInstance(nodeId: string): void {
@@ -1190,7 +1214,7 @@ export function registerToneClientDefinitions(
       const busName = toString(config.bus, DEFAULT_BUS);
       const loopKey = enabled ? loopKeyOf(config.loop) : null;
 
-      if (!audioEnabled) {
+      if (!toneAudioEngine.isEnabled()) {
         return { value: amplitude };
       }
 
@@ -1284,7 +1308,7 @@ export function registerToneClientDefinitions(
       params[key] = toNumber(fromInput ?? fromConfig, defaults[key]);
     });
 
-    if (!audioEnabled) return { out: inputValue };
+    if (!toneAudioEngine.isEnabled()) return { out: inputValue };
 
     if (!toneModule) {
       void ensureTone().catch((error) =>
@@ -1462,7 +1486,7 @@ export function registerToneClientDefinitions(
       const enabled = toBoolean(config.enabled, false) || gate > 0;
       const busName = toString(config.bus, DEFAULT_BUS);
 
-      if (!audioEnabled) {
+      if (!toneAudioEngine.isEnabled()) {
         return { value: volume };
       }
 
@@ -1575,7 +1599,7 @@ export function registerToneClientDefinitions(
       const enabled = toBoolean(config.enabled, false);
       const busName = toString(config.bus, DEFAULT_BUS);
 
-      if (!audioEnabled) {
+      if (!toneAudioEngine.isEnabled()) {
         return { value: volume };
       }
 
@@ -1737,7 +1761,7 @@ export function registerToneClientDefinitions(
       maybeStopTransport();
     },
     syncActiveNodes: (activeNodeIds: Set<string>, nodes: NodeInstance[], connections: Connection[]) => {
-      updateAudioGraphSnapshot(nodes ?? [], connections ?? []);
+      updateAudioGraphSnapshot(registry, nodes ?? [], connections ?? []);
       for (const nodeId of Array.from(oscInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposeOscInstance(nodeId);
       }
@@ -1753,7 +1777,7 @@ export function registerToneClientDefinitions(
 
       if (latestAudioConnections.length === 0) {
         for (const inst of effectInstances.values()) inst.wiredExternally = false;
-        if (toneModule && audioEnabled) reconnectSourcesToBus();
+        if (toneModule && toneAudioEngine.isEnabled()) reconnectSourcesToBus();
         for (const bus of buses.keys()) rebuildBusChain(bus);
         return;
       }

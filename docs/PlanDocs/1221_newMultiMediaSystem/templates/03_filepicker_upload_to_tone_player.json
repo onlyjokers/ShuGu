@@ -1,0 +1,85 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Asset Upload (File Picker) → Tone Player → Audio Patch to Client",
+  "purpose": "体验 file-picker 节点的“上传到 Asset Service 并写入 asset:<id>” + Tone.Player 播放 + Patch Deploy",
+  "notes": [
+    "需要 manager 已设置 `shugu-server-url` 和 `shugu-asset-write-token`（否则上传会报 401/503）。",
+    "导入后先点 ▶ Start，再在 Load Media Sound 节点点击 Load Audio 选择文件。"
+  ],
+  "howTo": [
+    "1) client 点 Start（启用 ToneAudioEngine）。",
+    "2) manager Node Graph 点 ▶ Start。",
+    "3) Load Media Sound → Load Audio 选一个音频文件（会自动上传并把图里写成 asset:<id>）。",
+    "4) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "5) Patch 会自动部署到该 client。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-load-media-sound",
+        "type": "load-media-sound",
+        "position": { "x": 120, "y": 180 },
+        "config": { "url": "" },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-tone-player",
+        "type": "tone-player",
+        "position": { "x": 480, "y": 180 },
+        "config": {
+          "url": "",
+          "loop": true,
+          "autostart": true,
+          "playbackRate": 1,
+          "detune": 0,
+          "volume": 0.9,
+          "bus": "main",
+          "enabled": true
+        },
+        "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 820, "y": 180 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 820, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-load-url-to-player",
+        "sourceNodeId": "node-load-media-sound",
+        "sourcePortId": "url",
+        "targetNodeId": "node-tone-player",
+        "targetPortId": "url"
+      },
+      {
+        "id": "conn-player-to-out",
+        "sourceNodeId": "node-tone-player",
+        "sourcePortId": "value",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}

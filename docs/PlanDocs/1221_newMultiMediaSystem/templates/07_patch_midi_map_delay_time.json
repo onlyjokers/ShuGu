@@ -1,0 +1,102 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Patch: MIDI → MIDI Map → Tone Delay(Time) (Manager Bridge) + Tone Osc",
+  "purpose": "验证 MIDI 节点属于 manager-only：不部署到 client，但能通过 override bridge 实时调制 client patch（例如 Tone Delay 的 time）。",
+  "howTo": [
+    "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
+    "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
+    "3) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "4) 配置 MIDI：在 MIDI Fuzzy 节点里选择一个 MIDI source（CC/Note/Pitchbend）。",
+    "5) 现在 MIDI Map 的输出会通过 manager → client 的 override-set 实时写入 Tone Delay(time)。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-osc",
+        "type": "tone-osc",
+        "position": { "x": 120, "y": 180 },
+        "config": { "waveform": "sine", "bus": "main", "enabled": true, "loop": "" },
+        "inputValues": { "frequency": 220, "amplitude": 0.15 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-delay",
+        "type": "tone-delay",
+        "position": { "x": 460, "y": 180 },
+        "config": { "time": 0.25, "feedback": 0.35, "wet": 0.3, "bus": "main", "order": 10, "enabled": true },
+        "inputValues": { "time": 0.25, "feedback": 0.35, "wet": 0.3 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 820, "y": 180 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 820, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi",
+        "type": "midi-fuzzy",
+        "position": { "x": 120, "y": 420 },
+        "config": { "source": null },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-map",
+        "type": "midi-map",
+        "position": { "x": 360, "y": 420 },
+        "config": { "min": 0.05, "max": 0.8, "invert": false, "round": false, "integer": false },
+        "inputValues": { "invert": false, "round": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-osc-to-delay",
+        "sourceNodeId": "node-osc",
+        "sourcePortId": "value",
+        "targetNodeId": "node-delay",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-delay-to-out",
+        "sourceNodeId": "node-delay",
+        "sourcePortId": "out",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-midi-to-map",
+        "sourceNodeId": "node-midi",
+        "sourcePortId": "value",
+        "targetNodeId": "node-midi-map",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-map-to-delay-time",
+        "sourceNodeId": "node-midi-map",
+        "sourcePortId": "out",
+        "targetNodeId": "node-delay",
+        "targetPortId": "time"
+      }
+    ]
+  }
+}

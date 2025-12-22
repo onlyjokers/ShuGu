@@ -23,6 +23,8 @@ export declare class NodeRuntime {
     private sinkValuesThisTick;
     private oscillation;
     private sinkSignatureHistory;
+    private lastComputedInputsByNode;
+    private lastOnSinkStateByNode;
     constructor(registry: NodeRegistry, options?: {
         tickIntervalMs?: number;
         onTick?: (info: {

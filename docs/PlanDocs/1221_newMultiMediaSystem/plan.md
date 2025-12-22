@@ -2,7 +2,7 @@
 
 # 1221_newMultiMediaSystem 计划（资源库 + Multimedia-Core + Max/MSP 式多媒体 Patch）
 
-更新时间：2025-12-21
+更新时间：2025-12-22
 
 > 这份文档是“做事用”的：把目标拆成明确的系统边界、接口标准、数据模型、逐步实现步骤、验收标准与回滚策略。  
 > 你可以把它当作一个可持续更新的 RFC / 技术实施路线图。
@@ -661,7 +661,7 @@ UI 层（NodeCanvas）：
 
 - [x] assetId：UUIDv4（主流）
 - [x] resolver 输入：同时支持 `asset:<id>` 与 `shugu://asset/<id>`
-- [ ] server 资产存储目录（需要可写，部署文档更新）
+- [x] server 资产存储目录（需要可写，部署文档更新）
 - [x] 上传鉴权：`Authorization: Bearer <token>`（纯内存校验，不走 DB）
 - [x] 下载默认公开：防止“读 token”影响打开 client 的体验；可选开启 `ASSET_READ_TOKEN`
 - [x] patch root：以 `audio-out` 为 root 自动推导（全图/组选仅作为过渡/调试）
@@ -723,15 +723,15 @@ UI 层（NodeCanvas）：
 - [x] 为图片/视频做同类节点（或通用 `load-asset` 节点：kind=audio/image/video）
 
 3) 兼容旧项目
-- [ ] 增加“迁移工具”（按钮或脚本）：DataURL -> 上传 -> assetRef
+- [x] 增加“迁移工具”（按钮或脚本）：DataURL -> 上传 -> assetRef
 
 4) Manifest 导出与推送（为“登录即预加载”提供前置条件）
-- [ ] Manager 维护 `currentAssetManifest`（推荐包含优先级）：
+- [x] Manager 维护 `currentAssetManifest`（推荐包含优先级）：
   - 高优先级：从“当前 graph/scene/patch”扫描 `asset:` 引用生成（保证即将使用的资源一定预先到位）
   - 低优先级（可选）：项目资产库里的“全部 assets”（满足你想要的“更预先”体验）
 - [x] client 连接建立后立即推送 manifest（plugin 推荐：`multimedia-core`；MVP 也可临时挂在 `node-executor`）
 - [x] manifest 变更时增量推送（debounce，避免拖动/编辑时刷屏）
-- [ ] 高优先级下载顺序（你已要求）：
+- [x] 高优先级下载顺序（你已要求）：
   - 按“首次出现顺序”生成有序列表（稳定、可预测）
   - 推荐扫描策略（稳定且贴近 Max/MSP 语义）：以 patch root（`audio-out` / video 输出 / image 输出）为起点做 DFS/BFS，按端口顺序遍历上游；遇到 `asset:` 立刻 append（去重保持首次顺序）
   - 若同一资源被多处引用：只保留第一次出现的位置（后续视为已满足）
@@ -764,18 +764,18 @@ UI 层（NodeCanvas）：
 - [x] `packages/node-core/src/definitions.ts`：所有 Tone 音频端口改为：
   - 输入：`{ id:'in', type:'audio', kind:'sink' }`
   - 输出：`{ id:'out'|'value', type:'audio', kind:'sink' }`
-- [ ] 同步修正其它“本质是音频”的节点（例如未来的 `audio-out`）
+- [x] 同步修正其它“本质是音频”的节点（例如 `audio-out`）
 
 2) Manager：移除/收敛 hand-written Tone specs
 - [x] 首选：Manager 直接消费 node-core definitions 渲染 UI（Tone/核心节点优先以 node-core 为准，JSON spec 不再覆盖语义）
-- [ ] 备选：保留 JSON 但改为 build-time codegen（禁止手写漂移）
-- [ ] UI socket 规则：
+- [x] 备选：保留 JSON 但改为 build-time codegen（不需要：已采用 node-core 作为唯一来源）
+ - [x] UI socket 规则：
   - `audio` 端口：独立样式（颜色/粗细/连接规则），只允许连到 `audio`
   - `number`/`boolean`：仍是控制端口，只能连到同类型或 `any`
 
 3) sdk-client tone-adapter：音频连接识别策略收敛
 - [x] MVP：保留现有端口表（`AUDIO_INPUT_PORTS/AUDIO_OUTPUT_PORTS`）以兼容旧图
-- [ ] 下一步：优先用端口类型 `audio` 来识别音频连接（减少硬编码）
+- [x] 下一步：优先用端口类型 `audio` 来识别音频连接（减少硬编码）
 
 验收（你最关心的感知点）：
 - Tone Delay/Tone Player 等节点的输入输出在 Manager UI 里不再显示为“数字线”，而是明确的 `audio` 线
@@ -793,19 +793,19 @@ UI 层（NodeCanvas）：
 
 2) AssetUrlResolver（跨音频/图片/视频统一）
 - [x] 支持 `asset:<id>` + `shugu://asset/<id>` + 直链 URL
-- [ ] 输出统一为 `https://{server}/api/assets/<id>/content`（或未来 302 / pre-signed URL）
+- [x] 输出统一为 `https://{server}/api/assets/<id>/content`（或未来 302 / pre-signed URL）
 
 3) Manifest 驱动的“登录即预加载”（不依赖 deploy）
 - [x] client 启动时立即加载并使用 `lastManifest`（IndexedDB/localStorage）开始 preload（只写 console 进度，不进 UI）
-- [ ] socket 连接成功后，接收 manager 推送的 `currentManifest`：
+- [x] socket 连接成功后，接收 manager 推送的 `currentManifest`：
   - 若 `manifestId` 相同：继续当前 preload
   - 若不同：做增量 diff（新增下载/删除可延后做 GC），并切换 readiness 归属到新 manifest
-- [ ] preload 策略（MVP）：
+- [x] preload 策略（MVP）：
   - 音频/图片：GET 触发 Cache Storage 写入
   - 视频：至少 HEAD 校验 + 可选预热首段（小 Range）
   - 并发限制（例如 4~6），避免占满带宽影响实时控制
   - **优先级（你已要求）**：严格按 manifest 的顺序调度下载；新增的“更靠前”资源要能插队到队列前部（保证马上要用的先到）
-- [ ] console 进度规范（仅日志，不 UI）：
+- [x] console 进度规范（仅日志，不 UI）：
   - 开始：`[asset] preload start manifest=... total=...`
   - 进度：`[asset] preload progress x/y (bytes ...)`
   - 完成：`[asset] preload ready manifest=...`
@@ -814,18 +814,18 @@ UI 层（NodeCanvas）：
 4) 持久化缓存 + sha256 验证（跨刷新/重进生效）
 - [x] Cache Storage：缓存 `GET /content` 响应（跨刷新/重进复用）
 - [x] IndexedDB：缓存 `assetId -> { etag, sizeBytes, verifiedAt }`（MVP；sha256 可后续补齐）
-- [ ] 一致性校验规则：
+- [x] 一致性校验规则：
   - 首次下载后：
     - 基线校验（MVP）：校验 `ETag === meta.sha256`
     - 额外校验（可选）：`sizeBytes` 较小时再用 WebCrypto 计算 sha256 复核（大视频不做整文件 hash）
   - 后续启动：HEAD 比对 `ETag/Content-Length`；一致则跳过下载，不一致则重下（必要时再复核 hash）
-- [ ] 目标：不会出现“服务器内容变了但 URL/文件名不变导致不重新下载”的情况
+- [x] 目标：不会出现“服务器内容变了但 URL/文件名不变导致不重新下载”的情况
 
 5) Readiness 上报（驱动 manager dot 颜色）
 - [x] preload 开始即上报 `status=loading`
 - [x] 全部资源 verified 后上报 `status=ready`
 - [x] 任意资源不可恢复错误上报 `status=error`（带 assetId/原因）
-- [ ] 上报渠道：
+- [x] 上报渠道：
   - 推荐：新增 plugin `multimedia-core`（manager->client 下发 manifest；client->manager 上报状态走 custom sensor）
   - MVP：可先复用 custom sensor（`kind:'multimedia-core'`）不上新协议类型
 
@@ -843,9 +843,9 @@ UI 层（NodeCanvas）：
 ### Phase 4 - ToneAudioEngine 落地（统一 Tone context）
 
 1) Tone 统一入口
-- [ ] 新增 `ToneAudioEngine`
-- [ ] client Start 手势解锁只调用 ToneAudioEngine（统一 `Tone.start()`）
-- [ ] tone-adapter 改为使用 ToneAudioEngine（移除重复 global 状态）
+- [x] 新增 `ToneAudioEngine`
+- [x] client Start 手势解锁只调用 ToneAudioEngine（统一 `Tone.start()`）
+- [x] tone-adapter 改为使用 ToneAudioEngine（移除重复 global 状态）
 
 验收：
 - Tone nodes 与其他音频系统（尚未迁移）能共存但最终都将过渡
@@ -856,12 +856,12 @@ UI 层（NodeCanvas）：
 ### Phase 5 - Synth(update) 迁移到 Tone（消除双音频系统）
 
 1) 新实现
-- [ ] `ToneModulatedSoundPlayer`：实现 play/update/stop（对齐现有功能）
-- [ ] 确保只使用 ToneAudioEngine 的 context，不创建新 AudioContext
+- [x] `ToneModulatedSoundPlayer`：实现 play/update/stop（对齐现有功能）
+- [x] 确保只使用 ToneAudioEngine 的 context，不创建新 AudioContext
 
 2) 替换接入点
-- [ ] `modulateSound` / `modulateSoundUpdate` 动作改为调用 Tone 版本
-- [ ] 兼容旧 payload 字段（attack/release/durationMs 等）
+- [x] `modulateSound` / `modulateSoundUpdate` 动作改为调用 Tone 版本
+ - [x] 兼容旧 payload 字段（attack/release/durationMs 等）
 
 验收：
 - 在同一 client 上：Tone nodes + synth(update) 同时工作且不打架
@@ -875,15 +875,15 @@ UI 层（NodeCanvas）：
 ### Phase 6 - MultimediaCore 媒体后端统一（image/video -> MediaEngine；audio -> ToneSoundPlayer）
 
 1) Image/Video：迁入 MediaEngine（彻底解耦 apps/client store）
-- [ ] `MultimediaCore.MediaEngine` 维护 `imageState/videoState`（当前散落在 `apps/client/src/lib/stores/client.ts`）
-- [ ] `showImage/hideImage/playMedia(video)/stopMedia` 的 client 端执行路径全部改为调用 MediaEngine
-- [ ] `apps/client` 只负责把 core state 映射到 store（渲染层），不承载业务逻辑
-- [ ] URL 输入支持 `asset:`（通过 resolver + ResourceStore 命中缓存）
+- [x] `MultimediaCore.MediaEngine` 维护 `imageState/videoState`（当前散落在 `apps/client/src/lib/stores/client.ts`）
+- [x] `showImage/hideImage/playMedia(video)/stopMedia` 的 client 端执行路径全部改为调用 MediaEngine
+- [x] `apps/client` 只负责把 core state 映射到 store（渲染层），不承载业务逻辑
+- [x] URL 输入支持 `asset:`（通过 resolver + ResourceStore 命中缓存）
 
 2) Audio：SoundPlayer 迁移到 Tone（保留 fallback）
-- [ ] `ToneSoundPlayer`（Tone.Player 路径）
-- [ ] 失败 fallback（HTMLAudio + MediaElementSource 接 Tone master）
-- [ ] 替换 `playSound` / `playMedia(audio)` 的底层实现
+- [x] `ToneSoundPlayer`（Tone.Player 路径）
+- [x] 失败 fallback（HTMLAudio + MediaElementSource 接 Tone master）
+- [x] 替换 `playSound` / `playMedia(audio)` 的底层实现
 
 验收：
 - Image/Video 的行为与旧实现一致（播放/停止/loop/mute/volume/auto-hide）
@@ -895,23 +895,27 @@ UI 层（NodeCanvas）：
 ### Phase 7 - Patch 部署系统（替代 loop 依赖，Max/MSP 模式落地）
 
 1) Patch 导出（Manager）
-- [ ] 实现 `exportGraphForPatch(...)`：
+- [x] 实现 `exportGraphForPatch(...)`：
   - 默认：导出 `audio-out` root 的依赖子图（你已确认采用主流 Max/MSP 语义）
   - 过渡/调试：仍可导出整个 graph 或选中 group（可开关）
-- [ ] whitelist：保证 client 能执行（类似现有 allowedNodeTypes）
+- [x] whitelist：保证 client 能执行（类似现有 allowedNodeTypes）
 
-2) Patch 控制器（Manager UI）
-- [ ] 新增 patch-controller
-- [ ] UI：Deploy/Stop/Remove + 状态/日志
-- [ ] 自动重部署策略（debounce）：结构变更时自动 deploy（可开关）
+2) Patch 目标与部署（Manager Graph 驱动）
+- [x] Graph 驱动目标选择：推荐 `audio-out(Deploy) → client-object(In)`（更符合“输出接到 Client”的心智模型），并兼容旧连法 `client-object(out) → audio-out(client)`；彻底移除 toolbar patch-controls
+- [x] 自动部署策略（debounce）：拓扑变更时自动 deploy；断开/stop 时 stop+remove
+- [x] 参数变化不触发 redeploy：走 override-set + commit（保持实时调参手感）
 
 3) Client 侧执行（NodeExecutor）
-- [ ] NodeExecutor deploy 放宽限制（不要求 sensors/loop）
-- [ ] requiredCapabilities 仍保留（sound/visual 等）
+- [x] NodeExecutor deploy 放宽限制（不要求 sensors/loop）
+- [x] requiredCapabilities 仍保留（sound/visual 等）
 
 4) override 路由（关键）
-- [ ] manager 发送 override 时能找到“该 node 属于哪个 patch / 哪个 client”
-- [ ] 引入 commit 语义，确保参数持久
+- [x] manager 发送 override 时能找到“该 node 属于哪个 patch / 哪个 client”
+- [x] 引入 commit 语义，确保参数持久
+
+5) MIDI 控制（Manager-only，桥接到 Client Patch）
+- [x] Patch 导出阶段自动排除 `midi-*` 节点（client 端不具备 WebMIDI/source/runtime，避免不可部署报错）
+- [x] Manager 运行时将 `midi-* → patch-node` 的连线视为桥接：每个 tick 把 MIDI 输出转成 `override-set` 下发到 client；断线时 `override-remove`
 
 验收（你最关心的 end-to-end）：
 - 在 Node Graph 上：`load-asset(audio)` -> `tone-player` -> `tone-delay` -> `audio-out`
@@ -923,9 +927,9 @@ UI 层（NodeCanvas）：
 
 ### Phase 8 - 清理与长期维护
 
-- [ ] 删除/退役旧 AudioContext 创建代码路径（或改为只走 ToneAudioEngine）
-- [ ] 文档更新：DEPLOY.md 增加资产存储目录与备份策略
-- [ ] 增加“健康检查”：资产目录可写、DB 可用、磁盘空间预警（可选）
+- [x] 删除/退役旧 AudioContext 创建代码路径（或改为只走 ToneAudioEngine）
+- [x] 文档更新：DEPLOY.md 增加资产存储目录与备份策略
+- [x] 增加“健康检查”：资产目录可写、DB 可用、磁盘空间预警（可选）
 
 ---
 

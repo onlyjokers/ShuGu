@@ -5,6 +5,7 @@ import { get } from 'svelte/store';
 import type { GraphState } from '$lib/nodes/types';
 import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
 import { midiNodeBridge, midiSourceMatchesEvent } from '$lib/features/midi/midi-node-bridge';
+import type { GraphViewAdapter } from '../adapters';
 import { computeMidiHighlightState } from './midi-highlight';
 
 export type MidiHighlightController = {
@@ -18,9 +19,7 @@ export type MidiHighlightController = {
 type MidiHighlightControllerOptions = {
   getGraphState: () => GraphState;
   getGroupDisabledNodeIds: () => Set<string>;
-  getNodeMap: () => Map<string, any>;
-  getConnectionMap: () => Map<string, any>;
-  getAreaPlugin: () => any;
+  getAdapter: () => GraphViewAdapter | null;
   isSyncingGraph: () => boolean;
 };
 
@@ -88,8 +87,8 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
   };
 
   const applyHighlights = async () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
     if (opts.isSyncingGraph()) return;
 
     if (applyInProgress) {
@@ -146,34 +145,16 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
       pushNodeIds(appliedOutputPortsByNode.keys());
       pushNodeIds(midiActiveOutputPortsByNode.keys());
 
-      const nodeMap = opts.getNodeMap();
       for (const id of affectedNodeIds) {
-        const node = nodeMap.get(id);
-        if (!node) continue;
-
         const nextActive = midiActiveNodeIds.has(id);
         const nextInputs = Array.from(midiActiveInputPortsByNode.get(id) ?? []).sort();
         const nextOutputs = Array.from(midiActiveOutputPortsByNode.get(id) ?? []).sort();
 
-        const prevActive = Boolean((node as any).active);
-        const prevInputs = ((node as any).activeInputs ?? []) as string[];
-        const prevOutputs = ((node as any).activeOutputs ?? []) as string[];
-
-        let changed = false;
-        if (prevActive !== nextActive) {
-          (node as any).active = nextActive;
-          changed = true;
-        }
-        if (prevInputs.length !== nextInputs.length || prevInputs.some((v, i) => v !== nextInputs[i])) {
-          (node as any).activeInputs = nextInputs;
-          changed = true;
-        }
-        if (prevOutputs.length !== nextOutputs.length || prevOutputs.some((v, i) => v !== nextOutputs[i])) {
-          (node as any).activeOutputs = nextOutputs;
-          changed = true;
-        }
-
-        if (changed) await areaPlugin.update('node', id);
+        await adapter.setNodeVisualState(id, {
+          active: nextActive,
+          activeInputs: nextInputs,
+          activeOutputs: nextOutputs,
+        });
       }
 
       const affectedConnIds = new Set<string>();
@@ -183,16 +164,9 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
       pushConnIds(appliedConnIds);
       pushConnIds(midiActiveConnIds);
 
-      const connectionMap = opts.getConnectionMap();
       for (const id of affectedConnIds) {
-        const conn = connectionMap.get(id);
-        if (!conn) continue;
-
         const nextActive = midiActiveConnIds.has(id);
-        if (Boolean((conn as any).active) !== nextActive) {
-          (conn as any).active = nextActive;
-          await areaPlugin.update('connection', id);
-        }
+        await adapter.setConnectionVisualState(id, { active: nextActive });
       }
 
       appliedNodeIds = midiActiveNodeIds;

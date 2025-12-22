@@ -152,6 +152,8 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createLoadMediaImageNode());
   registry.register(createLoadMediaVideoNode());
   registry.register(createPlayMediaNode());
+  // Patch root sinks (Max/MSP style).
+  registry.register(createAudioOutNode());
   registry.register(createFlashlightProcessorNode());
   registry.register(createScreenColorProcessorNode());
   registry.register(createSynthUpdateProcessorNode());
@@ -178,6 +180,25 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
       return { ref: assetId ? `asset:${assetId}` : '' };
     },
+  };
+}
+
+function createAudioOutNode(): NodeDefinition {
+  return {
+    type: 'audio-out',
+    label: 'Audio Patch to Client',
+    category: 'Audio',
+    inputs: [
+      { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
+      { id: 'client', label: 'Client', type: 'client', kind: 'sink' },
+    ],
+    outputs: [
+      // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+      // This output is not part of the exported client patch subgraph.
+      { id: 'cmd', label: 'Deploy', type: 'command' },
+    ],
+    configSchema: [],
+    process: () => ({}),
   };
 }
 

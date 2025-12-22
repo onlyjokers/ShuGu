@@ -1,5 +1,7 @@
 <!-- Purpose: Custom Rete connection renderer with loop/MIDI highlighting. -->
 <script lang="ts">
+  import { nodeGraphEdgeShadows } from '$lib/features/node-graph-flags';
+
   type Position = { x: number; y: number };
 
   // ConnectionWrapper spreads the connection payload into props.
@@ -32,13 +34,36 @@
   // Keep props "used" to avoid svelte-check warnings (the values are still useful for debugging).
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let _debugProps: unknown;
-  $: _debugProps = { source, target, sourceOutput, targetInput, isLoop, isPseudo, start, end };
+  $: _debugProps = { source, target, sourceOutput, targetInput, isLoop, isPseudo };
+
+  // Compute whether shadows should be applied
+  $: shadowsEnabled = $nodeGraphEdgeShadows;
+
+  // Step 1.2: Limit per-edge SVG viewport (avoid 9999px surfaces).
+  // We keep the `d` path coordinates unchanged (absolute in the canvas coordinate space),
+  // and instead set `viewBox` to cover the local bbox so the mapping stays 1:1.
+  const PADDING = 50; // Matches plan_progress: bbox + 50px padding
+
+  $: minX = Math.min(start.x, end.x);
+  $: minY = Math.min(start.y, end.y);
+  $: maxX = Math.max(start.x, end.x);
+  $: maxY = Math.max(start.y, end.y);
+
+  $: svgWidth = Math.max(1, maxX - minX + PADDING * 2);
+  $: svgHeight = Math.max(1, maxY - minY + PADDING * 2);
+  $: viewBox = `${minX - PADDING} ${minY - PADDING} ${svgWidth} ${svgHeight}`;
 </script>
 
 <svg
-  class="connection {localLoop ? 'local-loop' : ''} {deployedLoop ? 'deployed-loop' : ''} {active ? 'active' : ''}"
+  class="connection {localLoop ? 'local-loop' : ''} {deployedLoop ? 'deployed-loop' : ''} {active
+    ? 'active'
+    : ''} {shadowsEnabled ? 'with-shadow' : 'no-shadow'}"
   data-connection-id={id}
   data-testid="connection"
+  {viewBox}
+  preserveAspectRatio="xMidYMid meet"
+  style="left: {minX - PADDING}px; top: {minY -
+    PADDING}px; width: {svgWidth}px; height: {svgHeight}px;"
 >
   <path d={path} />
 </svg>
@@ -48,8 +73,7 @@
     overflow: visible !important;
     position: absolute;
     pointer-events: none;
-    width: 9999px;
-    height: 9999px;
+    /* Width/height set via inline style based on connection bounds */
   }
 
   svg path {
@@ -57,9 +81,20 @@
     stroke-width: 5px;
     stroke: rgba(99, 102, 241, 0.6);
     pointer-events: auto;
-    filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.35));
-    transition: stroke 120ms ease, stroke-width 120ms ease, opacity 120ms ease;
+    transition:
+      stroke 120ms ease,
+      stroke-width 120ms ease,
+      opacity 120ms ease;
     opacity: 0.85;
+  }
+
+  /* Apply shadows only when explicitly enabled */
+  svg.with-shadow path {
+    filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.35));
+  }
+
+  svg.no-shadow path {
+    filter: none;
   }
 
   svg.local-loop path {
@@ -78,6 +113,14 @@
     stroke: rgba(250, 204, 21, 0.95);
     stroke-width: 7px;
     opacity: 1;
+  }
+
+  /* Active state gets shadow only when shadows are enabled */
+  svg.active.with-shadow path {
     filter: drop-shadow(0 0 18px rgba(250, 204, 21, 0.35));
+  }
+
+  svg.active.no-shadow path {
+    filter: none;
   }
 </style>

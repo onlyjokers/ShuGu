@@ -7,6 +7,7 @@
 
 export type AssetMetaRecord = {
   assetId: string;
+  sha256?: string | null;
   etag: string | null;
   sizeBytes: number | null;
   verifiedAt: number;
@@ -68,11 +69,12 @@ export class AssetMetaStore {
     if (this.dbPromise) return this.dbPromise;
     this.dbPromise = new Promise((resolve, reject) => {
       const factory = indexedDB as unknown as IndexedDbLike;
-      const req = factory.open(this.dbName, 1);
+      const req = factory.open(this.dbName, 2);
       req.onupgradeneeded = () => {
         const db = req.result;
-        if (db.objectStoreNames.contains(this.storeName)) return;
-        db.createObjectStore(this.storeName, { keyPath: 'assetId' });
+        if (!db.objectStoreNames.contains(this.storeName)) {
+          db.createObjectStore(this.storeName, { keyPath: 'assetId' });
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error ?? new Error('indexeddb open failed'));
@@ -80,4 +82,3 @@ export class AssetMetaStore {
     return this.dbPromise;
   }
 }
-

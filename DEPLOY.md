@@ -47,6 +47,38 @@ pnpm install
 pnpm build:all
 ```
 
+## 3.1 Asset Service (Storage & Env)
+
+ShuGu ships an Asset Service (audio/image/video) which stores uploaded binaries on disk and serves them over HTTP(S).
+
+**Defaults (no env):**
+- Data directory: `data/assets/` (relative to repo root)
+- Index DB: `data/assets/assets-index.json`
+
+**Recommended: create `secrets/server.env` (not committed)**
+
+The server loads env automatically from `secrets/server.env` (or `apps/server/secrets/server.env`) at startup.
+
+Example:
+```bash
+# Required (write protection)
+ASSET_WRITE_TOKEN=your-strong-token
+
+# Optional (public-read by default; set this to restrict reads)
+# ASSET_READ_TOKEN=optional-read-token
+
+# Optional (override storage locations)
+# ASSET_DATA_DIR=/var/lib/shugu/assets
+# ASSET_DB_PATH=/var/lib/shugu/assets/assets-index.json
+
+# Optional (what the server returns as contentUrl base)
+# ASSET_PUBLIC_BASE_URL=https://yourdomain.com
+```
+
+**Backup strategy (important)**
+- Back up the full asset data dir (default `data/assets/`) including `assets-index.json`.
+- Content files are stored by sha256 under subfolders; restoring the directory restores all assets.
+
 ## 4. Start Applications with PM2
 
 We use PM2 to keep the applications running in the background.

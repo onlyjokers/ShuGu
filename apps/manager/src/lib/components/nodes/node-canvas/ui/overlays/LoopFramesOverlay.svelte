@@ -28,7 +28,6 @@
   $: ty = Number(areaTransform?.ty ?? 0) || 0;
 
   $: isCompact = k < 0.75;
-  $: isTiny = k < 0.55;
 </script>
 
 {#if frames.length > 0}
@@ -46,32 +45,30 @@
           class="loop-frame-header"
           on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(loop.id), event)}
         >
-          {#if !isTiny}
-            <div class="loop-frame-meta">
-              <span class="loop-frame-caps">
-                {#if loop.requiredCapabilities?.length}
-                  caps: {loop.requiredCapabilities.join(', ')}
-                {:else}
-                  caps: none
-                {/if}
-              </span>
+          <div class="loop-frame-meta">
+            <span class="loop-frame-caps">
+              {#if loop.requiredCapabilities?.length}
+                caps: {loop.requiredCapabilities.join(', ')}
+              {:else}
+                caps: none
+              {/if}
+            </span>
 
-              <span class="executor-meta">
-                exec:
-                {#if status}
-                  <span class="executor-badge {status.running ? 'running' : 'stopped'}">
-                    {status.running ? 'running' : 'stopped'}
-                  </span>
-                  <span class="executor-event">{status.lastEvent}</span>
-                  {#if status.lastError}
-                    <span class="executor-error" title={status.lastError}>⚠</span>
-                  {/if}
-                {:else}
-                  <span class="executor-badge unknown">unknown</span>
+            <span class="executor-meta">
+              exec:
+              {#if status}
+                <span class="executor-badge {status.running ? 'running' : 'stopped'}">
+                  {status.running ? 'running' : 'stopped'}
+                </span>
+                <span class="executor-event">{status.lastEvent}</span>
+                {#if status.lastError}
+                  <span class="executor-error" title={status.lastError}>⚠</span>
                 {/if}
-              </span>
-            </div>
-          {/if}
+              {:else}
+                <span class="executor-badge unknown">unknown</span>
+              {/if}
+            </span>
+          </div>
 
           {#if !isCompact}
             <div class="loop-frame-actions">

@@ -712,96 +712,46 @@ export class VibrationController {
  * Sound player using Web Audio API
  */
 export class SoundPlayer {
-    private audioContext: AudioContext | null = null;
-    private currentSource: AudioBufferSourceNode | null = null;
-    private gainNode: GainNode | null = null;
-    private audioCache: Map<string, AudioBuffer> = new Map();
     private currentUrl: string | null = null;
     private htmlAudio: HTMLAudioElement | null = null;
 
     /**
-     * Initialize audio context (must be called from user gesture)
+     * Initialize legacy sound player.
+     *
+     * Deprecated: this implementation no longer creates its own AudioContext to keep the
+     * system single-engine (ToneAudioEngine). It is retained as a lightweight HTMLAudio fallback.
      */
     async init(): Promise<void> {
-        if (this.audioContext) return;
-
-        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        this.gainNode = this.audioContext.createGain();
-        this.gainNode.connect(this.audioContext.destination);
+        return;
     }
 
     /**
      * Resume audio context if suspended
      */
     async resume(): Promise<void> {
-        if (this.audioContext?.state === 'suspended') {
-            await this.audioContext.resume();
-        }
+        return;
     }
 
     /**
      * Play sound from URL
      */
     async play(payload: PlaySoundPayload, delaySeconds = 0): Promise<void> {
-        if (!this.audioContext) {
-            await this.init();
-        }
-
-        await this.resume();
         this.stop();
 
         try {
-            // Check cache or load
-            let buffer = this.audioCache.get(payload.url);
-            if (!buffer) {
-                const response = await fetch(payload.url, { mode: 'cors' });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const arrayBuffer = await response.arrayBuffer();
-                buffer = await this.audioContext!.decodeAudioData(arrayBuffer);
-                this.audioCache.set(payload.url, buffer);
+            this.htmlAudio = new Audio(payload.url);
+            this.htmlAudio.loop = payload.loop ?? false;
+            this.htmlAudio.volume = payload.volume ?? 1;
+
+            const start = () => this.htmlAudio?.play().catch(console.warn);
+            if (delaySeconds > 0) {
+                setTimeout(start, delaySeconds * 1000);
+            } else {
+                start();
             }
-
-            // Create source and play
-            this.currentSource = this.audioContext!.createBufferSource();
-            this.currentSource.buffer = buffer;
-            this.currentSource.loop = payload.loop ?? false;
-            this.currentSource.connect(this.gainNode!);
-
-            // Set volume
-            this.gainNode!.gain.value = payload.volume ?? 1;
-
-            const now = this.audioContext!.currentTime;
-            const startTime = now + delaySeconds;
-
-            // Handle fade in
-            if (payload.fadeIn) {
-                this.gainNode!.gain.setValueAtTime(0, startTime);
-                this.gainNode!.gain.linearRampToValueAtTime(
-                    payload.volume ?? 1,
-                    startTime + payload.fadeIn / 1000
-                );
-            }
-
-            this.currentSource.start(startTime);
             this.currentUrl = payload.url;
         } catch (error) {
-            console.error('[SoundPlayer] Failed to play:', error);
-
-            // Fallback to HTMLAudioElement for CORS-restricted URLs or decode failures
-            try {
-                this.htmlAudio = new Audio(payload.url);
-                this.htmlAudio.loop = payload.loop ?? false;
-                this.htmlAudio.volume = payload.volume ?? 1;
-
-                const start = () => this.htmlAudio?.play().catch(console.warn);
-                if (delaySeconds > 0) {
-                    setTimeout(start, delaySeconds * 1000);
-                } else {
-                    start();
-                }
-            } catch (fallbackError) {
-                console.error('[SoundPlayer] HTMLAudio fallback failed:', fallbackError);
-            }
+            console.error('[SoundPlayer] HTMLAudio failed:', error);
         }
     }
 
@@ -810,16 +760,6 @@ export class SoundPlayer {
      */
     update(payload: PlaySoundPayload): boolean {
         if (!payload?.url || payload.url !== this.currentUrl) return false;
-
-        if (this.currentSource) {
-            if (typeof payload.loop === 'boolean') this.currentSource.loop = payload.loop;
-            if (this.gainNode && typeof payload.volume === 'number') {
-                const next = Math.max(0, Math.min(1, payload.volume));
-                const now = this.audioContext?.currentTime ?? 0;
-                this.gainNode.gain.setValueAtTime(next, now);
-            }
-            return true;
-        }
 
         if (this.htmlAudio) {
             if (typeof payload.loop === 'boolean') this.htmlAudio.loop = payload.loop;
@@ -836,16 +776,7 @@ export class SoundPlayer {
      * Stop current playback
      */
     stop(): void {
-        if (this.currentSource) {
-            try {
-                this.currentSource.stop();
-            } catch {
-                // Already stopped
-            }
-            this.currentSource.disconnect();
-            this.currentSource = null;
-            this.currentUrl = null;
-        }
+        this.currentUrl = null;
 
         if (this.htmlAudio) {
             try {
@@ -862,16 +793,15 @@ export class SoundPlayer {
      * Set volume
      */
     setVolume(volume: number): void {
-        if (this.gainNode) {
-            this.gainNode.gain.value = Math.max(0, Math.min(1, volume));
-        }
+        if (!this.htmlAudio) return;
+        this.htmlAudio.volume = Math.max(0, Math.min(1, volume));
     }
 
     /**
      * Get audio context for plugins
      */
     getAudioContext(): AudioContext | null {
-        return this.audioContext;
+        return null;
     }
 
     /**
@@ -879,11 +809,239 @@ export class SoundPlayer {
      */
     async destroy(): Promise<void> {
         this.stop();
-        this.audioCache.clear();
-        if (this.audioContext) {
-            await this.audioContext.close();
-            this.audioContext = null;
+        return;
+    }
+}
+
+/**
+ * ToneSoundPlayer (Tone.Player based)
+ *
+ * Purpose: Replace the legacy SoundPlayer WebAudio/HTMLAudio hybrid with a Tone.js-backed player
+ * that shares the single ToneAudioEngine context.
+ *
+ * Fallback: If Tone isn't enabled, will fall back to HTMLAudio + MediaElementSource (best-effort).
+ */
+export class ToneSoundPlayer {
+    private tone: any | null = null;
+    private player: any | null = null;
+    private gain: any | null = null;
+
+    private htmlAudio: HTMLAudioElement | null = null;
+    private htmlSource: MediaElementAudioSourceNode | null = null;
+
+    private lastUrl: string | null = null;
+    private lastLoop: boolean | null = null;
+    private lastVolume: number | null = null;
+    private lastFadeInMs: number | null = null;
+
+    async play(payload: PlaySoundPayload, delaySeconds = 0): Promise<void> {
+        const url = typeof payload.url === 'string' ? payload.url : '';
+        if (!url) return;
+
+        const volume = this.clamp(Number(payload.volume ?? 1), 0, 1);
+        const loop = Boolean(payload.loop ?? false);
+        const fadeInMs = Number(payload.fadeIn ?? 0);
+        const fadeIn = Number.isFinite(fadeInMs) && fadeInMs > 0 ? fadeInMs : 0;
+
+        this.lastUrl = url;
+        this.lastLoop = loop;
+        this.lastVolume = volume;
+        this.lastFadeInMs = fadeIn;
+
+        const { toneAudioEngine } = await import('@shugu/multimedia-core');
+        if (toneAudioEngine.isEnabled()) {
+            await this.ensureTone();
+            this.stopHtmlFallback();
+            await this.playTone(url, { volume, loop, fadeInMs: fadeIn }, delaySeconds);
+            return;
         }
+
+        // Fallback path (Tone not enabled): HTMLAudio (best-effort) + MediaElementSource.
+        this.stopTone();
+        await this.playHtml(url, { volume, loop }, delaySeconds);
+    }
+
+    /**
+     * Update parameters without restarting when possible.
+     * Returns true if updated in-place, false if caller should do a fresh play().
+     */
+    async update(payload: Partial<PlaySoundPayload> & { url?: string; fadeIn?: number }, delaySeconds = 0): Promise<boolean> {
+        const url = typeof payload.url === 'string' ? payload.url : this.lastUrl ?? '';
+        if (!url) return false;
+
+        const nextVolume = payload.volume !== undefined ? this.clamp(Number(payload.volume), 0, 1) : this.lastVolume ?? 1;
+        const nextLoop = payload.loop !== undefined ? Boolean(payload.loop) : this.lastLoop ?? false;
+        const fadeInMs = payload.fadeIn !== undefined ? Number(payload.fadeIn) : this.lastFadeInMs ?? 0;
+        const nextFadeIn = Number.isFinite(fadeInMs) && fadeInMs > 0 ? fadeInMs : 0;
+
+        const { toneAudioEngine } = await import('@shugu/multimedia-core');
+        if (toneAudioEngine.isEnabled()) {
+            await this.ensureTone();
+            if (!this.player || this.lastUrl !== url) return false;
+
+            this.lastVolume = nextVolume;
+            this.lastLoop = nextLoop;
+            this.lastFadeInMs = nextFadeIn;
+
+            try {
+                this.player.loop = nextLoop;
+            } catch {
+                // ignore
+            }
+            try {
+                const now = this.tone.now();
+                this.gain.gain.setValueAtTime(nextVolume, now);
+            } catch {
+                // ignore
+            }
+            return true;
+        }
+
+        // HTMLAudio update
+        if (!this.htmlAudio || this.lastUrl !== url) return false;
+        this.lastVolume = nextVolume;
+        this.lastLoop = nextLoop;
+        try {
+            this.htmlAudio.volume = nextVolume;
+            this.htmlAudio.loop = nextLoop;
+        } catch {
+            // ignore
+        }
+        return true;
+    }
+
+    stop(): void {
+        this.stopTone();
+        this.stopHtmlFallback();
+        this.lastUrl = null;
+    }
+
+    private async ensureTone(): Promise<void> {
+        if (this.tone) return;
+        const { toneAudioEngine } = await import('@shugu/multimedia-core');
+        const mod = await toneAudioEngine.ensureLoaded();
+        this.tone = (mod as any).default ?? mod;
+    }
+
+    private async playTone(
+        url: string,
+        opts: { volume: number; loop: boolean; fadeInMs: number },
+        delaySeconds: number
+    ): Promise<void> {
+        this.stopTone();
+
+        const Tone = this.tone;
+        const gain = new Tone.Gain(0).toDestination();
+        const player = new Tone.Player({ url, loop: opts.loop, autostart: false } as any);
+        player.connect(gain);
+
+        this.gain = gain;
+        this.player = player;
+
+        const startAt = Tone.now() + Math.max(0, delaySeconds);
+        const g = gain.gain;
+        g.cancelScheduledValues(startAt);
+        g.setValueAtTime(0, startAt);
+        if (opts.fadeInMs > 0) {
+            g.linearRampToValueAtTime(opts.volume, startAt + opts.fadeInMs / 1000);
+        } else {
+            g.setValueAtTime(opts.volume, startAt);
+        }
+
+        try {
+            player.start(startAt);
+        } catch {
+            // ignore
+        }
+    }
+
+    private stopTone(): void {
+        try {
+            this.player?.stop();
+        } catch {
+            // ignore
+        }
+        try {
+            this.player?.dispose?.();
+        } catch {
+            // ignore
+        }
+        try {
+            this.gain?.dispose?.();
+        } catch {
+            // ignore
+        }
+        this.player = null;
+        this.gain = null;
+    }
+
+    private async playHtml(url: string, opts: { volume: number; loop: boolean }, delaySeconds: number): Promise<void> {
+        this.stopHtmlFallback();
+
+        const audio = new Audio(url);
+        audio.loop = opts.loop;
+        audio.volume = opts.volume;
+        audio.preload = 'auto';
+        this.htmlAudio = audio;
+
+        // Best-effort: route through the shared AudioContext so it "lives" in the same output path.
+        try {
+            const { toneAudioEngine } = await import('@shugu/multimedia-core');
+            const mod = await toneAudioEngine.ensureLoaded();
+            const Tone: any = (mod as any).default ?? mod;
+            const raw: AudioContext | null = Tone.getContext?.().rawContext ?? null;
+            if (raw && raw.createMediaElementSource) {
+                this.htmlSource = raw.createMediaElementSource(audio);
+                // Try to connect into Tone destination graph when possible.
+                const destInput = Tone.Destination?.input ?? null;
+                if (destInput && typeof destInput.connect === 'function') {
+                    this.htmlSource.connect(destInput);
+                } else {
+                    this.htmlSource.connect(raw.destination);
+                }
+            }
+        } catch {
+            // ignore
+        }
+
+        const start = async () => {
+            try {
+                await audio.play();
+            } catch {
+                // ignore
+            }
+        };
+        if (delaySeconds > 0) {
+            setTimeout(() => void start(), Math.floor(delaySeconds * 1000));
+        } else {
+            void start();
+        }
+    }
+
+    private stopHtmlFallback(): void {
+        try {
+            this.htmlAudio?.pause();
+        } catch {
+            // ignore
+        }
+        try {
+            if (this.htmlAudio) this.htmlAudio.currentTime = 0;
+        } catch {
+            // ignore
+        }
+        try {
+            this.htmlSource?.disconnect();
+        } catch {
+            // ignore
+        }
+        this.htmlSource = null;
+        this.htmlAudio = null;
+    }
+
+    private clamp(value: number, min: number, max: number): number {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return min;
+        return Math.min(max, Math.max(min, n));
     }
 }
 
@@ -1071,12 +1229,236 @@ export class ModulatedSoundPlayer {
         if (shared) {
             this.audioContext = shared;
         } else {
-            this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            // Deprecated: do not create a second AudioContext. Prefer ToneModulatedSoundPlayer.
+            console.warn('[ModulatedSoundPlayer] deprecated; refusing to create AudioContext');
+            this.audioContext = null;
+            this.gainNode = null;
+            return;
         }
 
         this.gainNode = this.audioContext.createGain();
         this.gainNode.gain.value = 0;
         this.gainNode.connect(this.audioContext.destination);
+    }
+
+    private clamp(value: number, min: number, max: number): number {
+        return Math.min(max, Math.max(min, value));
+    }
+}
+
+/**
+ * Tone.js-backed modulation tone player (unifies with ToneAudioEngine).
+ *
+ * This replaces ModulatedSoundPlayer's custom AudioContext path to avoid multiple audio systems.
+ */
+export class ToneModulatedSoundPlayer {
+    private carrier: any | null = null;
+    private gain: any | null = null;
+    private lfo: any | null = null;
+    private stopTimer: ReturnType<typeof setTimeout> | null = null;
+    private startAtSeconds: number | null = null;
+    private durationSeconds: number | null = null;
+    private releaseSeconds = 0.04;
+
+    async play(payload: ModulateSoundPayload, delaySeconds = 0): Promise<void> {
+        const { toneAudioEngine } = await import('@shugu/multimedia-core');
+        if (!toneAudioEngine.isEnabled()) return;
+
+        const tone = await toneAudioEngine.ensureLoaded();
+        const Tone: any = (tone as any).default ?? tone;
+
+        this.stop();
+
+        const now = Tone.now() + Math.max(0, delaySeconds);
+        const durationMs = payload.duration ?? 200;
+        const duration = Math.max(0.02, durationMs / 1000);
+
+        const attack = Math.max(0, (payload.attack ?? 10) / 1000);
+        const release = Math.max(0, (payload.release ?? 40) / 1000);
+        const volume = this.clamp(payload.volume ?? 0.7, 0, 1);
+        const freq = payload.frequency ?? 180;
+        const waveform = payload.waveform ?? 'square';
+        const modDepth = this.clamp(payload.modDepth ?? 0, 0, 1);
+        const modFreq = payload.modFrequency ?? 12;
+
+        this.startAtSeconds = now;
+        this.durationSeconds = duration;
+        this.releaseSeconds = release;
+
+        this.gain = new Tone.Gain(0).toDestination();
+        this.carrier = new Tone.Oscillator({ frequency: freq, type: waveform as any });
+        this.carrier.connect(this.gain);
+
+        // Envelope on gain (Tone Param supports setValueAtTime/linearRampToValueAtTime).
+        const g = this.gain.gain;
+        g.cancelScheduledValues(now);
+        g.setValueAtTime(0, now);
+        g.linearRampToValueAtTime(volume, now + attack);
+        g.setValueAtTime(volume, now + Math.max(attack, duration - release));
+        g.linearRampToValueAtTime(0.0001, now + duration);
+
+        if (modDepth > 0) {
+            const depthHz = modDepth * freq;
+            this.lfo = new Tone.LFO({
+                frequency: modFreq,
+                min: Math.max(0, freq - depthHz),
+                max: freq + depthHz,
+            });
+            this.lfo.connect(this.carrier.frequency);
+            this.lfo.start(now);
+        }
+
+        this.carrier.start(now);
+
+        const stopAt = now + duration + release * 2;
+        const stopDelayMs = Math.max(10, (stopAt - Tone.now()) * 1000);
+        if (this.stopTimer) clearTimeout(this.stopTimer);
+        this.stopTimer = setTimeout(() => this.stop(), stopDelayMs);
+    }
+
+    stop(): void {
+        if (this.stopTimer) {
+            clearTimeout(this.stopTimer);
+            this.stopTimer = null;
+        }
+        this.startAtSeconds = null;
+        this.durationSeconds = null;
+
+        try {
+            this.carrier?.stop();
+        } catch {
+            // ignore
+        }
+        try {
+            this.lfo?.stop();
+        } catch {
+            // ignore
+        }
+        try {
+            this.carrier?.dispose?.();
+        } catch {
+            // ignore
+        }
+        try {
+            this.lfo?.dispose?.();
+        } catch {
+            // ignore
+        }
+        try {
+            this.gain?.dispose?.();
+        } catch {
+            // ignore
+        }
+        this.carrier = null;
+        this.lfo = null;
+        this.gain = null;
+    }
+
+    /**
+     * Update parameters of an active tone without restarting playback.
+     * If nothing is playing, fall back to play().
+     */
+    async update(payload: {
+        frequency?: number;
+        volume?: number;
+        waveform?: OscillatorType;
+        modFrequency?: number;
+        modDepth?: number;
+        durationMs?: number;
+    }): Promise<void> {
+        const { toneAudioEngine } = await import('@shugu/multimedia-core');
+        if (!toneAudioEngine.isEnabled()) return;
+        const tone = await toneAudioEngine.ensureLoaded();
+        const Tone: any = (tone as any).default ?? tone;
+
+        if (!this.carrier || !this.gain) {
+            await this.play({
+                frequency: payload.frequency,
+                volume: payload.volume,
+                duration: payload.durationMs ?? 200,
+                waveform: (payload.waveform as any) ?? 'square',
+                modFrequency: payload.modFrequency,
+                modDepth: payload.modDepth,
+            } as any);
+            return;
+        }
+
+        const now = Tone.now();
+
+        if (payload.frequency !== undefined) {
+            try {
+                this.carrier.frequency.setValueAtTime(payload.frequency, now);
+            } catch {
+                // ignore
+            }
+        }
+        if (payload.waveform) {
+            this.carrier.type = payload.waveform as any;
+        }
+        if (payload.volume !== undefined) {
+            try {
+                this.gain.gain.setValueAtTime(this.clamp(payload.volume, 0, 1), now);
+            } catch {
+                // ignore
+            }
+        }
+
+        // Update LFO
+        if (payload.modDepth !== undefined || payload.modFrequency !== undefined || payload.frequency !== undefined) {
+            const currentFreq = payload.frequency !== undefined ? payload.frequency : Number(this.carrier.frequency.value ?? 0);
+            const modDepth = payload.modDepth !== undefined ? this.clamp(payload.modDepth, 0, 1) : null;
+
+            if (!this.lfo && modDepth !== null && modDepth > 0) {
+                const depthHz = modDepth * currentFreq;
+                this.lfo = new (Tone as any).LFO({
+                    frequency: payload.modFrequency ?? 12,
+                    min: Math.max(0, currentFreq - depthHz),
+                    max: currentFreq + depthHz,
+                });
+                this.lfo.connect(this.carrier.frequency);
+                this.lfo.start(now);
+            }
+
+            if (this.lfo) {
+                if (payload.modFrequency !== undefined) {
+                    try {
+                        this.lfo.frequency.setValueAtTime(payload.modFrequency, now);
+                    } catch {
+                        // ignore
+                    }
+                }
+                if (modDepth !== null) {
+                    if (modDepth <= 0) {
+                        try {
+                            this.lfo.stop();
+                        } catch {
+                            // ignore
+                        }
+                        try {
+                            this.lfo.dispose?.();
+                        } catch {
+                            // ignore
+                        }
+                        this.lfo = null;
+                    } else {
+                        const depthHz = modDepth * currentFreq;
+                        this.lfo.min = Math.max(0, currentFreq - depthHz);
+                        this.lfo.max = currentFreq + depthHz;
+                    }
+                }
+            }
+        }
+
+        // Reschedule stop if duration provided
+        if (payload.durationMs !== undefined) {
+            if (this.stopTimer) clearTimeout(this.stopTimer);
+            const durationSec = Math.max(0.02, payload.durationMs / 1000);
+            const startAt = this.startAtSeconds ?? now;
+            this.durationSeconds = durationSec;
+            const stopAt = startAt + durationSec + this.releaseSeconds * 2;
+            const stopDelayMs = Math.max(10, (stopAt - now) * 1000);
+            this.stopTimer = setTimeout(() => this.stop(), stopDelayMs);
+        }
     }
 
     private clamp(value: number, min: number, max: number): number {

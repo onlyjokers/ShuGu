@@ -25,6 +25,9 @@ export class NodeRuntime {
         windowMs: 1000,
     };
     sinkSignatureHistory = new Map();
+    // Cache last computed non-sink inputs so sinks can react to connected values (which are not stored in node.inputValues).
+    lastComputedInputsByNode = new Map();
+    lastOnSinkStateByNode = new Map();
     constructor(registry, options) {
         this.registry = registry;
         if (typeof options?.tickIntervalMs === 'number' && Number.isFinite(options.tickIntervalMs)) {
@@ -104,6 +107,8 @@ export class NodeRuntime {
         this.lastTickTime = 0;
         this.overridesByNode.clear();
         this.sinkSignatureHistory.clear();
+        this.lastComputedInputsByNode.clear();
+        this.lastOnSinkStateByNode.clear();
     }
     getNode(nodeId) {
         return this.nodes.get(nodeId);
@@ -145,6 +150,8 @@ export class NodeRuntime {
         this.lastTickTime = 0;
         this.overridesByNode.clear();
         this.sinkSignatureHistory.clear();
+        this.lastComputedInputsByNode.clear();
+        this.lastOnSinkStateByNode.clear();
     }
     applyOverride(nodeId, kind, key, value, ttlMs) {
         if (!nodeId || !key)
@@ -412,6 +419,7 @@ export class NodeRuntime {
                 inputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
                 node.inputValues[port.id] = inputs[port.id];
             }
+            this.lastComputedInputsByNode.set(node.id, inputs);
             context.nodeId = node.id;
             try {
                 const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
@@ -431,7 +439,7 @@ export class NodeRuntime {
                 continue;
             if (this.isSinkEnabled && !this.isSinkEnabled(node.id))
                 continue;
-            const sinkInputs = {};
+            const sinkValues = {};
             for (const conn of this.connections) {
                 if (conn.targetNodeId !== node.id)
                     continue;
@@ -442,41 +450,77 @@ export class NodeRuntime {
                 if (!sourceNode)
                     continue;
                 const value = sourceNode.outputValues[conn.sourcePortId];
-                const prev = sinkInputs[conn.targetPortId];
+                const prev = sinkValues[conn.targetPortId];
                 if (prev === undefined)
-                    sinkInputs[conn.targetPortId] = value;
+                    sinkValues[conn.targetPortId] = value;
                 else if (Array.isArray(prev))
                     prev.push(value);
                 else
-                    sinkInputs[conn.targetPortId] = [prev, value];
+                    sinkValues[conn.targetPortId] = [prev, value];
             }
-            if (Object.keys(sinkInputs).length === 0)
+            if (Object.keys(sinkValues).length === 0)
                 continue;
-            let changed = false;
-            const prevSinkValues = {};
-            for (const [portId, next] of Object.entries(sinkInputs)) {
-                const prev = node.inputValues[portId];
-                prevSinkValues[portId] = prev;
-                if (!this.deepEqual(prev, next))
-                    changed = true;
+            const computedInputs = this.lastComputedInputsByNode.get(node.id) ?? null;
+            const fullInputs = {};
+            for (const port of def.inputs) {
+                if (port.kind === 'sink') {
+                    if (Object.prototype.hasOwnProperty.call(sinkValues, port.id)) {
+                        fullInputs[port.id] = sinkValues[port.id];
+                    }
+                    continue;
+                }
+                if (computedInputs && Object.prototype.hasOwnProperty.call(computedInputs, port.id)) {
+                    fullInputs[port.id] = computedInputs[port.id];
+                }
+                else {
+                    fullInputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
+                }
+            }
+            // Store the latest sink values for UI/debugging regardless of whether we run the sink.
+            for (const [portId, next] of Object.entries(sinkValues)) {
                 node.inputValues[portId] = next;
             }
-            if (!changed)
+            const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
+            const prevState = this.lastOnSinkStateByNode.get(node.id);
+            const inputsChanged = !prevState || !this.deepEqual(prevState.inputs, fullInputs);
+            const configChanged = !prevState || !this.deepEqual(prevState.config, effectiveConfig);
+            if (!inputsChanged && !configChanged)
                 continue;
+            let nonSinkChanged = false;
+            if (prevState) {
+                for (const port of def.inputs) {
+                    if (port.kind === 'sink')
+                        continue;
+                    if (!this.deepEqual(prevState.inputs[port.id], fullInputs[port.id])) {
+                        nonSinkChanged = true;
+                        break;
+                    }
+                }
+            }
+            else {
+                nonSinkChanged = true;
+            }
+            const sinkInputs = { ...fullInputs };
+            const allowCommandDiff = prevState !== undefined && !nonSinkChanged && !configChanged;
             // Special-case: for "command" sink ports receiving multiple commands, only deliver the changed
             // subset. This avoids re-triggering unrelated effects when one command in the bundle changes.
-            for (const [portId, next] of Object.entries(sinkInputs)) {
-                const port = def.inputs.find((p) => p.id === portId);
-                if (!port || port.kind !== 'sink' || port.type !== 'command')
-                    continue;
-                const prev = prevSinkValues[portId];
-                if (!Array.isArray(next) || !Array.isArray(prev))
-                    continue;
-                sinkInputs[portId] = this.diffCommandArray(prev, next);
+            if (allowCommandDiff && prevState) {
+                for (const port of def.inputs) {
+                    if (port.kind !== 'sink' || port.type !== 'command')
+                        continue;
+                    const portId = port.id;
+                    const next = fullInputs[portId];
+                    const prev = prevState.inputs[portId];
+                    if (!Array.isArray(next) || !Array.isArray(prev))
+                        continue;
+                    sinkInputs[portId] = this.diffCommandArray(prev, next);
+                }
             }
             // Count sink values for a simple burst watchdog.
-            for (const value of Object.values(sinkInputs)) {
-                this.sinkValuesThisTick += this.countSinkValues(value);
+            for (const port of def.inputs) {
+                if (port.kind !== 'sink')
+                    continue;
+                this.sinkValuesThisTick += this.countSinkValues(sinkInputs[port.id]);
             }
             if (this.sinkValuesThisTick > this.maxSinkValuesPerTick) {
                 this.triggerWatchdog({
@@ -492,8 +536,11 @@ export class NodeRuntime {
             }
             // Oscillation watchdog (only for command-like sinks).
             if (this.oscillation.enabled) {
-                for (const [portId, value] of Object.entries(sinkInputs)) {
-                    const signature = this.commandSignature(value);
+                for (const port of def.inputs) {
+                    if (port.kind !== 'sink')
+                        continue;
+                    const portId = port.id;
+                    const signature = this.commandSignature(sinkInputs[portId]);
                     if (!signature)
                         continue;
                     const key = `${node.id}:${portId}`;
@@ -508,11 +555,13 @@ export class NodeRuntime {
                 break;
             context.nodeId = node.id;
             try {
-                const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
                 def.onSink(sinkInputs, effectiveConfig, context);
             }
             catch (err) {
                 console.error(`[NodeRuntime] sink error in ${node.type} (${node.id})`, err);
+            }
+            finally {
+                this.lastOnSinkStateByNode.set(node.id, { inputs: fullInputs, config: effectiveConfig });
             }
             if (!this.timer)
                 break;

@@ -1,0 +1,71 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Patch: Tone Osc → Tone Delay → Audio Patch to Client",
+  "purpose": "体验音频端口（audio wire）+ Audio Patch to Client patch root + Patch Deploy + 实时调参（Delay 参数）",
+  "howTo": [
+    "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
+    "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
+    "3) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "4) Patch 会自动部署到该 client；调整 Tone Osc 的 Freq/Amp、Tone Delay 的 Time/Feedback/Wet，client 会实时变化。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-osc",
+        "type": "tone-osc",
+        "position": { "x": 120, "y": 180 },
+        "config": { "waveform": "sine", "bus": "main", "enabled": true, "loop": "" },
+        "inputValues": { "frequency": 220, "amplitude": 0.15 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-delay",
+        "type": "tone-delay",
+        "position": { "x": 460, "y": 180 },
+        "config": { "time": 0.25, "feedback": 0.35, "wet": 0.3, "bus": "main", "order": 10, "enabled": true },
+        "inputValues": { "time": 0.25, "feedback": 0.35, "wet": 0.3 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 820, "y": 180 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 820, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-osc-to-delay",
+        "sourceNodeId": "node-osc",
+        "sourcePortId": "value",
+        "targetNodeId": "node-delay",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-delay-to-out",
+        "sourceNodeId": "node-delay",
+        "sourcePortId": "out",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}

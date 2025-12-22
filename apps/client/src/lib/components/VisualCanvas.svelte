@@ -18,6 +18,7 @@
     DefaultSceneManager,
     type VisualContext,
   } from '@shugu/visual-plugins';
+  import { toneAudioEngine } from '@shugu/multimedia-core';
   import {
     AudioSplitPlugin,
     MelSpectrogramPlugin,
@@ -81,7 +82,6 @@
     melPlugin?.destroy();
     splitPlugin = null;
     melPlugin = null;
-    audioContext?.close();
     audioContext = null;
   });
 
@@ -97,7 +97,20 @@
 
   async function setupAudioPipeline(stream: MediaStream) {
     try {
-      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const mod = await toneAudioEngine.ensureLoaded();
+      const Tone: any = (mod as any).default ?? mod;
+      const raw: AudioContext | null = Tone.getContext?.().rawContext ?? null;
+      if (!raw) {
+        console.warn('[VisualCanvas] Tone context not available; skipping audio analysis pipeline.');
+        return;
+      }
+
+      audioContext = raw;
+      try {
+        if (audioContext.state === 'suspended') await audioContext.resume();
+      } catch {
+        // ignore
+      }
       const source = audioContext.createMediaStreamSource(stream);
 
       splitPlugin = new AudioSplitPlugin();

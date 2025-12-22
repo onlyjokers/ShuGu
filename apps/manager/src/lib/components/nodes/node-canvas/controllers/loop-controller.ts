@@ -5,7 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import { sensorData } from '$lib/stores/manager';
 import type { GraphState } from '$lib/nodes/types';
-import { unionBoundsGraph } from '../utils/view-utils';
+import type { GraphViewAdapter, NodeBounds } from '../adapters';
 import {
   createLoopActions,
   loopHasDisabledNodes,
@@ -30,9 +30,7 @@ type LoopControllerOptions = {
   getSDK: () => ManagerSdkLike | null;
   isRunning: () => boolean;
   getGraphState: () => GraphState;
-  getAreaPlugin: () => any;
-  getNodeMap: () => Map<string, any>;
-  getConnectionMap: () => Map<string, any>;
+  getAdapter: () => GraphViewAdapter | null;
   getGroupDisabledNodeIds: () => Set<string>;
   isSyncingGraph: () => boolean;
   onDeployTimeout: (loopId: string) => void;
@@ -165,8 +163,8 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
   };
 
   const applyHighlights = async () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
     if (!loopHighlightDirty) return;
     loopHighlightDirty = false;
 
@@ -175,36 +173,40 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     const localConns = get(localLoopConnIds);
     const deployedConns = get(deployedConnIds);
 
-    for (const [id, node] of opts.getNodeMap().entries()) {
+    const graph = opts.getGraphState();
+
+    for (const node of graph.nodes ?? []) {
+      const id = String(node.id);
+      if (!id) continue;
+
       const nextLocal = localNodes.has(id);
       const nextDeployed = deployedNodes.has(id);
-      if (Boolean((node as any).localLoop) !== nextLocal) {
-        (node as any).localLoop = nextLocal;
-        await areaPlugin.update('node', id);
-      }
-      if (Boolean((node as any).deployedLoop) !== nextDeployed) {
-        (node as any).deployedLoop = nextDeployed;
-        await areaPlugin.update('node', id);
-      }
+      const prev = adapter.getNodeVisualState(id);
+
+      const patch: { localLoop?: boolean; deployedLoop?: boolean } = {};
+      if (Boolean(prev?.localLoop) !== nextLocal) patch.localLoop = nextLocal;
+      if (Boolean(prev?.deployedLoop) !== nextDeployed) patch.deployedLoop = nextDeployed;
+      if (Object.keys(patch).length > 0) await adapter.setNodeVisualState(id, patch);
     }
 
-    for (const [id, conn] of opts.getConnectionMap().entries()) {
+    for (const conn of graph.connections ?? []) {
+      const id = String(conn.id);
+      if (!id) continue;
+
       const nextLocal = localConns.has(id);
       const nextDeployed = deployedConns.has(id);
-      if (Boolean((conn as any).localLoop) !== nextLocal) {
-        (conn as any).localLoop = nextLocal;
-        await areaPlugin.update('connection', id);
-      }
-      if (Boolean((conn as any).deployedLoop) !== nextDeployed) {
-        (conn as any).deployedLoop = nextDeployed;
-        await areaPlugin.update('connection', id);
-      }
+      const prev = adapter.getConnectionVisualState(id);
+
+      const patch: { localLoop?: boolean; deployedLoop?: boolean } = {};
+      if (Boolean(prev?.localLoop) !== nextLocal) patch.localLoop = nextLocal;
+      if (Boolean(prev?.deployedLoop) !== nextDeployed) patch.deployedLoop = nextDeployed;
+      if (Object.keys(patch).length > 0) await adapter.setConnectionVisualState(id, patch);
     }
   };
 
   const computeLoopFrames = () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin?.nodeViews || !areaPlugin?.area) {
+    const adapter = opts.getAdapter();
+    if (!adapter) {
       loopFrames.set([]);
       return;
     }
@@ -215,7 +217,20 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
 
     const frames: LoopFrame[] = [];
     for (const loop of get(localLoops)) {
-      const bounds = unionBoundsGraph(areaPlugin, getEffectiveLoopNodeIds(loop));
+      let bounds: NodeBounds | null = null;
+      for (const nodeId of getEffectiveLoopNodeIds(loop)) {
+        const b = adapter.getNodeBounds(String(nodeId));
+        if (!b) continue;
+        if (!bounds) bounds = { ...b };
+        else {
+          bounds = {
+            left: Math.min(bounds.left, b.left),
+            top: Math.min(bounds.top, b.top),
+            right: Math.max(bounds.right, b.right),
+            bottom: Math.max(bounds.bottom, b.bottom),
+          };
+        }
+      }
       if (!bounds) continue;
       const left = bounds.left;
       const top = bounds.top;
@@ -248,8 +263,8 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     const createdId = String(newNodeId ?? '');
     if (!initialId || !createdId) return;
 
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin?.nodeViews || !areaPlugin?.area) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
 
     const gx = Number(dropGraphPos?.x);
     const gy = Number(dropGraphPos?.y);
@@ -266,7 +281,20 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     let pickedArea = Number.POSITIVE_INFINITY;
 
     for (const loop of candidates) {
-      const bounds = unionBoundsGraph(areaPlugin, getEffectiveLoopNodeIds(loop));
+      let bounds: NodeBounds | null = null;
+      for (const nodeId of getEffectiveLoopNodeIds(loop)) {
+        const b = adapter.getNodeBounds(String(nodeId));
+        if (!b) continue;
+        if (!bounds) bounds = { ...b };
+        else {
+          bounds = {
+            left: Math.min(bounds.left, b.left),
+            top: Math.min(bounds.top, b.top),
+            right: Math.max(bounds.right, b.right),
+            bottom: Math.max(bounds.bottom, b.bottom),
+          };
+        }
+      }
       if (!bounds) continue;
 
       const left = bounds.left - paddingX;

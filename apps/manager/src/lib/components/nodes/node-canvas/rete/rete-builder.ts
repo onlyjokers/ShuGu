@@ -490,6 +490,7 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
   };
 
   const isCompatible = (sourceType: PortType, targetType: PortType) => {
+    if (sourceType === 'audio' || targetType === 'audio') return sourceType === 'audio' && targetType === 'audio';
     return sourceType === 'any' || targetType === 'any' || sourceType === targetType;
   };
 

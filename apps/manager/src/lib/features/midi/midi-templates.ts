@@ -106,7 +106,8 @@ function mapConfigFromNode(node: NodeInstance | undefined): MidiBindingTemplateV
     min: asNumber(cfg.min, 0),
     max: asNumber(cfg.max, 1),
     invert: Boolean(cfg.invert),
-    round: Boolean(cfg.round),
+    // `midi-map` supports `integer` as a newer alias for `round` (integer output).
+    round: Boolean((cfg as any).integer || cfg.round),
   };
 }
 

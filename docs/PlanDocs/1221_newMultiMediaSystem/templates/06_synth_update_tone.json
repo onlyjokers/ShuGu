@@ -1,0 +1,53 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Synth(Update) → Client (ToneModulatedSoundPlayer backend)",
+  "purpose": "体验 Synth(update) 已迁移到 Tone：manager 侧发 modulateSoundUpdate，client 侧用 Tone 单引擎发声",
+  "notes": [
+    "此模板是 command 路径（client-object sink），不需要 Patch Deploy。",
+    "想重复触发：改动 Synth(Update) 的任意参数（例如 frequency / durationMs）。"
+  ],
+  "howTo": [
+    "1) client 点 Start（启用 ToneAudioEngine）。",
+    "2) manager Node Graph 点 ▶ Start。",
+    "3) 选择 Client 节点（Clients）目标（或用 Manager 顶部选择的 client）。",
+    "4) 调 Synth(Update) 的参数会触发短音（wobble/beep）。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 980, "y": 220 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      },
+      {
+        "id": "node-synth-update",
+        "type": "proc-synth-update",
+        "position": { "x": 420, "y": 220 },
+        "config": {
+          "frequency": 180,
+          "volume": 0.7,
+          "waveform": "square",
+          "modDepth": 0.25,
+          "modFrequency": 10,
+          "durationMs": 220
+        },
+        "inputValues": {},
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-synth-to-client",
+        "sourceNodeId": "node-synth-update",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}
+

@@ -751,9 +751,12 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
             typeof (inputs as any).round === 'boolean'
               ? Boolean((inputs as any).round)
               : Boolean(config.round);
+          // Integer output helper: avoids float inputs for discrete targets (e.g. client index/range).
+          const integer = Boolean((config as any).integer);
 
           const mapped = mapRangeWithOptions(value, min, max, invert);
-          return { out: round ? Math.round(mapped) : mapped };
+          const out = integer || round ? Math.round(mapped) : mapped;
+          return { out };
         },
       };
     }
@@ -883,6 +886,32 @@ registerDefaultNodeDefinitions(nodeRegistry, {
     sdk.sendControl(targetClients([clientId]), cmd.action, cmd.payload ?? {}, cmd.executeAt);
   },
 } as any);
+
+// Backward-compatible fallback: `load-audio-from-assets` is a newer convenience node.
+// If a dev environment is running with stale node-core builds, templates may fail to import.
+// Register a minimal definition here so graphs can still load (node-core remains the SOT when available).
+if (!nodeRegistry.get('load-audio-from-assets')) {
+  nodeRegistry.register({
+    type: 'load-audio-from-assets',
+    label: 'Load Audio From Assets',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Audio Asset',
+        type: 'asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
+    ],
+    process: (_inputs, config) => {
+      const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
+      return { ref: assetId ? `asset:${assetId}` : '' };
+    },
+  });
+}
 
 for (const spec of loadSpecs()) {
   try {

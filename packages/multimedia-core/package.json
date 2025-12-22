@@ -21,6 +21,9 @@
   "files": [
     "dist-out"
   ],
+  "dependencies": {
+    "tone": "^14.8.49"
+  },
   "devDependencies": {
     "typescript": "^5.3.0"
   }

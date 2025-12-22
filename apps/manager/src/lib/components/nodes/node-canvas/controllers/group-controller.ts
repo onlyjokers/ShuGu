@@ -5,14 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
-import {
-  readAreaTransform,
-  readNodeBounds,
-  readNodeBoundsGraph,
-  type NodeBounds,
-  unionBounds,
-  unionBoundsGraph,
-} from '../utils/view-utils';
+import type { GraphViewAdapter, NodeBounds } from '../adapters';
 
 export type NodeGroup = {
   id: string;
@@ -82,8 +75,7 @@ export type GroupController = {
 
 type GroupControllerOptions = {
   getContainer: () => HTMLDivElement | null;
-  getAreaPlugin: () => any;
-  getNodeMap: () => Map<string, any>;
+  getAdapter: () => GraphViewAdapter | null;
   getGraphState: () => GraphState;
   getLocalLoops: () => LocalLoop[];
   getLoopConstraintLoops: () => LocalLoop[];
@@ -201,33 +193,27 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const applyHighlights = async () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
     if (!groupHighlightDirty) return;
     groupHighlightDirty = false;
 
     const disabled = get(groupDisabledNodeIds);
     const selected = get(groupSelectionNodeIds);
-    const nodeMap = opts.getNodeMap();
+    const graph = opts.getGraphState();
 
-    for (const [id, node] of nodeMap.entries()) {
+    for (const node of graph.nodes ?? []) {
+      const id = String(node.id);
+      if (!id) continue;
+
       const nextDisabled = disabled.has(id);
       const nextSelected = selected.has(id);
+      const prev = adapter.getNodeVisualState(id);
 
-      const prevDisabled = Boolean((node as any).groupDisabled);
-      const prevSelected = Boolean((node as any).groupSelected);
-
-      let changed = false;
-      if (prevDisabled !== nextDisabled) {
-        (node as any).groupDisabled = nextDisabled;
-        changed = true;
-      }
-      if (prevSelected !== nextSelected) {
-        (node as any).groupSelected = nextSelected;
-        changed = true;
-      }
-
-      if (changed) await areaPlugin.update('node', id);
+      const patch: { groupDisabled?: boolean; groupSelected?: boolean } = {};
+      if (Boolean(prev?.groupDisabled) !== nextDisabled) patch.groupDisabled = nextDisabled;
+      if (Boolean(prev?.groupSelected) !== nextSelected) patch.groupSelected = nextSelected;
+      if (Object.keys(patch).length > 0) await adapter.setNodeVisualState(id, patch);
     }
   };
 
@@ -311,16 +297,26 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const loopPaddingBottom = 64;
 
     let bounds: NodeBounds | null = null;
+    const adapter = opts.getAdapter();
+    if (!adapter) return null;
 
-    const areaPlugin = opts.getAreaPlugin();
-    bounds = mergeBounds(bounds, unionBoundsGraph(areaPlugin, group.nodeIds ?? []));
+    const unionBoundsGraph = (nodeIds: string[]): NodeBounds | null => {
+      let merged: NodeBounds | null = null;
+      for (const nodeId of nodeIds) {
+        const b = adapter.getNodeBounds(String(nodeId));
+        merged = mergeBounds(merged, b);
+      }
+      return merged;
+    };
+
+    bounds = mergeBounds(bounds, unionBoundsGraph(group.nodeIds ?? []));
 
     const groupNodeSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
     for (const loop of opts.getLocalLoops()) {
       if (!loop?.nodeIds?.length) continue;
       const fullyContained = loop.nodeIds.every((id) => groupNodeSet.has(String(id)));
       if (!fullyContained) continue;
-      const lb = unionBoundsGraph(areaPlugin, loop.nodeIds.map(String));
+      const lb = unionBoundsGraph(loop.nodeIds.map(String));
       if (!lb) continue;
       bounds = mergeBounds(bounds, {
         left: lb.left - loopPaddingX,
@@ -377,7 +373,14 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const paddingTop = 64;
     const paddingBottom = 64;
 
-    const base = unionBoundsGraph(opts.getAreaPlugin(), (loop.nodeIds ?? []).map(String));
+    const adapter = opts.getAdapter();
+    if (!adapter) return null;
+
+    let base: NodeBounds | null = null;
+    for (const nodeId of loop.nodeIds ?? []) {
+      const b = adapter.getNodeBounds(String(nodeId));
+      base = mergeBounds(base, b);
+    }
     if (!base) return null;
 
     return {
@@ -394,8 +397,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     updates: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }[],
     durationMs = 320
   ) => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
     if (typeof requestAnimationFrame === 'undefined') return;
     if (updates.length === 0) return;
 
@@ -411,7 +414,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       for (const u of updates) {
         const x = u.from.x + (u.to.x - u.from.x) * eased;
         const y = u.from.y + (u.to.y - u.from.y) * eased;
-        void areaPlugin.translate(u.id, { x, y });
+        adapter.setNodePosition(u.id, x, y);
       }
 
       if (tt < 1) {
@@ -428,10 +431,10 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const pushNodesOutOfBounds = (bounds: NodeBounds, excludeNodeIds: Set<string>, frameMoves?: FrameMoveContext) => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin?.nodeViews) return;
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
 
-    const t = readAreaTransform(areaPlugin);
+    const t = adapter.getViewportTransform();
     const zoom = t?.k && Number.isFinite(t.k) && t.k > 0 ? t.k : 1;
     const margin = 24 / zoom;
     const updates: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
@@ -458,8 +461,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       for (const nodeId of frame.nodeIds) {
         const id = String(nodeId);
         if (skipNodeIds.has(id)) continue;
-        const view = areaPlugin.nodeViews.get(id);
-        const pos = view?.position as { x: number; y: number } | undefined;
+        const pos = adapter.getNodePosition(id);
         if (!pos) continue;
         updates.push({ id, from: { x: pos.x, y: pos.y }, to: { x: pos.x + dx, y: pos.y + dy } });
         skipNodeIds.add(id);
@@ -469,10 +471,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       return true;
     };
 
-    for (const nodeId of opts.getNodeMap().keys()) {
-      const id = String(nodeId);
+    for (const node of opts.getGraphState().nodes ?? []) {
+      const id = String(node.id ?? '');
+      if (!id) continue;
       if (skipNodeIds.has(id)) continue;
-      const b = readNodeBoundsGraph(areaPlugin, id);
+      const b = adapter.getNodeBounds(id);
       if (!b) continue;
 
       const cx = (b.left + b.right) / 2;
@@ -497,9 +500,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const pick = pickMoveDelta(bounds, b, margin);
       if (!pick) continue;
 
-      const view = areaPlugin.nodeViews.get(id);
-      const pos = view?.position as { x: number; y: number } | undefined;
-      if (!pos) continue;
+      const pos = adapter.getNodePosition(id) ?? { x: b.left, y: b.top };
 
       const to = { x: pos.x + pick.dx, y: pos.y + pick.dy };
       updates.push({ id, from: { x: pos.x, y: pos.y }, to });
@@ -513,12 +514,15 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     if (!nodeIds.length) return;
     if (isProgrammaticTranslate()) return;
 
+    const adapter = opts.getAdapter();
+    if (!adapter) return;
+
     const nodeCenterCache = new Map<string, { cx: number; cy: number }>();
     const getNodeCenter = (nodeId: string) => {
       const id = String(nodeId);
       const cached = nodeCenterCache.get(id);
       if (cached) return cached;
-      const b = readNodeBoundsGraph(opts.getAreaPlugin(), id);
+      const b = adapter.getNodeBounds(id);
       if (!b) return null;
       const cx = (b.left + b.right) / 2;
       const cy = (b.top + b.bottom) / 2;
@@ -1116,8 +1120,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const computeGroupFrames = () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin?.nodeViews || !areaPlugin?.area) {
+    const adapter = opts.getAdapter();
+    if (!adapter) {
       groupFrames.set([]);
       return;
     }
@@ -1206,34 +1210,46 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const computeSelectionBounds = () => {
-    const areaPlugin = opts.getAreaPlugin();
-    if (!areaPlugin?.area) {
+    const adapter = opts.getAdapter();
+    if (!adapter) {
       groupSelectionBounds.set(null);
       return;
     }
+
     if (get(groupSelectionNodeIds).size === 0) {
       groupSelectionBounds.set(null);
       return;
     }
 
-    const t = readAreaTransform(areaPlugin);
-    if (!t) {
-      groupSelectionBounds.set(null);
-      return;
+    const t = adapter.getViewportTransform();
+
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+
+    for (const nodeId of get(groupSelectionNodeIds)) {
+      const b = adapter.getNodeBounds(String(nodeId));
+      if (!b) continue;
+      left = Math.min(left, b.left * t.k + t.tx);
+      top = Math.min(top, b.top * t.k + t.ty);
+      right = Math.max(right, b.right * t.k + t.tx);
+      bottom = Math.max(bottom, b.bottom * t.k + t.ty);
     }
 
-    const bounds = unionBounds(areaPlugin, Array.from(get(groupSelectionNodeIds)), t);
-    if (!bounds) {
+    const hasBounds =
+      Number.isFinite(left) && Number.isFinite(top) && Number.isFinite(right) && Number.isFinite(bottom);
+    if (!hasBounds) {
       groupSelectionBounds.set(null);
       return;
     }
 
     const pad = 18;
     groupSelectionBounds.set({
-      left: bounds.left - pad,
-      top: bounds.top - pad,
-      width: bounds.right - bounds.left + pad * 2,
-      height: bounds.bottom - bounds.top + pad * 2,
+      left: left - pad,
+      top: top - pad,
+      width: right - left + pad * 2,
+      height: bottom - top + pad * 2,
     });
   };
 
@@ -1330,19 +1346,17 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const selRight = Math.max(marqueeStart.x, marqueeCurrent.x);
       const selBottom = Math.max(marqueeStart.y, marqueeCurrent.y);
 
-      const t = readAreaTransform(opts.getAreaPlugin());
-      if (!t) return;
-
-      const selected: string[] = [];
-      for (const nodeId of opts.getNodeMap().keys()) {
-        const b = readNodeBounds(opts.getAreaPlugin(), nodeId, t);
-        if (!b) continue;
-        const intersects = b.right >= selLeft && b.left <= selRight && b.bottom >= selTop && b.top <= selBottom;
-        if (!intersects) continue;
-        selected.push(nodeId);
-      }
-
-      groupSelectionNodeIds.set(new Set(selected));
+      const adapter = opts.getAdapter();
+      if (!adapter) return;
+      const t = adapter.getViewportTransform();
+      const rect = {
+        left: (selLeft - t.tx) / t.k,
+        top: (selTop - t.ty) / t.k,
+        right: (selRight - t.tx) / t.k,
+        bottom: (selBottom - t.ty) / t.k,
+      };
+      const selected = adapter.getNodesInRect(rect);
+      groupSelectionNodeIds.set(new Set(selected.map(String)));
       scheduleHighlight();
       computeSelectionBounds();
       marqueeRect.set(null);

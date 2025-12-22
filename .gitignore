@@ -10,6 +10,7 @@ dist-local
 dist-server
 dist-writable
 dist-out
+dist-node-core
 dist-dev*
 .svelte-kit
 .next

@@ -8,17 +8,16 @@ import {
   FlashlightController,
   ScreenController,
   VibrationController,
-  SoundPlayer,
-  ModulatedSoundPlayer,
+  ToneSoundPlayer,
+  ToneModulatedSoundPlayer,
   WakeLockController,
   NodeExecutor,
-  enableToneAudio,
   type NodeCommand,
   type ClientState,
   type ClientSDKConfig,
   type ClientIdentity,
 } from '@shugu/sdk-client';
-import { MultimediaCore } from '@shugu/multimedia-core';
+import { MultimediaCore, toneAudioEngine, type MediaEngineState } from '@shugu/multimedia-core';
 import type {
   ControlMessage,
   PluginControlMessage,
@@ -40,11 +39,12 @@ let sensorManager: SensorManager | null = null;
 let flashlightController: FlashlightController | null = null;
 let screenController: ScreenController | null = null;
 let vibrationController: VibrationController | null = null;
-let soundPlayer: SoundPlayer | null = null;
-let modulatedSoundPlayer: ModulatedSoundPlayer | null = null;
+let toneSoundPlayer: ToneSoundPlayer | null = null;
+let toneModulatedSoundPlayer: ToneModulatedSoundPlayer | null = null;
 let wakeLockController: WakeLockController | null = null;
 let nodeExecutor: NodeExecutor | null = null;
 let multimediaCore: MultimediaCore | null = null;
+let mediaUnsub: (() => void) | null = null;
 
 // Core state store
 export const state = writable<ClientState>({
@@ -226,6 +226,12 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
     autoStart: true,
     concurrency: 4,
   });
+
+  mediaUnsub?.();
+  mediaUnsub = multimediaCore.media.subscribeState((s: MediaEngineState) => {
+    videoState.set(s.video);
+    imageState.set(s.image);
+  });
   let lastReported = '';
   let lastSentAt = 0;
   multimediaCore.subscribeState((s) => {
@@ -265,8 +271,8 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
   flashlightController = new FlashlightController();
   screenController = new ScreenController();
   vibrationController = new VibrationController();
-  soundPlayer = new SoundPlayer();
-  modulatedSoundPlayer = new ModulatedSoundPlayer();
+  toneSoundPlayer = new ToneSoundPlayer();
+  toneModulatedSoundPlayer = new ToneModulatedSoundPlayer();
   wakeLockController = new WakeLockController();
   sensorManager = new SensorManager({ throttleMs: 100 });
   nodeExecutor = new NodeExecutor(
@@ -323,11 +329,10 @@ export async function requestPermissions(): Promise<void> {
     microphonePromise = Promise.reject(new Error('mediaDevices.getUserMedia is not supported'));
   }
 
-  const soundInitPromise = soundPlayer
-    ? soundPlayer.init().catch((error) => {
-        console.warn('[Permissions] Sound player init failed:', error);
-      })
-    : Promise.resolve();
+  const soundInitPromise = enableAudio().catch((error) => {
+    console.warn('[Permissions] Tone audio enable failed:', error);
+    return null;
+  });
 
   const [motionResult, microphoneResult] = await Promise.allSettled([
     motionPermissionPromise,
@@ -387,8 +392,7 @@ function persistAudioEnabled(enabled: boolean): void {
  * Enable Tone.js audio (must be called from a user gesture).
  */
 export async function enableAudio(): Promise<{ enabled: boolean; error?: string } | null> {
-  const result = await enableToneAudio();
-  if (!result) return null;
+  const result = await toneAudioEngine.start();
   audioEnabled.set(result.enabled);
   persistAudioEnabled(result.enabled);
   return result;
@@ -451,14 +455,10 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         break;
 
       case 'modulateSound':
-        modulatedSoundPlayer?.play(
-          payload as ModulateSoundPayload,
-          soundPlayer?.getAudioContext(),
-          delaySeconds // Use precise audio scheduling
-        );
+        toneModulatedSoundPlayer?.play(payload as ModulateSoundPayload, delaySeconds);
         break;
       case 'modulateSoundUpdate':
-        modulatedSoundPlayer?.update({
+        toneModulatedSoundPlayer?.update({
           frequency: (payload as ModulateSoundPayload).frequency,
           volume: (payload as ModulateSoundPayload).volume,
           waveform: (payload as ModulateSoundPayload).waveform,
@@ -474,91 +474,73 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           const soundPayload = payload as PlaySoundPayload;
           const url =
             typeof soundPayload.url === 'string' ? multimediaCore?.resolveAssetRef(soundPayload.url) ?? soundPayload.url : soundPayload.url;
-          soundPlayer?.play({ ...soundPayload, url }, delaySeconds);
+          // Always go through ToneSoundPlayer; it has an internal HTMLAudio fallback path.
+          toneSoundPlayer?.play({ ...soundPayload, url }, delaySeconds);
         }
         break;
 
       case 'playMedia': {
         const mediaPayload = payload as PlayMediaPayload;
         const resolvedUrl =
-          typeof mediaPayload.url === 'string' ? multimediaCore?.resolveAssetRef(mediaPayload.url) ?? mediaPayload.url : mediaPayload.url;
+          typeof mediaPayload.url === 'string'
+            ? multimediaCore?.resolveAssetRef(mediaPayload.url) ?? mediaPayload.url
+            : mediaPayload.url;
         // Check if it's a video by extension or explicit type
         const isVideo =
           mediaPayload.mediaType === 'video' ||
           (typeof resolvedUrl === 'string' && /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrl));
 
         if (isVideo) {
-          const current = get(videoState);
-          const next = {
-            url: resolvedUrl,
-            playing: true,
+          multimediaCore?.media.playVideo({
+            url: String(resolvedUrl ?? ''),
             muted: mediaPayload.muted ?? true,
             loop: mediaPayload.loop ?? false,
             volume: mediaPayload.volume ?? 1,
-          };
-          videoState.set(
-            current.url === next.url && current.playing
-              ? { ...current, ...next }
-              : next
-          );
+          });
         } else {
-          // Fallback to audio
-          const updated =
-            soundPlayer?.update({
-              url: resolvedUrl,
-              volume: mediaPayload.volume,
-              loop: mediaPayload.loop,
-              fadeIn: mediaPayload.fadeIn,
-            }) ?? false;
-          if (!updated) {
-            soundPlayer?.play(
-              {
-                url: resolvedUrl,
-                volume: mediaPayload.volume,
-                loop: mediaPayload.loop,
-                fadeIn: mediaPayload.fadeIn,
-              },
-              delaySeconds
-            );
-          }
+          // Audio path: prefer ToneSoundPlayer when enabled; fallback to legacy SoundPlayer otherwise.
+          const audioPayload = {
+            url: resolvedUrl,
+            volume: mediaPayload.volume,
+            loop: mediaPayload.loop,
+            fadeIn: mediaPayload.fadeIn,
+          };
+          void toneSoundPlayer
+            ?.update(audioPayload as any, delaySeconds)
+            .then((updated) => {
+              if (updated) return;
+              return toneSoundPlayer?.play(audioPayload as any, delaySeconds);
+            })
+            .catch(() => undefined);
         }
         break;
       }
 
       case 'stopMedia':
-        videoState.set({
-          url: null,
-          playing: false,
-          muted: true,
-          loop: false,
-          volume: 1,
-        });
-        soundPlayer?.stop();
+        multimediaCore?.media.stopVideo();
+        toneSoundPlayer?.stop();
         break;
 
       case 'stopSound':
-        soundPlayer?.stop();
-        modulatedSoundPlayer?.stop();
+        toneSoundPlayer?.stop();
+        toneModulatedSoundPlayer?.stop();
         break;
 
       case 'showImage': {
         const imagePayload = payload as ShowImagePayload;
         const url =
-          typeof imagePayload.url === 'string' ? multimediaCore?.resolveAssetRef(imagePayload.url) ?? imagePayload.url : imagePayload.url;
-        imageState.set({
-          url,
-          visible: true,
+          typeof imagePayload.url === 'string'
+            ? multimediaCore?.resolveAssetRef(imagePayload.url) ?? imagePayload.url
+            : imagePayload.url;
+        multimediaCore?.media.showImage({
+          url: String(url ?? ''),
           duration: imagePayload.duration,
         });
         break;
       }
 
       case 'hideImage':
-        imageState.set({
-          url: null,
-          visible: false,
-          duration: undefined,
-        });
+        multimediaCore?.media.hideImage();
         break;
 
       case 'visualSceneSwitch':
@@ -657,6 +639,9 @@ export function disconnect(): void {
   nodeExecutor?.destroy();
   nodeExecutor = null;
 
+  mediaUnsub?.();
+  mediaUnsub = null;
+
   sensorManager?.stop();
   sensorManager = null;
 
@@ -666,8 +651,11 @@ export function disconnect(): void {
   screenController?.destroy();
   screenController = null;
 
-  soundPlayer?.destroy();
-  soundPlayer = null;
+  toneSoundPlayer?.stop();
+  toneSoundPlayer = null;
+
+  toneModulatedSoundPlayer?.stop();
+  toneModulatedSoundPlayer = null;
 
   multimediaCore?.destroy();
   multimediaCore = null;
@@ -688,13 +676,6 @@ export function disconnect(): void {
  */
 export function getSDK(): ClientSDK | null {
   return sdk;
-}
-
-/**
- * Get sound player for audio context access
- */
-export function getSoundPlayer(): SoundPlayer | null {
-  return soundPlayer;
 }
 
 /**

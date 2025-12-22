@@ -4,7 +4,7 @@
 import { get, writable, type Writable } from 'svelte/store';
 import type { MinimapPreferences } from '$lib/project/uiState';
 import { minimapPreferences } from '$lib/project/uiState';
-import { normalizeAreaTransform } from '../utils/view-utils';
+import type { GraphViewAdapter } from '../adapters';
 
 type MiniNode = {
   id: string;
@@ -61,7 +61,7 @@ export type MinimapController = {
 
 type MinimapControllerOptions = {
   getContainer: () => HTMLDivElement | null;
-  getAreaPlugin: () => any;
+  getAdapter: () => GraphViewAdapter | null;
   getGraphState: () => { nodes: any[]; connections: any[] };
   getSelectedNodeId: () => string;
   getLocalLoopConnIds: () => Set<string>;
@@ -152,12 +152,12 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
 
   const computeMinimap = () => {
     const container = opts.getContainer();
-    const areaPlugin = opts.getAreaPlugin();
-    if (!container || !areaPlugin?.area) return;
-    const area = areaPlugin.area;
-    const k = Number(area.transform?.k ?? 1) || 1;
-    const tx = Number(area.transform?.x ?? 0) || 0;
-    const ty = Number(area.transform?.y ?? 0) || 0;
+    const adapter = opts.getAdapter();
+    if (!container || !adapter) return;
+    const t = adapter.getViewportTransform();
+    const k = Number(t.k ?? 1) || 1;
+    const tx = Number(t.tx ?? 0) || 0;
+    const ty = Number(t.ty ?? 0) || 0;
 
     const viewport = {
       x: -tx / k,
@@ -167,24 +167,29 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
     };
 
     const nodes: MiniNode[] = [];
-    for (const [id, view] of areaPlugin.nodeViews?.entries?.() ?? []) {
-      const el = view?.element as HTMLElement | undefined;
-      const width = el?.clientWidth ?? 230;
-      const height = el?.clientHeight ?? 100;
-      const pos = view?.position ?? { x: 0, y: 0 };
+    const graphState = opts.getGraphState();
+    for (const n of graphState.nodes ?? []) {
+      const id = String((n as any)?.id ?? '');
+      if (!id) continue;
+
+      const bounds = adapter.getNodeBounds(id);
+      const width = bounds ? Math.max(1, bounds.right - bounds.left) : 230;
+      const height = bounds ? Math.max(1, bounds.bottom - bounds.top) : 100;
+      const x = bounds ? bounds.left : Number((n as any)?.position?.x ?? 0) || 0;
+      const y = bounds ? bounds.top : Number((n as any)?.position?.y ?? 0) || 0;
+
       nodes.push({
-        id: String(id),
-        x: Number(pos.x) || 0,
-        y: Number(pos.y) || 0,
+        id,
+        x,
+        y,
         width,
         height,
-        selected: String(id) === opts.getSelectedNodeId(),
+        selected: id === opts.getSelectedNodeId(),
       });
     }
 
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
     const connections: MiniConnection[] = [];
-    const graphState = opts.getGraphState();
     const localLoopConnIds = opts.getLocalLoopConnIds();
     const deployedConnIds = opts.getDeployedConnIds();
     for (const c of graphState.connections ?? []) {
@@ -270,8 +275,8 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
 
   const handlePointerDown = (event: PointerEvent) => {
     const container = opts.getContainer();
-    const areaPlugin = opts.getAreaPlugin();
-    if (!container || !areaPlugin?.area) return;
+    const adapter = opts.getAdapter();
+    if (!container || !adapter) return;
     event.preventDefault();
     event.stopPropagation();
 
@@ -312,12 +317,11 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
       return;
     }
 
-    const area = areaPlugin.area;
-    normalizeAreaTransform(area);
-    const k = Number(area.transform?.k ?? 1) || 1;
+    const t = adapter.getViewportTransform();
+    const k = Number(t.k ?? 1) || 1;
     const cx = container.clientWidth / 2;
     const cy = container.clientHeight / 2;
-    void area.translate(cx - graphX * k, cy - graphY * k);
+    adapter.setViewportTransform({ k, tx: cx - graphX * k, ty: cy - graphY * k });
     requestUpdate();
   };
 
@@ -325,8 +329,8 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
     if (!isMinimapViewportDragging) return;
     if (event.pointerId !== minimapViewportPointerId) return;
     const container = opts.getContainer();
-    const areaPlugin = opts.getAreaPlugin();
-    if (!container || !areaPlugin?.area) return;
+    const adapter = opts.getAdapter();
+    if (!container || !adapter) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -344,12 +348,11 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
     const desiredCenterX = graphX - minimapViewportGrabOffset.x;
     const desiredCenterY = graphY - minimapViewportGrabOffset.y;
 
-    const area = areaPlugin.area;
-    normalizeAreaTransform(area);
-    const k = Number(area.transform?.k ?? 1) || 1;
+    const t = adapter.getViewportTransform();
+    const k = Number(t.k ?? 1) || 1;
     const cx = container.clientWidth / 2;
     const cy = container.clientHeight / 2;
-    void area.translate(cx - desiredCenterX * k, cy - desiredCenterY * k);
+    adapter.setViewportTransform({ k, tx: cx - desiredCenterX * k, ty: cy - desiredCenterY * k });
     requestUpdate();
   };
 

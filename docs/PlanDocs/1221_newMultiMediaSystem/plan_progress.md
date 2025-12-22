@@ -2,7 +2,7 @@
 
 # 1221_newMultiMediaSystem — 执行进度（Asset Service）
 
-更新时间：2025-12-21
+更新时间：2025-12-22
 
 > 说明：本文件记录“我已经做了什么 / 怎么验证 / 结果是什么 / 下一步做什么”，方便你逐条复查与回归。
 
@@ -400,3 +400,360 @@
   - config：`Audio Asset`（资产选择器，只列出 audio）
   - output：`assetRef`（字符串，值为 `asset:<id>`）
 - Manager 侧资产列表改为共享 store：Node 控件与 `Assets Manager` 页面使用同一份 `GET /api/assets` 数据（单一真相源）
+
+---
+
+## 继续执行计划：Manifest 优先级顺序 + currentManifest 更新语义
+
+你在 plan 里强调：client 必须“登录就预加载”，且预加载顺序要可预测，优先保证“马上要用”的资源最先到。
+
+### ✅ Manager：高优先级 manifest 的“稳定顺序”
+
+实现：`apps/manager/src/lib/nodes/asset-manifest.ts`
+- 不再简单按 nodes 列表扫描；改为 **从 `client-object`（sink）出发，沿连接上游做确定性的 DFS**。
+- 遍历顺序稳定（按 `targetPortId/sourcePortId/sourceNodeId` 排序），遇到 `asset:` 立即 append，去重保持首次出现顺序。
+
+效果：
+- 同一个 graph 在不同机器/不同刷新下推送的 assets 顺序保持一致。
+- 更贴近你要的 Max/MSP 思路（从输出端往上游推导依赖）。
+
+### ✅ Client：manifestId 相同不重复触发
+
+实现：`packages/multimedia-core/src/multimedia-core.ts`
+- `setAssetManifest(...)` 如果 `manifestId` 没变直接 return，避免重复重启 preload。
+
+### ✅ Plan 勾选更新
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md` 已把以下项标记为完成：
+  - Phase 2：Manager `currentAssetManifest` + 高优先级下载顺序
+  - Phase 3：Resolver 输出统一为 `/api/assets/:id/content`；socket 接收 currentManifest；readiness 上报渠道
+
+---
+
+## ✅ 增加旧项目迁移工具：DataURL -> Asset Service -> `asset:<id>`
+
+旧项目里可能还存在 `data:*;base64,...` 这种超长字符串写在 graph 里（历史遗留）。你要求提供迁移工具把它们上传到 Asset Service，然后把 graph 里的字段替换成 `asset:<id>`。
+
+已实现（Manager UI）：
+- `🗂️ Assets Manager` 页面新增按钮：`Migrate DataURLs`
+- 会扫描当前 Node Graph 中所有 node 的 `config` / `inputValues`：
+  - 找到 DataURL（只处理 `;base64`）
+  - 逐个上传到 `POST /api/assets`（写 token 鉴权，服务端 sha256 自动去重）
+  - 用返回的 assetId 替换成 `asset:<id>`
+  - 最后自动 `saveLocalProject('dataurl-migration')`，避免刷新丢失
+  - 页面会显示迁移日志（scan/upload/replace/save）
+
+涉及文件：
+- `apps/manager/src/lib/assets/migrate-dataurls.ts`
+- `apps/manager/src/lib/components/AssetsManager.svelte`
+
+---
+
+## ✅ UI Socket 规则：audio 只能连 audio（避免“数字线连到音频线”）
+
+你在 Phase 2.5 明确要求：`audio` 端口必须独立语义，不能再被 `any` 或其它端口类型“误连”，否则就会出现你之前吐槽的“明明是 Tone 音频节点但输出看起来像数字、连上也不一定有声”的混乱体验。
+
+已实现两层保护：
+- UI 层（连接兼容判断）：`apps/manager/src/lib/components/nodes/node-canvas/rete/rete-builder.ts`
+  - `isCompatible(...)` 对 `audio` 做硬限制：仅允许 `audio -> audio`
+- 引擎层（最终校验）：`apps/manager/src/lib/nodes/engine.ts`
+  - `addConnection(...)` 增加 `audioMismatch` 校验：只要任一端是 `audio`，另一端也必须是 `audio`（不允许 `audio -> any`）
+
+效果：
+- manager 端会直接拒绝错误连接，并在错误提示里明确写出原因。
+
+---
+
+## ✅ tone-adapter：优先用端口类型 `audio` 来识别音频连接（减少硬编码）
+
+你在 Phase 2.5 里希望 Tone 的“音频连线识别”不要再依赖硬编码端口表（`AUDIO_INPUT_PORTS/AUDIO_OUTPUT_PORTS`），而是尽量从单一真相源（node-core 定义里的端口类型）推导。
+
+已实现：`packages/sdk-client/src/tone-adapter.ts`
+- `isAudioConnection(...)` 现在优先读取 `registry.get(nodeType)` 的 inputs/outputs：
+  - 只有当 `sourcePort.type === 'audio' && targetPort.type === 'audio'` 才视为音频连接
+- 兼容旧图：如果 registry 中取不到端口信息，则回退到原先的端口 allowlist（保留旧行为）
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 2.5 的 “下一步：优先用端口类型 audio…” 已标记完成
+
+---
+
+## ✅ 一致性校验规则：ETag 必须匹配 sha256（避免缓存“假命中”）
+
+你要求 client 的缓存必须“跨刷新/重进生效”，同时要能发现“服务器内容变了但文件名没变”的情况（否则会一直不重新下载）。
+
+已实现：`packages/multimedia-core/src/multimedia-core.ts`
+- `ensureCached(...)` 会先拉 `GET /api/assets/:id` 拿到 `sha256`（公开读，不增加鉴权复杂度；若未来启用读 token，也会带 `?token=`）。
+- 然后对比 `HEAD /content` 返回的 `ETag`：
+  - 若 `sha256` 与 `ETag` 都存在且不一致，会把缓存视为不可信，强制重新 `GET /content` 写入 Cache Storage，并更新 IndexedDB 记录。
+  - 若一致且本地 Cache + IndexedDB 命中，则直接复用缓存，不重新下载。
+- IndexedDB 记录结构扩展为可选字段 `sha256`（并把 DB 版本升级到 2，向后兼容旧记录）。
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 3 的“一致性校验规则/目标”已标记完成
+
+---
+
+## ✅ preload 策略 + console 进度日志（不做 UI）
+
+你在 Phase 3 要求：
+- 音频/图片：用 GET 触发 Cache Storage 写入（跨刷新复用）
+- 视频：至少 HEAD 校验 + 可选预热首段（避免预加载就把大视频整文件拉爆）
+- 并发限制（避免影响实时交互）
+- 全程只打 console 日志，不影响 UI
+
+已实现：`packages/multimedia-core/src/multimedia-core.ts`
+- preload 并发仍由 `concurrency` 控制（默认 4，范围 1~8）。
+- 音频/图片（及非 video 的资源）：`GET /content` 并写入 Cache Storage。
+- 视频：`HEAD /content` 后额外做一次 `Range: bytes=0-65535` 的小预热请求（不缓存整文件）。
+- console 日志：
+  - 开始：`[asset] preload start manifest=... total=...`
+  - 进度：每个资源完成后输出 `preload progress x/y asset:<id> bytes~...`（非 asset 也会 log skip）
+  - 完成：`[asset] preload ready manifest=... total=...`
+  - 失败：保持原有 `preload error ...`
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 3 的 “preload 策略/console 进度规范” 已标记完成
+
+---
+
+## ✅ Phase 4（部分）：ToneAudioEngine 统一入口（Tone.start 只在 Start 手势里调用）
+
+你要求消除“多套音频系统/多次 Tone.start”的混乱，并且把 Tone 的启用严格绑定到用户手势（移动端要求）。
+
+已实现：
+- `packages/multimedia-core/src/tone-audio-engine.ts`
+  - 新增 `ToneAudioEngine` + 单例 `toneAudioEngine`
+  - 负责：lazy import Tone、`Tone.start()`、以及 `loaded/enabled/error` 状态
+- `apps/client/src/lib/stores/client.ts`
+  - `enableAudio()` 改为调用 `toneAudioEngine.start()`（Start 按钮触发）
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 4 的前两项已标记完成
+
+待继续：
+- `packages/sdk-client/src/tone-adapter.ts` 还未完全迁移到 ToneAudioEngine（目前仍存在自己的 Tone load/start 路径，后续会收敛掉）
+
+---
+
+## ✅ Phase 4：tone-adapter 完全收敛到 ToneAudioEngine（移除重复 Tone 状态）
+
+已实现：`packages/sdk-client/src/tone-adapter.ts`
+- 移除 tone-adapter 内部的 `import('tone')` / `Tone.start()` / `AudioContext state` 判断逻辑
+- 全部改为依赖 `@shugu/multimedia-core` 的单例 `toneAudioEngine`：
+  - `enableToneAudio()` → `toneAudioEngine.start()`
+  - “是否可跑音频”的判断统一走 `toneAudioEngine.isEnabled()`
+  - Tone 模块加载统一走 `toneAudioEngine.ensureLoaded()`
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 4 的第三项已标记完成
+
+---
+
+## ✅ Phase 5：Synth(update) 迁移到 Tone（ToneModulatedSoundPlayer）
+
+你指出目前 client 端存在“2 套音频系统”的问题，并要求 Synth(update) 必须迁移到 Tone.js（且保留现有特性）。
+
+已实现：
+- `packages/sdk-client/src/action-executors.ts`
+  - 新增 `ToneModulatedSoundPlayer`（play/update/stop）
+  - 只依赖 `@shugu/multimedia-core` 的 `toneAudioEngine`，不会创建新的 `AudioContext`
+  - 功能对齐：
+    - `attack/release/duration`
+    - `frequency/waveform/volume`
+    - `modDepth/modFrequency`（通过 Tone.LFO 调制频率）
+    - `durationMs` 兼容（update 时可改持续时间）
+- `apps/client/src/lib/stores/client.ts`
+  - `modulateSound` / `modulateSoundUpdate` 已改为调用 `ToneModulatedSoundPlayer`
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 5 的 1) 与 2) 已标记完成
+
+---
+
+## ✅ Phase 6（部分）：Image/Video 迁入 MultimediaCore.MediaEngine（解耦 apps/client）
+
+你要求 client 的 “Multimedia Runtime” 不只管 Tone 音频，还要把图片/视频播放后端统一到 MultimediaCore（apps/client 只做渲染映射，未来便于再加“另一类被 manager 控制的对象”）。
+
+已实现：
+- `packages/multimedia-core/src/media-engine.ts`
+  - 新增 `MediaEngine`（纯状态机，无 DOM）：
+    - `showImage/hideImage`
+    - `playVideo/stopVideo/stopAllMedia`
+  - 支持注入 URL resolver（用于 `asset:`）
+- `packages/multimedia-core/src/multimedia-core.ts`
+  - `MultimediaCore` 新增 `media: MediaEngine`（默认 resolveUrl 走 `resolveAssetRef`）
+- `apps/client/src/lib/stores/client.ts`
+  - 初始化时订阅 `multimediaCore.media.subscribeState(...)`，把 state 映射到 Svelte store：`videoState/imageState`
+  - `showImage/hideImage/playMedia(video)/stopMedia` 的执行路径改为调用 `multimediaCore.media.*`
+
+结果：
+- apps/client 的业务逻辑（媒体控制）从 store 中抽离出来，未来可复用/扩展到其它 runtime。
+
+---
+
+## ✅ Phase 6（部分）：Audio 迁移到 ToneSoundPlayer（保留 fallback）
+
+你在 Phase 6 的目标是：音频播放后端统一到 Tone（和节点化 Tone 链路共用同一个音频上下文），同时保留一个在 Tone 未启用/失败时的退路。
+
+已实现：
+- `packages/sdk-client/src/action-executors.ts`
+  - 新增 `ToneSoundPlayer`：
+    - 主路径：Tone.Player + Tone.Gain（支持 `volume/loop/fadeIn`，并支持 update）
+    - fallback：HTMLAudioElement +（best-effort）MediaElementSource 接入 Tone 的 raw AudioContext destination
+- `apps/client/src/lib/stores/client.ts`
+  - `playSound` / `playMedia(audio)` 优先走 `ToneSoundPlayer`（仅在 `toneAudioEngine.isEnabled()` 时）
+  - Tone 未启用时回退到原 `SoundPlayer` 逻辑
+  - `stopSound/stopMedia` 会停止 ToneSoundPlayer + 旧 SoundPlayer
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 6 的 Audio 三项已标记完成
+
+---
+
+## ✅ Phase 7（部分）：Patch 导出 + Patch 部署（替代 loop 依赖，Max/MSP 路径）
+
+你要求在 manager 的 Node Graph 上以 `audio-out` 为 root（Max/MSP 语义）导出 patch 子图，并部署到指定 client，让音频稳定发声，同时能够实时调参（override）。
+
+已实现：
+- `apps/manager/src/lib/nodes/patch-export.ts`
+  - 新增 patch 子图导出：从 `audio-out` 反向追溯依赖节点/连线，并收集 `asset:` refs（用于后续 preload/验收）
+- `apps/manager/src/lib/nodes/engine.ts`
+  - 新增 `nodeEngine.exportGraphForPatch()`：
+    - 导出 `audio-out` 子图
+    - whitelist 校验（拒绝不可部署节点类型）
+    - 计算 `patch:<rootId>:<hash>` 作为 `meta.loopId`（复用 node-executor 协议字段）
+- `apps/manager/src/lib/components/nodes/node-canvas/controllers/patch-controller.ts`
+  - 新增 patch-controller：
+    - Deploy：向目标 client 发送 `node-executor deploy + start`
+    - Stop/Remove：向目标 client 发送 `node-executor stop/remove`
+    - 维护 `{clientId -> {patchId,nodeIds}}` 映射，供 override 路由使用
+- `apps/manager/src/lib/components/nodes/node-canvas/ui/NodeCanvasToolbar.svelte`
+  - Toolbar 新增 Patch controls：选择 client + Deploy/Stop/Remove（MVP）
+- `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+  - override 路由增强：如果 node 不在 deployed loop 中，则尝试按 patch-controller 的 nodeId 映射路由到对应 client/patch
+- `packages/sdk-client/src/tone-adapter.ts`
+  - 新增 `audio-out` sink 支持：当目标节点为 `audio-out` 时，将音频连接到 master/destination，避免出现 “接了 audio-out 反而无声” 的情况
+
+当前状态：
+- Patch 的 Deploy/Stop/Remove 已可用（不依赖 loop 检测）。
+- Patch “状态/日志面板” 与 “自动重部署 debounce” 仍未实现（plan.md 保持未勾）。
+
+---
+
+## ✅ Phase 7（继续）：Patch 状态/日志 + 自动重部署 + commit 语义
+
+为了让 Patch 部署真正像 Max/MSP 一样可用（“部署→调参→松手保持”），我把 Phase 7 的剩余三块补齐了：
+
+已实现：
+- Patch 状态/日志（Manager UI）
+  - `apps/manager/src/lib/components/nodes/node-canvas/ui/NodeCanvasToolbar.svelte`
+    - Patch 控件增加：`Logs` 按钮、状态 badge（running/stopped + lastEvent + error）
+    - `Auto`（自动重部署开关）
+  - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+    - Patch 的 Logs 复用现有 `ExecutorLogsPanel`（打开后会显示该 client 的 node-executor 事件流）
+
+- 自动重部署（debounce，可开关）
+  - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+    - 当目标 client 已有 patch 部署且 `Auto` 开启时，graphState 变化会触发 `exportGraphForPatch()` 签名更新，并在 650ms debounce 后自动 `deployPatch(...)`
+
+- commit 语义（确保参数持久）
+  - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+    - 仍然保留“滑动/拖动时”发送带 TTL 的 transient override（手感更顺滑）
+    - 同时对同一 `(clientId, patchId/loopId, nodeId, kind, portId)` 做 420ms 的 commit debounce：无操作后发送不带 TTL 的 override，达到“松手后保持”的效果
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 7 的 UI/auto redeploy/commit 三项已标记完成
+
+补充（关于你遇到的 `pnpm dev:all` 报错 `nest not found`）：
+- 该错误通常意味着 workspace `node_modules` 未安装/不完整（`@nestjs/cli` 未被安装到 `apps/server`）。
+- 已在 `apps/server/package.json` 增加 `dev:dlx` 作为临时兜底（需要能访问 npm registry）；主路径仍推荐 `pnpm install` 后使用 `pnpm dev:all`。
+
+---
+
+## ✅ Phase 8：清理与长期维护（Audio 单一引擎 + 部署文档 + 健康检查）
+
+你在 DoD 里明确要求 “Client 上所有发声都通过 ToneAudioEngine（无第二套 AudioContext）”，并且希望部署/迁移更稳。
+
+已完成：
+- 删除/退役旧 AudioContext 创建路径（只保留 ToneAudioEngine）
+  - `apps/client/src/lib/stores/client.ts`
+    - 移除 `SoundPlayer` / `ModulatedSoundPlayer` 的创建与调用（统一走 `ToneSoundPlayer` / `ToneModulatedSoundPlayer`）
+    - `requestPermissions()` 内改为调用 `enableAudio()`（Tone.start）
+  - `apps/client/src/lib/components/VisualCanvas.svelte`
+    - 音频特征提取不再创建新的 `AudioContext`，改为复用 Tone 的 `rawContext`（避免第二套 context）
+  - `packages/sdk-client/src/action-executors.ts`
+    - `SoundPlayer` 改为纯 HTMLAudio 兜底（不再创建 AudioContext）
+    - `ModulatedSoundPlayer` 禁止在无 sharedContext 时创建 AudioContext（提示 deprecated）
+
+- 部署文档补齐 Asset Service 存储与备份策略
+  - `DEPLOY.md` 新增 “Asset Service (Storage & Env)” 小节：默认存储路径、env 配置、以及备份建议
+
+- 健康检查增强（包含 Asset Service）
+  - `apps/server/src/assets/assets.service.ts`
+    - 新增 `healthCheck()`：检查 dataDir/dbPath 读写、返回磁盘容量（statfs）、以及告警（low-disk / write-auth-not-configured）
+  - `apps/server/src/app.controller.ts`
+    - `/health` 返回 `assets` 详细健康信息；当 asset 健康失败时整体 status 变为 `degraded`
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 8 三项已标记完成
+
+补充：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md` 目前已无未勾选项（`- [ ]`），整份执行清单已完成。
+- 如果你之前用 `sudo pnpm ...` 跑过 server build，可能会把 `apps/server/dist-server` 生成成 root-owned 导致后续 `pnpm -C apps/server build` 报 `EACCES`；一次性清理可用：`sudo rm -rf apps/server/dist-server`，之后尽量不要用 sudo 跑 pnpm。
+
+---
+
+## ✅ Phase 7（修订）：Graph 驱动 Patch 部署（移除 toolbar patch-controls）
+
+你明确要求「Patch 的路由/目标必须在 Node Graph 里完成，不能有独立的 patch-controls UI」。因此我把 Phase 7 的 Patch 部署方式做了结构性调整：
+
+已实现：
+- Patch 目标选择回归 Node Graph（Max/MSP 风格）
+  - `packages/node-core/src/definitions.ts`
+    - `audio-out` 新增 `client` 输入端口（type=`client`）。
+    - 在图里直接连：`client-object(out) → audio-out(client)`，即表示“把这个 audio-out patch 部署到该 client”。
+
+- Patch 自动部署/停止（无需 Toolbar 按钮）
+  - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`
+    - 当 NodeEngine `Start` 且 `audio-out` 有目标时：自动 `deploy + start`（debounce 320ms）。
+      - 推荐连法：`audio-out(Deploy) → client-object(In)`
+      - 兼容旧连法：`client-object(out) → audio-out(client)`
+    - 当断开连接或 NodeEngine `Stop` 时：自动 `stop + remove`。
+    - 结构变化（节点/连线变化）触发 redeploy；参数变化仍走 override-set + commit，不会 redeploy。
+
+- Patch 导出与预加载扫描同步修复（避免 manifest=0）
+  - `apps/manager/src/lib/nodes/patch-export.ts`
+    - 导出 patch 时会忽略 `client/command` 端口连接，避免把 `client-object` 一起打包进 patch。
+    - assetRefs 额外识别 `asset-picker` 字段里存的“裸 assetId”（自动转成 `asset:<id>`）。
+  - `apps/manager/src/lib/nodes/asset-manifest.ts`
+    - manifest root 现在包含 `audio-out`（优先）+ `client-object`，并跳过 `client/command` 端口连线。
+    - 同样支持 `asset-picker` 裸 assetId 的识别，确保 client 登录后能预加载到正确资产。
+
+- Templates 更新（解决你指出的“没有 client 节点无法指定播放目标”）
+  - `docs/PlanDocs/1221_newMultiMediaSystem/templates/01_patch_osc_delay_audio_out.json`
+  - `docs/PlanDocs/1221_newMultiMediaSystem/templates/02_patch_asset_player_delay_audio_out.json`
+  - `docs/PlanDocs/1221_newMultiMediaSystem/templates/03_filepicker_upload_to_tone_player.json`
+    - 都已内置 `client-object`，并使用 `audio-out(Deploy) → client-object(In)`，导入后即可直接指定 client 播放。
+
+对应勾选已更新：
+- `docs/PlanDocs/1221_newMultiMediaSystem/plan.md`：Phase 7 的“Patch 目标与部署（Graph 驱动）”已替换旧 patch-controls 描述并保持完成状态。
+
+---
+
+## ✅ Patch 修复：Tone Patch 支持 MIDI 控制（不再报 `midi-map` 非可部署）
+
+你遇到的报错 `Patch contains non-deployable node type: midi-map` 的原因：
+- Patch 会部署到 client 的 `node-executor` 执行；但 `midi-*` 节点依赖 WebMIDI/manager 侧状态（属于 manager-only），client 侧并没有这些节点定义与输入源。
+
+本次修复做法：
+- Patch 导出阶段**自动排除 `midi-*` 节点**（它们不再进入 client patch 图），避免触发“不可部署节点”错误。
+- Manager 运行时会把 `midi-* → patch-node` 的连线当成“桥接线”：在每个 tick 把 MIDI 节点输出转成 `override-set` 发给目标 client（并在断开连线时 `override-remove` 清理）。
+
+关键实现位置：
+- `apps/manager/src/lib/nodes/patch-export.ts`: MIDI 节点排除（manager-only control sources）。
+- `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`: MIDI → Patch 的 override bridge（set/remove + 去抖/去重）。
+
+补充模板（便于你直接导入验证）：
+- `docs/PlanDocs/1221_newMultiMediaSystem/templates/07_patch_midi_map_delay_time.json`
+  - `midi-fuzzy → midi-map → tone-delay(time)`（桥接 override）+ `tone-osc → tone-delay → audio-out`
+  - 通过 `audio-out(Deploy) → client-object(In)` 指定目标 client（并兼容旧连法）

@@ -22,6 +22,7 @@
         "dist-out"
     ],
     "dependencies": {
+        "@shugu/multimedia-core": "workspace:*",
         "@shugu/node-core": "workspace:*",
         "@shugu/protocol": "workspace:*",
         "socket.io-client": "^4.7.2",

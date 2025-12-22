@@ -220,11 +220,14 @@
     const max = typeof rawMax === 'number' && Number.isFinite(rawMax) ? rawMax : current.max;
     const clampedMin = clampNumber(min, undefined, max);
     const clampedMax = clampNumber(max, clampedMin, undefined);
-    nodeEngine.updateNodeConfig(binding.mapNodeId, {
+    const patch: Record<string, unknown> = {
       ...updates,
       min: clampedMin,
       max: clampedMax,
-    });
+    };
+    // Keep `midi-map`'s newer `integer` flag in sync with `round` (integer output).
+    if (Object.prototype.hasOwnProperty.call(updates, 'round')) patch.integer = Boolean(updates.round);
+    nodeEngine.updateNodeConfig(binding.mapNodeId, patch);
   }
 
   function toggleInvert(binding: DetectedMidiBinding) {

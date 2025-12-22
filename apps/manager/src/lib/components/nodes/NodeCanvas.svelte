@@ -19,6 +19,8 @@
   import NodeCanvasMinimap from './node-canvas/ui/NodeCanvasMinimap.svelte';
   import NodeCanvasToolbar from './node-canvas/ui/NodeCanvasToolbar.svelte';
   import NodePickerOverlay from './node-canvas/ui/NodePickerOverlay.svelte';
+  import PerformanceDebugOverlay from './node-canvas/ui/PerformanceDebugOverlay.svelte';
+  import { nodeGraphPerfOverlay, nodeGraphEdgeShadows } from '$lib/features/node-graph-flags';
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
@@ -33,9 +35,13 @@
   import { midiService } from '$lib/features/midi/midi-service';
   import { createFileActions } from './node-canvas/io/file-actions';
   import { LiveDOMSocketPosition } from './node-canvas/rete/live-socket-position';
+  import { createReteAdapter, type GraphViewAdapter } from './node-canvas/adapters';
   import { createMinimapController } from './node-canvas/controllers/minimap-controller';
   import { createGroupController } from './node-canvas/controllers/group-controller';
-  import { createLoopController, type LoopController } from './node-canvas/controllers/loop-controller';
+  import {
+    createLoopController,
+    type LoopController,
+  } from './node-canvas/controllers/loop-controller';
   import { createMidiHighlightController } from './node-canvas/controllers/midi-highlight-controller';
   import {
     createPickerController,
@@ -52,6 +58,7 @@
   let connectionPlugin: any = null;
   let graphUnsub: (() => void) | null = null;
   let paramsUnsub: (() => void) | null = null;
+  let tickUnsub: (() => void) | null = null;
   let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   let wheelHandler: ((event: WheelEvent) => void) | null = null;
   let contextMenuHandler: ((event: MouseEvent) => void) | null = null;
@@ -109,10 +116,17 @@
   let requestFramesUpdate = () => {};
   let canvasTransform = { k: 1, tx: 0, ty: 0 };
 
-  const groupController = createGroupController({
+  const viewAdapter: GraphViewAdapter = createReteAdapter({
     getContainer: () => container,
     getAreaPlugin: () => areaPlugin,
     getNodeMap: () => nodeMap,
+    getConnectionMap: () => connectionMap,
+    requestFramesUpdate: () => requestFramesUpdate(),
+  });
+
+  const groupController = createGroupController({
+    getContainer: () => container,
+    getAdapter: () => viewAdapter,
     getGraphState: () => graphState,
     getLocalLoops: () => (loopController ? get(loopController.localLoops) : []),
     getLoopConstraintLoops: () => (loopController ? loopController.getEffectiveLoops() : []),
@@ -126,7 +140,7 @@
 
   minimapController = createMinimapController({
     getContainer: () => container,
-    getAreaPlugin: () => areaPlugin,
+    getAdapter: () => viewAdapter,
     getGraphState: () => graphState,
     getSelectedNodeId: () => selectedNodeId,
     getLocalLoopConnIds: () => (loopController ? get(loopController.localLoopConnIds) : new Set()),
@@ -138,9 +152,7 @@
     getSDK,
     isRunning: () => get(isRunningStore),
     getGraphState: () => graphState,
-    getAreaPlugin: () => areaPlugin,
-    getNodeMap: () => nodeMap,
-    getConnectionMap: () => connectionMap,
+    getAdapter: () => viewAdapter,
     getGroupDisabledNodeIds: () => get(groupController.groupDisabledNodeIds),
     isSyncingGraph: () => isSyncingRef.value,
     onDeployTimeout: (loopId) => alert(`Deploy timeout for loop ${loopId}`),
@@ -149,10 +161,14 @@
     onMissingSdk: () => alert('Manager SDK not connected.'),
     onLoopVanished: () => undefined,
     onLoopFrameReady: (loop) => {
-      const effectiveLoop = loopController?.getEffectiveLoops().find((l) => l.id === loop.id) ?? loop;
+      const effectiveLoop =
+        loopController?.getEffectiveLoops().find((l) => l.id === loop.id) ?? loop;
       const bounds = groupController.computeLoopFrameBounds(effectiveLoop);
       if (!bounds) return;
-      groupController.pushNodesOutOfBounds(bounds, new Set((effectiveLoop.nodeIds ?? []).map((id) => String(id))));
+      groupController.pushNodesOutOfBounds(
+        bounds,
+        new Set((effectiveLoop.nodeIds ?? []).map((id) => String(id)))
+      );
     },
   });
 
@@ -181,9 +197,7 @@
   const midiController = createMidiHighlightController({
     getGraphState: () => graphState,
     getGroupDisabledNodeIds: () => get(groupController.groupDisabledNodeIds),
-    getNodeMap: () => nodeMap,
-    getConnectionMap: () => connectionMap,
-    getAreaPlugin: () => areaPlugin,
+    getAdapter: () => viewAdapter,
     isSyncingGraph: () => isSyncingRef.value,
   });
 
@@ -197,7 +211,8 @@
   const OVERRIDE_TTL_MS = 1500;
 
   // ===== Client Node Selection Binding =====
-  const selectionEqual = (a: string[], b: string[]) => a.length === b.length && a.every((id, idx) => id === b[idx]);
+  const selectionEqual = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((id, idx) => id === b[idx]);
 
   const clampInt = (value: number, min: number, max: number) => {
     const next = Math.floor(value);
@@ -210,10 +225,469 @@
     return fallback;
   };
 
-  const manualSyncNodeIds = new Set<string>();
+  const hashStringDjb2 = (value: string): number => {
+    let hash = 5381;
+    for (let i = 0; i < value.length; i += 1) {
+      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+    }
+    return hash >>> 0;
+  };
+
+  const buildStableRandomOrder = (nodeId: string, clients: string[]) => {
+    const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
+    keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
+    return keyed.map((k) => k.id);
+  };
 
   const clientIdsInOrder = () =>
     (get(managerState).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+
+  let patchPendingCommitByKey = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // ===== Patch Deployment (Graph-driven, no toolbar controls) =====
+  type DeployedPatch = {
+    patchId: string;
+    nodeIds: Set<string>;
+    topologySignature: string;
+    deployedAt: number;
+  };
+
+  let deployedPatchByClientId = new Map<string, DeployedPatch>();
+  let patchDeployTimer: ReturnType<typeof setTimeout> | null = null;
+  let patchLastTopologySignature: string | null = null;
+  let patchLastTargetsKey = '';
+
+  type MidiBridgeRoute = {
+    sourceNodeId: string;
+    sourcePortId: string;
+    targetNodeId: string;
+    targetPortId: string;
+    targetType: PortType;
+    key: string; // `${targetNodeId}|${targetPortId}`
+  };
+
+  const isMidiNodeType = (type: string): boolean => type.startsWith('midi-');
+
+  let midiBridgeRoutes: MidiBridgeRoute[] = [];
+  let midiBridgeDesiredKeys = new Set<string>();
+  let midiBridgeActiveKeysByClientId = new Map<string, Set<string>>();
+  let midiBridgeLastSignatureByClientKey = new Map<string, string>();
+  let midiBridgeLastSendAt = 0;
+
+  const midiBridgeClientKey = (clientId: string, patchId: string, nodeId: string, portId: string) =>
+    `${clientId}|${patchId}|${nodeId}|${portId}`;
+
+  const computeMidiBridgeRoutes = (patchNodeIds: Set<string>): { routes: MidiBridgeRoute[]; keys: Set<string> } => {
+    const nodeById = new Map((graphState.nodes ?? []).map((n: any) => [String(n.id), n]));
+    const routes: MidiBridgeRoute[] = [];
+    const keys = new Set<string>();
+
+    for (const c of graphState.connections ?? []) {
+      const targetNodeId = String(c.targetNodeId);
+      const targetPortId = String(c.targetPortId);
+      if (!patchNodeIds.has(targetNodeId)) continue;
+
+      const sourceNodeId = String(c.sourceNodeId);
+      const sourcePortId = String(c.sourcePortId);
+      const sourceNode = nodeById.get(sourceNodeId);
+      if (!sourceNode) continue;
+      if (!isMidiNodeType(String(sourceNode.type))) continue;
+
+      const targetNode = nodeById.get(targetNodeId);
+      if (!targetNode) continue;
+      const def = nodeRegistry.get(String(targetNode.type));
+      const port = def?.inputs?.find((p) => String(p.id) === targetPortId) ?? null;
+      if (!port || port.kind === 'sink') continue;
+      const targetType = (port.type ?? 'any') as PortType;
+
+      const key = `${targetNodeId}|${targetPortId}`;
+      keys.add(key);
+      routes.push({
+        sourceNodeId,
+        sourcePortId,
+        targetNodeId,
+        targetPortId,
+        targetType,
+        key,
+      });
+    }
+
+    // Stable ordering for deterministic behavior.
+    routes.sort((a, b) => a.key.localeCompare(b.key) || a.sourceNodeId.localeCompare(b.sourceNodeId));
+
+    return { routes, keys };
+  };
+
+  const clearMidiBridgeState = () => {
+    midiBridgeRoutes = [];
+    midiBridgeDesiredKeys = new Set();
+    midiBridgeActiveKeysByClientId = new Map();
+    midiBridgeLastSignatureByClientKey = new Map();
+  };
+
+  const syncMidiBridgeRoutes = (patchId: string, patchNodeIds: Set<string>) => {
+    if (!patchId || patchNodeIds.size === 0 || deployedPatchByClientId.size === 0) {
+      clearMidiBridgeState();
+      return;
+    }
+
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    const { routes, keys } = computeMidiBridgeRoutes(patchNodeIds);
+    midiBridgeRoutes = routes;
+    midiBridgeDesiredKeys = keys;
+
+    // Remove overrides that are no longer wired from MIDI.
+    for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+      const prev = midiBridgeActiveKeysByClientId.get(clientId) ?? new Set<string>();
+      const next = new Set(keys);
+      const toRemove = Array.from(prev).filter((k) => !next.has(k));
+      if (toRemove.length > 0) {
+        const overrides = toRemove.map((k) => {
+          const [nodeId, portId] = k.split('|');
+          return { nodeId, kind: 'input', portId };
+        });
+        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+          loopId: patch.patchId,
+          overrides,
+        } as any);
+
+        for (const k of toRemove) {
+          const [nodeId, portId] = k.split('|');
+          midiBridgeLastSignatureByClientKey.delete(midiBridgeClientKey(clientId, patch.patchId, nodeId, portId));
+        }
+      }
+      midiBridgeActiveKeysByClientId.set(clientId, next);
+    }
+  };
+
+  const coerceForPortType = (value: unknown, type: PortType): unknown | undefined => {
+    if (value === undefined || value === null) return undefined;
+    if (type === 'number') {
+      const n = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    if (type === 'boolean') {
+      if (typeof value === 'boolean') return value;
+      if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+      return undefined;
+    }
+    if (type === 'string') return typeof value === 'string' ? value : String(value);
+    if (type === 'color') return typeof value === 'string' ? value : undefined;
+    // any/fuzzy/client/command/audio are not expected here (we skip sink + type mismatch should prevent it).
+    return value;
+  };
+
+  const signatureForValue = (value: unknown, type: PortType): string => {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (type === 'number') {
+      const n = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(n)) return 'nan';
+      return `n:${Math.round(n * 1_000_000) / 1_000_000}`;
+    }
+    if (type === 'boolean') return `b:${Boolean(value)}`;
+    if (type === 'string' || type === 'color') return `s:${String(value)}`;
+    try {
+      return `j:${JSON.stringify(value)}`;
+    } catch {
+      return `u:${String(value)}`;
+    }
+  };
+
+  const sendMidiBridgeOverrides = () => {
+    if (!get(isRunningStore)) return;
+    if (midiBridgeRoutes.length === 0) return;
+    if (deployedPatchByClientId.size === 0) return;
+
+    const now = Date.now();
+    if (now - midiBridgeLastSendAt < 30) return;
+    midiBridgeLastSendAt = now;
+
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+      const overrides: any[] = [];
+      const removals: any[] = [];
+      const activeKeys = midiBridgeActiveKeysByClientId.get(clientId) ?? new Set<string>();
+
+      for (const route of midiBridgeRoutes) {
+        const sourceNode = nodeEngine.getNode(route.sourceNodeId);
+        const raw = sourceNode?.outputValues?.[route.sourcePortId];
+        const coerced = coerceForPortType(raw, route.targetType);
+
+        const key = midiBridgeClientKey(clientId, patch.patchId, route.targetNodeId, route.targetPortId);
+        if (coerced === undefined) {
+          if (activeKeys.has(route.key)) {
+            activeKeys.delete(route.key);
+            midiBridgeLastSignatureByClientKey.delete(key);
+            removals.push({ nodeId: route.targetNodeId, kind: 'input', portId: route.targetPortId });
+          }
+          continue;
+        }
+
+        const sig = signatureForValue(coerced, route.targetType);
+        const prevSig = midiBridgeLastSignatureByClientKey.get(key);
+        if (prevSig === sig) {
+          activeKeys.add(route.key);
+          continue;
+        }
+
+        midiBridgeLastSignatureByClientKey.set(key, sig);
+        activeKeys.add(route.key);
+        overrides.push({
+          nodeId: route.targetNodeId,
+          kind: 'input',
+          portId: route.targetPortId,
+          value: coerced,
+        });
+      }
+
+      midiBridgeActiveKeysByClientId.set(clientId, activeKeys);
+
+      if (removals.length > 0) {
+        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+          loopId: patch.patchId,
+          overrides: removals,
+        } as any);
+      }
+
+      if (overrides.length > 0) {
+        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-set', {
+          loopId: patch.patchId,
+          overrides,
+        } as any);
+      }
+    }
+  };
+
+  const computeTopologySignature = (payload: { nodes?: any[]; connections?: any[] }): string => {
+    const nodes = (payload.nodes ?? []).map((n: any) => ({
+      id: String(n.id),
+      type: String(n.type),
+    }));
+    nodes.sort((a: any, b: any) => a.id.localeCompare(b.id));
+
+    const connections = (payload.connections ?? []).map((c: any) => ({
+      s: String(c.sourceNodeId),
+      sp: String(c.sourcePortId),
+      t: String(c.targetNodeId),
+      tp: String(c.targetPortId),
+    }));
+    connections.sort((a: any, b: any) => {
+      const sa = `${a.s}:${a.sp}->${a.t}:${a.tp}`;
+      const sb = `${b.s}:${b.sp}->${b.t}:${b.tp}`;
+      return sa.localeCompare(sb);
+    });
+
+    return JSON.stringify({ nodes, connections });
+  };
+
+  const resolvePatchTargetClientIds = (): string[] => {
+    const roots = (graphState.nodes ?? []).filter((n) => String(n.type) === 'audio-out');
+    if (roots.length !== 1) return [];
+    const rootId = String(roots[0]?.id ?? '');
+    if (!rootId) return [];
+
+    const connected = new Set(clientIdsInOrder());
+
+    const connections = graphState.connections ?? [];
+
+    // Preferred routing (new): `audio-out(cmd) -> client-object(in)`.
+    // Backward-compatible routing (old): `client-object(out) -> audio-out(client)`.
+    const deployToClientConns = connections.filter(
+      (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
+    );
+
+    const legacyClientInConns = deployToClientConns.length
+      ? []
+      : connections.filter((c) => String(c.targetNodeId) === rootId && String(c.targetPortId) === 'client');
+
+    const out: string[] = [];
+    const seen = new Set<string>();
+
+    const resolveClientId = (nodeId: string, outputPortId: string) => {
+      const runtimeNode = nodeEngine.getNode(nodeId);
+      const runtimeOut = runtimeNode?.outputValues?.[outputPortId] as any;
+      const fromOut =
+        typeof runtimeOut?.clientId === 'string' ? String(runtimeOut.clientId).trim() : '';
+      const fromConfig =
+        typeof (runtimeNode?.config as any)?.clientId === 'string'
+          ? String((runtimeNode?.config as any).clientId).trim()
+          : '';
+      return fromOut || fromConfig;
+    };
+
+    for (const c of deployToClientConns) {
+      const targetNodeId = String(c.targetNodeId);
+      const runtimeNode = nodeEngine.getNode(targetNodeId);
+      if (String(runtimeNode?.type ?? '') !== 'client-object') continue;
+      const id = resolveClientId(targetNodeId, 'out');
+      if (!id || !connected.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+
+    for (const c of legacyClientInConns) {
+      const sourceNodeId = String(c.sourceNodeId);
+      const sourcePortId = String(c.sourcePortId);
+      const id = resolveClientId(sourceNodeId, sourcePortId);
+      if (!id || !connected.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+
+    return out;
+  };
+
+  const stopAndRemovePatchOnClient = (clientId: string, patchId: string) => {
+    const id = String(clientId ?? '');
+    const loopId = String(patchId ?? '');
+    if (!id || !loopId) return;
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'stop', {
+      loopId,
+    } as any);
+    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'remove', {
+      loopId,
+    } as any);
+  };
+
+  const stopAllDeployedPatches = () => {
+    for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+      stopAndRemovePatchOnClient(clientId, patch.patchId);
+    }
+    deployedPatchByClientId = new Map();
+    patchLastTopologySignature = null;
+    patchLastTargetsKey = '';
+    clearMidiBridgeState();
+  };
+
+  const reconcilePatchDeployment = (reason: string) => {
+    if (!get(isRunningStore)) {
+      stopAllDeployedPatches();
+      return;
+    }
+
+    const sdk = getSDK();
+    if (!sdk) return;
+
+    const targets = resolvePatchTargetClientIds();
+    const targetsKey = targets.join('|');
+
+    if (targets.length === 0) {
+      if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
+      return;
+    }
+
+    let payload: any;
+    try {
+      payload = nodeEngine.exportGraphForPatch();
+    } catch (err) {
+      nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
+      return;
+    }
+
+    const topologySignature = computeTopologySignature(payload.graph ?? {});
+    const patchId = String(payload?.meta?.loopId ?? '');
+    const nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
+
+    let needRedeployAll =
+      patchLastTopologySignature !== topologySignature || patchLastTargetsKey !== targetsKey;
+
+    const statusMap = get(executorStatusByClient);
+    for (const clientId of targets) {
+      const deployed = deployedPatchByClientId.get(clientId) ?? null;
+      const status = statusMap.get(clientId) ?? null;
+      if (!deployed || deployed.patchId !== patchId) {
+        needRedeployAll = true;
+        break;
+      }
+      if (status?.loopId && status.loopId !== patchId) {
+        needRedeployAll = true;
+        break;
+      }
+    }
+
+    patchLastTopologySignature = topologySignature;
+    patchLastTargetsKey = targetsKey;
+
+    // Stop/remove patches on clients that are no longer targeted.
+    for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+      if (targets.includes(clientId)) continue;
+      stopAndRemovePatchOnClient(clientId, patch.patchId);
+      deployedPatchByClientId.delete(clientId);
+    }
+
+    if (!needRedeployAll) {
+      // Best-effort: if the patch is targeted but was stopped on the client, restart it.
+      for (const clientId of targets) {
+        const status = statusMap.get(clientId) ?? null;
+        if (status?.loopId === patchId && status.running === false) {
+          sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
+            loopId: patchId,
+          } as any);
+        }
+      }
+
+      // MIDI wiring is manager-only; keep bridge routes in sync even when the deploy graph is unchanged.
+      syncMidiBridgeRoutes(patchId, nodeIds);
+      return;
+    }
+
+    // A deploy resets client overrides; ensure MIDI bridge resend starts fresh.
+    midiBridgeLastSignatureByClientKey = new Map();
+    midiBridgeActiveKeysByClientId = new Map();
+
+    for (const clientId of targets) {
+      sdk.sendPluginControl(
+        { mode: 'clientIds', ids: [clientId] },
+        'node-executor',
+        'deploy',
+        payload
+      );
+      sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
+        loopId: patchId,
+      } as any);
+
+      deployedPatchByClientId.set(String(clientId), {
+        patchId,
+        nodeIds,
+        topologySignature,
+        deployedAt: Date.now(),
+      });
+    }
+
+    syncMidiBridgeRoutes(patchId, nodeIds);
+    console.log('[patch] deployed', { reason, patchId, targets });
+  };
+
+  const schedulePatchReconcile = (reason: string) => {
+    if (patchDeployTimer) clearTimeout(patchDeployTimer);
+    patchDeployTimer = setTimeout(() => {
+      patchDeployTimer = null;
+      reconcilePatchDeployment(reason);
+    }, 320);
+  };
+
+  const toggleExecutorLogs = () => {
+    const show = get(showExecutorLogs);
+    const current = get(logsClientId);
+    const patchTargets = resolvePatchTargetClientIds();
+    const selected = (get(managerState).selectedClientIds ?? []).map(String).filter(Boolean);
+    const targetId = patchTargets[0] ?? selected[0] ?? clientIdsInOrder()[0] ?? '';
+    if (!targetId) return;
+
+    if (show && current === targetId) {
+      showExecutorLogs.set(false);
+      return;
+    }
+    logsClientId.set(targetId);
+    showExecutorLogs.set(true);
+  };
 
   const isInputConnected = (nodeId: string, portId: string) =>
     (graphState.connections ?? []).some(
@@ -262,43 +736,12 @@
     }
   };
 
-  const buildAlternatingSelection = (clients: string[], index: number, range: number) => {
-    const total = clients.length;
-    const picked: string[] = [];
-    const seen = new Set<number>();
-
-    const add = (pos: number) => {
-      if (pos < 1 || pos > total) return;
-      if (seen.has(pos)) return;
-      seen.add(pos);
-      picked.push(clients[pos - 1]);
-    };
-
-    add(index);
-    let offset = 1;
-    while (picked.length < range && (index + offset <= total || index - offset >= 1)) {
-      add(index + offset);
-      if (picked.length >= range) break;
-      add(index - offset);
-      offset += 1;
-    }
-
-    return picked;
-  };
-
-  const clientRandomState = new Map<string, { baseIds: string[]; clientsKey: string; random: boolean }>();
-
-  const pickRandomIds = (pool: string[], count: number) => {
-    if (count <= 0) return [];
-    const copy = pool.slice();
-    for (let i = copy.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [copy[i], copy[j]] = [copy[j], copy[i]];
-    }
-    return copy.slice(0, count);
-  };
-
-  const computeClientSlice = (nodeId: string, indexRaw: number, rangeRaw: number, randomRaw: unknown) => {
+  const computeClientSlice = (
+    nodeId: string,
+    indexRaw: number,
+    rangeRaw: number,
+    randomRaw: unknown
+  ) => {
     const clients = clientIdsInOrder();
     if (clients.length === 0) return null;
 
@@ -307,44 +750,11 @@
     const index = clampInt(indexRaw, 1, total);
     const random = coerceBoolean(randomRaw, false);
 
-    if (!random) {
-      const ids = buildAlternatingSelection(clients, index, range);
-      const firstId = ids[0] ?? '';
-      clientRandomState.set(nodeId, { baseIds: [], clientsKey: clients.join('|'), random: false });
-      return { index, range, total, maxIndex: total, ids, firstId, random };
-    }
-
-    const clientsKey = clients.join('|');
-    const prev = clientRandomState.get(nodeId);
-    const prevRandom = prev?.random ?? false;
-    let baseIds = prev?.baseIds ?? [];
-
-    if (!prevRandom || prev?.clientsKey !== clientsKey) {
-      baseIds = [];
-    }
-
-    baseIds = baseIds.filter((id) => clients.includes(id));
-    if (baseIds.length > range) baseIds = baseIds.slice(0, range);
-
-    if (baseIds.length < range) {
-      const remaining = clients.filter((id) => !baseIds.includes(id));
-      const needed = range - baseIds.length;
-      baseIds = [...baseIds, ...pickRandomIds(remaining, needed)];
-    }
-
-    clientRandomState.set(nodeId, { baseIds, clientsKey, random: true });
-
-    const offset = index - 1;
     const ids: string[] = [];
-    const seen = new Set<string>();
-    for (const baseId of baseIds) {
-      const pos = clients.indexOf(baseId);
-      if (pos < 0) continue;
-      const nextId = clients[(pos + offset) % total];
-      if (!seen.has(nextId)) {
-        seen.add(nextId);
-        ids.push(nextId);
-      }
+    const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
+    const start = index - 1;
+    for (let i = 0; i < range; i += 1) {
+      ids.push(ordered[(start + i) % total]);
     }
 
     const firstId = ids[0] ?? '';
@@ -365,7 +775,9 @@
 
     // Keep node config in sync so labels + loop deploy use the selected client.
     const currentClientId =
-      typeof (node.config as any)?.clientId === 'string' ? String((node.config as any).clientId) : '';
+      typeof (node.config as any)?.clientId === 'string'
+        ? String((node.config as any).clientId)
+        : '';
     if (updateConfig) {
       if (slice.firstId && slice.firstId !== currentClientId) {
         nodeEngine.updateNodeConfig(nodeId, { clientId: slice.firstId });
@@ -376,8 +788,10 @@
 
     // Clamp + persist unconnected inputs (connected inputs are driven by upstream nodes).
     if (updateInputs) {
-      if (!isInputConnected(nodeId, 'index')) nodeEngine.updateNodeInputValue(nodeId, 'index', slice.index);
-      if (!isInputConnected(nodeId, 'range')) nodeEngine.updateNodeInputValue(nodeId, 'range', slice.range);
+      if (!isInputConnected(nodeId, 'index'))
+        nodeEngine.updateNodeInputValue(nodeId, 'index', slice.index);
+      if (!isInputConnected(nodeId, 'range'))
+        nodeEngine.updateNodeInputValue(nodeId, 'range', slice.range);
     }
 
     // Keep live display outputs usable even when the engine is stopped.
@@ -416,18 +830,25 @@
     const node = nodeEngine.getNode(nodeId);
     if (!node || node.type !== 'client-object') return;
 
-    const currentIndexRaw = typeof (node.inputValues as any)?.index === 'number' ? (node.inputValues as any).index : 1;
-    const currentRangeRaw = typeof (node.inputValues as any)?.range === 'number' ? (node.inputValues as any).range : 1;
+    const currentIndexRaw =
+      typeof (node.inputValues as any)?.index === 'number' ? (node.inputValues as any).index : 1;
+    const currentRangeRaw =
+      typeof (node.inputValues as any)?.range === 'number' ? (node.inputValues as any).range : 1;
     const currentRandomRaw = (node.inputValues as any)?.random;
 
     const desiredRange = typeof next.range === 'number' ? next.range : currentRangeRaw;
+    const desiredRandom =
+      typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
     const desiredIndex =
       typeof next.index === 'number'
         ? next.index
         : typeof next.clientId === 'string' && next.clientId
-          ? clients.indexOf(next.clientId) + 1
+          ? (() => {
+              const ordered = desiredRandom ? buildStableRandomOrder(nodeId, clients) : clients;
+              const pos = ordered.indexOf(next.clientId);
+              return pos >= 0 ? pos + 1 : currentIndexRaw;
+            })()
           : currentIndexRaw;
-    const desiredRandom = typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
 
     const slice = computeClientSlice(nodeId, desiredIndex, desiredRange, desiredRandom);
     if (!slice) return;
@@ -438,21 +859,6 @@
     }
 
     await syncClientNodeUi(nodeId, slice);
-  };
-
-  const toggleClientSelectionFromPicker = (nodeId: string, clientId: string) => {
-    if (!clientId) return;
-    const clients = clientIdsInOrder();
-    if (clients.length === 0) return;
-
-    const current = (get(managerState).selectedClientIds ?? []).map(String);
-    const set = new Set(current);
-    if (set.has(clientId)) set.delete(clientId);
-    else set.add(clientId);
-
-    const next = clients.filter((id) => set.has(id));
-    selectClients(next);
-    manualSyncNodeIds.add(String(nodeId));
   };
 
   const sendNodeOverride = (
@@ -466,19 +872,83 @@
     const node = graphState.nodes.find((n) => String(n.id) === String(nodeId));
     if (node?.type === 'client-object' && kind === 'config' && portId === 'clientId') return;
 
-    const loop = loopController?.loopActions.getDeployedLoopForNode(nodeId);
-    if (!loop) return;
-
-    const clientId = loopController?.loopActions.getLoopClientId(loop);
-    if (!clientId) return;
-
     const sdk = getSDK();
     if (!sdk) return;
 
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-set', {
-      loopId: loop.id,
-      overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
-    } as any);
+    const loop = loopController?.loopActions.getDeployedLoopForNode(nodeId);
+    if (loop) {
+      const clientId = loopController?.loopActions.getLoopClientId(loop);
+      if (!clientId) return;
+
+      sdk.sendPluginControl(
+        { mode: 'clientIds', ids: [clientId] },
+        'node-executor',
+        'override-set',
+        {
+          loopId: loop.id,
+          overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+        } as any
+      );
+
+      // Commit: persist the latest value after inactivity (debounced).
+      const key = `${clientId}|${loop.id}|${nodeId}|${kind}|${portId}`;
+      const existing = patchPendingCommitByKey.get(key);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        patchPendingCommitByKey.delete(key);
+        const sdkNow = getSDK();
+        if (!sdkNow) return;
+        sdkNow.sendPluginControl(
+          { mode: 'clientIds', ids: [clientId] },
+          'node-executor',
+          'override-set',
+          {
+            loopId: loop.id,
+            overrides: [{ nodeId, kind, portId, value }],
+          } as any
+        );
+      }, 420);
+      patchPendingCommitByKey.set(key, timer);
+      return;
+    }
+
+    const nodeKey = String(nodeId);
+    const patchTargets: { clientId: string; patch: DeployedPatch }[] = [];
+    for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+      if (patch.nodeIds.has(nodeKey)) patchTargets.push({ clientId, patch });
+    }
+    if (patchTargets.length === 0) return;
+
+    for (const target of patchTargets) {
+      sdk.sendPluginControl(
+        { mode: 'clientIds', ids: [target.clientId] },
+        'node-executor',
+        'override-set',
+        {
+          loopId: target.patch.patchId,
+          overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+        } as any
+      );
+
+      const key = `${target.clientId}|${target.patch.patchId}|${nodeId}|${kind}|${portId}`;
+      const existing = patchPendingCommitByKey.get(key);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => {
+        patchPendingCommitByKey.delete(key);
+        const sdkNow = getSDK();
+        if (!sdkNow) return;
+        sdkNow.sendPluginControl(
+          { mode: 'clientIds', ids: [target.clientId] },
+          'node-executor',
+          'override-set',
+          {
+            loopId: target.patch.patchId,
+            overrides: [{ nodeId, kind, portId, value }],
+          } as any
+        );
+      }, 420);
+      patchPendingCommitByKey.set(key, timer);
+    }
   };
 
   const reteBuilder = createReteBuilder({
@@ -487,7 +957,7 @@
     sockets,
     getNumberParamOptions: () => numberParamOptions,
     sendNodeOverride,
-    onClientNodePick: (nodeId, clientId) => toggleClientSelectionFromPicker(nodeId, clientId),
+    onClientNodePick: (nodeId, clientId) => void applyClientNodeSelection(nodeId, { clientId }),
     onClientNodeSelectInput: (nodeId, portId, value) =>
       void applyClientNodeSelection(nodeId, { [portId]: value } as any),
     onClientNodeRandom: (nodeId, value) => void applyClientNodeSelection(nodeId, { random: value }),
@@ -677,7 +1147,12 @@
 
   const collectCopySelection = (): { nodes: NodeInstance[]; ids: string[] } => {
     const selected = get(groupController.groupSelectionNodeIds);
-    const ids = selected.size > 0 ? Array.from(selected).map(String) : selectedNodeId ? [String(selectedNodeId)] : [];
+    const ids =
+      selected.size > 0
+        ? Array.from(selected).map(String)
+        : selectedNodeId
+          ? [String(selectedNodeId)]
+          : [];
     if (ids.length === 0) return { nodes: [], ids: [] };
 
     const nodeById = new Map(graphState.nodes.map((node) => [String(node.id), node]));
@@ -809,10 +1284,14 @@
     if (startPositions.size === 0) return;
 
     if (groupHeaderDragMoveHandler)
-      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, {
+        capture: true,
+      } as any);
     if (groupHeaderDragUpHandler) {
       window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
-      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, {
+        capture: true,
+      } as any);
     }
 
     groupHeaderDragPointerId = event.pointerId;
@@ -837,10 +1316,14 @@
       groupController.endProgrammaticTranslate();
 
       if (groupHeaderDragMoveHandler)
-        window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+        window.removeEventListener('pointermove', groupHeaderDragMoveHandler, {
+          capture: true,
+        } as any);
       if (groupHeaderDragUpHandler) {
         window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
-        window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+        window.removeEventListener('pointercancel', groupHeaderDragUpHandler, {
+          capture: true,
+        } as any);
       }
       groupHeaderDragMoveHandler = null;
       groupHeaderDragUpHandler = null;
@@ -867,7 +1350,8 @@
     if (target?.closest?.('input')) return;
 
     const effectiveLoops =
-      loopController?.getEffectiveLoops?.() ?? (loopController ? get(loopController.localLoops) : []);
+      loopController?.getEffectiveLoops?.() ??
+      (loopController ? get(loopController.localLoops) : []);
     const loop = (effectiveLoops ?? []).find((l: any) => String(l?.id ?? '') === String(loopId));
     if (!loop?.nodeIds?.length) return;
     if (!areaPlugin?.nodeViews) return;
@@ -886,10 +1370,14 @@
     if (startPositions.size === 0) return;
 
     if (loopHeaderDragMoveHandler)
-      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, {
+        capture: true,
+      } as any);
     if (loopHeaderDragUpHandler) {
       window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
-      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, {
+        capture: true,
+      } as any);
     }
 
     loopHeaderDragPointerId = event.pointerId;
@@ -914,10 +1402,14 @@
       groupController.endProgrammaticTranslate();
 
       if (loopHeaderDragMoveHandler)
-        window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+        window.removeEventListener('pointermove', loopHeaderDragMoveHandler, {
+          capture: true,
+        } as any);
       if (loopHeaderDragUpHandler) {
         window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
-        window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+        window.removeEventListener('pointercancel', loopHeaderDragUpHandler, {
+          capture: true,
+        } as any);
       }
       loopHeaderDragMoveHandler = null;
       loopHeaderDragUpHandler = null;
@@ -936,14 +1428,15 @@
     event.stopPropagation();
   };
 
-
   const handleToggleEngine = () => {
     if (get(isRunningStore)) {
       nodeEngine.stop();
       loopController?.loopActions.stopAllClientEffects();
       loopController?.loopActions.stopAllDeployedLoops();
+      stopAllDeployedPatches();
     } else {
       nodeEngine.start();
+      schedulePatchReconcile('engine-start');
     }
   };
 
@@ -1007,6 +1500,10 @@
     refreshNumberParams();
     paramsUnsub = parameterRegistry.subscribe(() => refreshNumberParams());
 
+    tickUnsub = nodeEngine.tickTime.subscribe(() => {
+      sendMidiBridgeOverrides();
+    });
+
     editor = new NodeEditor('fluffy-rete');
     areaPlugin = new AreaPlugin(container);
     const connection: any = new ConnectionPlugin();
@@ -1035,7 +1532,11 @@
             key: String(initial.key),
           };
           const desiredSide = initialSocket.side === 'output' ? 'input' : 'output';
-          const snapped = findPortRowSocketAt(lastPointerClient.x, lastPointerClient.y, desiredSide);
+          const snapped = findPortRowSocketAt(
+            lastPointerClient.x,
+            lastPointerClient.y,
+            desiredSide
+          );
           if (snapped) {
             if (desiredSide === 'input') {
               replaceSingleInputConnection(snapped.nodeId, snapped.key);
@@ -1072,7 +1573,8 @@
     render.addPreset(
       SveltePresets.classic.setup({
         socketPositionWatcher:
-          socketPositionWatcher ?? (socketPositionWatcher = new LiveDOMSocketPosition(requestFramesUpdate)),
+          socketPositionWatcher ??
+          (socketPositionWatcher = new LiveDOMSocketPosition(requestFramesUpdate)),
         customize: {
           node: () => ReteNode,
           connection: () => ReteConnection,
@@ -1110,18 +1612,27 @@
         void midiService.init();
       }
       graphSync?.schedule(state);
+      schedulePatchReconcile('graph-change');
+
+      // Keep MIDI bridge wiring responsive (MIDI nodes are excluded from deploy topology).
+      const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
+      if (first) syncMidiBridgeRoutes(first.patchId, first.nodeIds);
     });
 
     let lastClientKey = '';
     let lastSelectedKey = '';
     managerUnsub = managerState.subscribe(($state) => {
-      const clients = ($state.clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+      const clients = ($state.clients ?? [])
+        .map((c: any) => String(c?.clientId ?? ''))
+        .filter(Boolean);
       const selected = ($state.selectedClientIds ?? []).map(String);
       const nextClientKey = clients.join('|');
       const nextSelectedKey = selected.join('|');
       if (nextClientKey === lastClientKey && nextSelectedKey === lastSelectedKey) return;
       lastClientKey = nextClientKey;
       lastSelectedKey = nextSelectedKey;
+
+      schedulePatchReconcile('manager-state');
 
       if (clients.length === 0) return;
 
@@ -1130,18 +1641,25 @@
       const firstId = selectedInOrder[0] ?? clients[0] ?? '';
       const index = Math.max(1, clients.indexOf(firstId) + 1);
       const ids = selectedInOrder.length > 0 ? selectedInOrder : firstId ? [firstId] : [];
-      const slice = { index, range, total: clients.length, maxIndex: clients.length, ids, firstId, random: false };
+      const slice = {
+        index,
+        range,
+        total: clients.length,
+        maxIndex: clients.length,
+        ids,
+        firstId,
+        random: false,
+      };
       if (!slice) return;
 
       const engineState = get(graphStateStore);
       for (const node of engineState.nodes ?? []) {
         if (String(node.type) !== 'client-object') continue;
         const nodeId = String(node.id);
-        const skipInputs = manualSyncNodeIds.has(nodeId);
         const nodeInstance = nodeEngine.getNode(nodeId);
         const randomActive = coerceBoolean((nodeInstance?.inputValues as any)?.random, false);
-        void syncClientNodeUi(nodeId, slice, { updateInputs: !skipInputs && !randomActive });
-        if (skipInputs) manualSyncNodeIds.delete(nodeId);
+        if (randomActive) continue;
+        void syncClientNodeUi(nodeId, slice);
       }
     });
 
@@ -1300,7 +1818,12 @@
         const top = Number(frame?.top);
         const width = Number(frame?.width);
         const height = Number(frame?.height);
-        if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height))
+        if (
+          !Number.isFinite(left) ||
+          !Number.isFinite(top) ||
+          !Number.isFinite(width) ||
+          !Number.isFinite(height)
+        )
           continue;
 
         const inside = gx >= left && gx <= left + width && gy >= top && gy <= top + height;
@@ -1411,8 +1934,13 @@
   onDestroy(() => {
     graphUnsub?.();
     paramsUnsub?.();
+    tickUnsub?.();
     managerUnsub?.();
     midiController.stop();
+    if (patchDeployTimer) clearTimeout(patchDeployTimer);
+    for (const timer of patchPendingCommitByKey.values()) clearTimeout(timer);
+    patchPendingCommitByKey.clear();
+    stopAllDeployedPatches();
     loopController?.destroy();
     groupController.destroy();
     minimapController.destroy();
@@ -1427,20 +1955,28 @@
       container?.removeEventListener('dblclick', dblclickHandler, { capture: true } as any);
     if (keydownHandler) window.removeEventListener('keydown', keydownHandler);
     if (groupHeaderDragMoveHandler)
-      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', groupHeaderDragMoveHandler, {
+        capture: true,
+      } as any);
     if (groupHeaderDragUpHandler) {
       window.removeEventListener('pointerup', groupHeaderDragUpHandler, { capture: true } as any);
-      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', groupHeaderDragUpHandler, {
+        capture: true,
+      } as any);
     }
     if (groupHeaderDragPointerId !== null) groupController.endProgrammaticTranslate();
     groupHeaderDragPointerId = null;
     groupHeaderDragMoveHandler = null;
     groupHeaderDragUpHandler = null;
     if (loopHeaderDragMoveHandler)
-      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', loopHeaderDragMoveHandler, {
+        capture: true,
+      } as any);
     if (loopHeaderDragUpHandler) {
       window.removeEventListener('pointerup', loopHeaderDragUpHandler, { capture: true } as any);
-      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', loopHeaderDragUpHandler, {
+        capture: true,
+      } as any);
     }
     if (loopHeaderDragPointerId !== null) groupController.endProgrammaticTranslate();
     loopHeaderDragPointerId = null;
@@ -1494,6 +2030,7 @@
       lastError={$lastErrorStore}
       isMenuOpen={isToolbarMenuOpen}
       onToggleEngine={handleToggleEngine}
+      onToggleExecutorLogs={toggleExecutorLogs}
       onClear={handleClear}
       onToggleMenu={toggleToolbarMenu}
       onMenuPick={handleToolbarMenuPick}
@@ -1516,6 +2053,16 @@
   </svelte:fragment>
 
   <svelte:fragment slot="overlays">
+    {#if $nodeGraphPerfOverlay}
+      <PerformanceDebugOverlay
+        visible={true}
+        {nodeCount}
+        connectionCount={graphState.connections?.length ?? 0}
+        rendererType="rete"
+        shadowsEnabled={$nodeGraphEdgeShadows}
+      />
+    {/if}
+
     {#if $canvasToast}
       <div class="canvas-toast" aria-live="polite">{$canvasToast}</div>
     {/if}

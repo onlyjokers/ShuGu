@@ -1,16 +1,24 @@
 import { Controller, Get } from '@nestjs/common';
 import { ClientRegistryService } from './client-registry/client-registry.service.js';
+import { AssetsService } from './assets/assets.service.js';
 
 @Controller()
 export class AppController {
-    constructor(private readonly clientRegistry: ClientRegistryService) { }
+    constructor(
+        private readonly clientRegistry: ClientRegistryService,
+        private readonly assets: AssetsService
+    ) { }
 
     @Get('health')
-    health() {
+    async health() {
+        const assetHealth = await this.assets
+            .healthCheck()
+            .catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
         return {
-            status: 'ok',
+            status: assetHealth && (assetHealth as any).ok ? 'ok' : 'degraded',
             timestamp: Date.now(),
             uptime: process.uptime(),
+            assets: assetHealth,
         };
     }
 

@@ -14,6 +14,7 @@ import type { Connection, GraphState, NodeInstance, PortType } from './types';
 import { nodeRegistry } from './registry';
 import { getSelectOptionsForInput } from './selection-options';
 import { parameterRegistry } from '../parameters/registry';
+import { exportGraphForPatch } from './patch-export';
 
 export type LocalLoop = {
   id: string;
@@ -24,6 +25,35 @@ export type LocalLoop = {
 };
 
 const TICK_INTERVAL = 33; // ~30 FPS
+
+function capabilityForNodeType(type: string | undefined): string | null {
+  if (!type) return null;
+  if (type === 'proc-client-sensors') return 'sensors';
+  if (type === 'proc-flashlight') return 'flashlight';
+  if (type === 'proc-screen-color') return 'screen';
+  if (type === 'proc-synth-update') return 'sound';
+  if (type === 'tone-osc') return 'sound';
+  if (type === 'tone-delay') return 'sound';
+  if (type === 'tone-resonator') return 'sound';
+  if (type === 'tone-pitch') return 'sound';
+  if (type === 'tone-reverb') return 'sound';
+  if (type === 'tone-granular') return 'sound';
+  if (type === 'tone-player') return 'sound';
+  if (type === 'play-media') return 'sound';
+  if (type === 'load-media-sound') return 'sound';
+  if (type === 'proc-scene-switch') return 'visual';
+  if (type === 'audio-out') return 'sound';
+  if (type === 'load-audio-from-assets') return 'sound';
+  return null;
+}
+
+function hashString(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
 
 class NodeEngineClass {
   private runtime: NodeRuntime;
@@ -209,9 +239,20 @@ class NodeEngineClass {
       sourceType = (inputSourcePort?.type ?? 'any') as PortType;
     }
     const typeMismatch = sourceType !== 'any' && targetType !== 'any' && sourceType !== targetType;
+
+    // Audio ports are never compatible with "any" to prevent accidental numeric/string links.
+    // This matches the plan's intent: audio wires only connect to audio wires.
+    const audioMismatch =
+      sourceType === 'audio' || targetType === 'audio' ? sourceType !== 'audio' || targetType !== 'audio' : false;
     if (typeMismatch) {
       this.lastError.set(
         `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
+      );
+      return false;
+    }
+    if (audioMismatch) {
+      this.lastError.set(
+        `Type mismatch: audio connections must be audio -> audio (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
       );
       return false;
     }
@@ -420,33 +461,6 @@ class NodeEngineClass {
       if (!indexById.has(n.id)) strongconnect(n.id);
     }
 
-    const capabilityForNodeType = (type: string | undefined): string | null => {
-      if (!type) return null;
-      if (type === 'proc-client-sensors') return 'sensors';
-      if (type === 'proc-flashlight') return 'flashlight';
-      if (type === 'proc-screen-color') return 'screen';
-      if (type === 'proc-synth-update') return 'sound';
-      if (type === 'tone-osc') return 'sound';
-      if (type === 'tone-delay') return 'sound';
-      if (type === 'tone-resonator') return 'sound';
-      if (type === 'tone-pitch') return 'sound';
-      if (type === 'tone-reverb') return 'sound';
-      if (type === 'tone-granular') return 'sound';
-      if (type === 'tone-player') return 'sound';
-      if (type === 'play-media') return 'sound';
-      if (type === 'load-media-sound') return 'sound';
-      if (type === 'proc-scene-switch') return 'visual';
-      return null;
-    };
-
-    const hashString = (input: string) => {
-      let hash = 0;
-      for (let i = 0; i < input.length; i++) {
-        hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-      }
-      return hash.toString(36);
-    };
-
     const loops: LocalLoop[] = [];
     for (const component of sccs) {
       if (component.length === 0) continue;
@@ -571,6 +585,80 @@ class NodeEngineClass {
         protocolVersion: PROTOCOL_VERSION,
         executorVersion: 'node-executor-v1',
       },
+    };
+  }
+
+  /**
+   * Export a patch subgraph rooted at `audio-out` for client-side execution.
+   * Throws if the patch contains node types outside the client whitelist.
+   */
+  exportGraphForPatch(): {
+    graph: Pick<GraphState, 'nodes' | 'connections'>;
+    meta: {
+      loopId: string;
+      requiredCapabilities: string[];
+      tickIntervalMs: number;
+      protocolVersion: typeof PROTOCOL_VERSION;
+      executorVersion: string;
+    };
+    assetRefs: string[];
+  } {
+    const snapshot = this.runtime.exportGraph();
+    const patch = exportGraphForPatch(snapshot, { rootType: 'audio-out', nodeRegistry });
+
+    const allowedNodeTypes = new Set([
+      // Pure + scheduling
+      'math',
+      'logic-add',
+      'logic-multiple',
+      'logic-subtract',
+      'logic-divide',
+      'logic-if',
+      'logic-for',
+      'logic-sleep',
+      'lfo',
+      'number',
+      'number-stabilizer',
+      // Audio sources/effects
+      'load-audio-from-assets',
+      'tone-osc',
+      'tone-delay',
+      'tone-resonator',
+      'tone-pitch',
+      'tone-reverb',
+      'tone-granular',
+      'tone-player',
+      'play-media',
+      'load-media-sound',
+      // Patch root
+      'audio-out',
+    ]);
+
+    for (const n of patch.graph.nodes) {
+      if (!allowedNodeTypes.has(String(n.type))) {
+        throw new Error(`Patch contains non-deployable node type: ${String(n.type)}`);
+      }
+    }
+
+    const caps = new Set<string>();
+    for (const n of patch.graph.nodes) {
+      const cap = capabilityForNodeType(String(n.type));
+      if (cap) caps.add(cap);
+    }
+
+    const nodeKey = patch.graph.nodes.map((n) => String(n.id)).sort().join(',');
+    const patchId = `patch:${patch.rootNodeId}:${hashString(nodeKey)}`;
+
+    return {
+      graph: patch.graph,
+      meta: {
+        loopId: patchId,
+        requiredCapabilities: Array.from(caps),
+        tickIntervalMs: TICK_INTERVAL,
+        protocolVersion: PROTOCOL_VERSION,
+        executorVersion: 'node-executor-v1',
+      },
+      assetRefs: patch.assetRefs,
     };
   }
 }

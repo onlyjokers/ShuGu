@@ -1,0 +1,66 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Upload Image (Asset Service) → Play Media(showImage) → Client",
+  "purpose": "体验图片上传到 Asset Service + client 侧 MediaEngine(showImage) 播放链路",
+  "howTo": [
+    "1) manager Node Graph 点 ▶ Start。",
+    "2) 选择 Client 节点（Clients）目标（或用 Manager 顶部选择的 client）。",
+    "3) Load Media Image → Load Image 选图片（会上传并写入 asset:<id>）。",
+    "4) client 会显示图片；可调 Play Media 的 Image Duration（ms）。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 980, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      },
+      {
+        "id": "node-load-image",
+        "type": "load-media-image",
+        "position": { "x": 120, "y": 260 },
+        "config": { "url": "" },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-play-media",
+        "type": "play-media",
+        "position": { "x": 520, "y": 260 },
+        "config": {
+          "audioUrl": "",
+          "imageUrl": "",
+          "videoUrl": "",
+          "volume": 1,
+          "loop": false,
+          "fadeIn": 0,
+          "muted": true,
+          "imageDuration": 2500
+        },
+        "inputValues": {},
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-image-url",
+        "sourceNodeId": "node-load-image",
+        "sourcePortId": "url",
+        "targetNodeId": "node-play-media",
+        "targetPortId": "imageUrl"
+      },
+      {
+        "id": "conn-media-cmd",
+        "sourceNodeId": "node-play-media",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}
+

@@ -67,7 +67,10 @@ export function loadOptionalEnv(): { loadedFrom: string | null; keys: string[] }
     const parsed = parseEnvFile(fs.readFileSync(filePath, 'utf8'));
     const keys: string[] = [];
     for (const [k, v] of Object.entries(parsed)) {
-      if (process.env[k] === undefined) {
+      const existing = process.env[k];
+      const shouldSet =
+        existing === undefined || (typeof existing === 'string' && existing.trim() === '');
+      if (shouldSet) {
         process.env[k] = v;
         keys.push(k);
       }

@@ -14,6 +14,7 @@ import { targetClients } from '@shugu/protocol';
 
 import type { GraphState } from './types';
 import { nodeEngine } from './engine';
+import { nodeRegistry } from './registry';
 import { getSDK, state as managerState } from '$lib/stores/manager';
 
 export type AssetManifest = {
@@ -81,10 +82,87 @@ function scanGraphForAssetRefs(graph: GraphState): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
 
-  for (const node of graph.nodes ?? []) {
+  const normalizeAssetPickerValue = (raw: unknown): string | null => {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    return normalizeAssetRef(trimmed) ?? `asset:${trimmed}`;
+  };
+
+  const nodes = (graph.nodes ?? []).slice();
+  const byId = new Map(nodes.map((n) => [String(n.id), n]));
+
+  const incomingByTarget = new Map<string, { sourceNodeId: string; sourcePortId: string; targetPortId: string }[]>();
+  for (const c of graph.connections ?? []) {
+    const targetNodeId = String(c.targetNodeId);
+    const list = incomingByTarget.get(targetNodeId) ?? [];
+    list.push({
+      sourceNodeId: String(c.sourceNodeId),
+      sourcePortId: String(c.sourcePortId),
+      targetPortId: String(c.targetPortId),
+    });
+    incomingByTarget.set(targetNodeId, list);
+  }
+  for (const list of incomingByTarget.values()) {
+    list.sort(
+      (a, b) =>
+        a.targetPortId.localeCompare(b.targetPortId) ||
+        a.sourcePortId.localeCompare(b.sourcePortId) ||
+        a.sourceNodeId.localeCompare(b.sourceNodeId)
+    );
+  }
+
+  const shouldTraverse = (targetNodeId: string, targetPortId: string): boolean => {
+    const node = byId.get(String(targetNodeId));
+    if (!node) return true;
+    const def = nodeRegistry.get(String(node.type));
+    const port = def?.inputs?.find((p) => String(p.id) === String(targetPortId));
+    const type = (port?.type ?? 'any') as string;
+    // Asset preload should follow "real usage" dependencies; routing nodes (client) and command sinks are excluded.
+    if (type === 'client' || type === 'command') return false;
+    return true;
+  };
+
+  // Prefer a traversal rooted at sinks (Max/MSP style): start from patch roots / client routing and walk upstream.
+  // Order matters for preload priority: audio-out first, then client-object, then fallback to all nodes.
+  const audioOutRoots = nodes.filter((n) => n.type === 'audio-out').map((n) => String(n.id)).sort();
+  const clientRoots = nodes.filter((n) => n.type === 'client-object').map((n) => String(n.id)).sort();
+  const roots = [...audioOutRoots, ...clientRoots];
+  const startIds = roots.length > 0 ? roots : nodes.map((n) => String(n.id));
+
+  const visited = new Set<string>();
+  const visit = (nodeId: string) => {
+    const id = String(nodeId);
+    if (!id || visited.has(id)) return;
+    visited.add(id);
+
+    const incoming = incomingByTarget.get(id) ?? [];
+    for (const c of incoming) {
+      if (!shouldTraverse(id, c.targetPortId)) continue;
+      visit(c.sourceNodeId);
+    }
+
+    const node = byId.get(id);
+    if (!node) return;
+
+    // Also include asset-picker config fields (they may store bare assetIds, not `asset:<id>`).
+    const def = nodeRegistry.get(String(node.type));
+    for (const field of def?.configSchema ?? []) {
+      if ((field as any)?.type !== 'asset-picker') continue;
+      const key = String((field as any).key ?? '');
+      if (!key) continue;
+      const normalized = normalizeAssetPickerValue((node.config as any)?.[key]);
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized);
+        out.push(normalized);
+      }
+    }
+
     collectAssetRefs(node?.config ?? null, out, seen);
     collectAssetRefs(node?.inputValues ?? null, out, seen);
-  }
+  };
+
+  for (const id of startIds) visit(id);
 
   return out;
 }
@@ -138,4 +216,3 @@ managerState.subscribe(($state) => {
   if (pending.length === 0) return;
   pushManifestToClientIds(pending, latestManifest);
 });
-

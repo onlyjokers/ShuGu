@@ -1,0 +1,100 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Patch: Load Media Sound → Tone Player → Tone Delay → Audio Patch to Client",
+  "purpose": "体验上传到 Asset Service（asset:<id>）+ Tone.Player 播放 + Delay 效果 + Patch Deploy",
+  "notes": [
+    "导入后需要在 `Load Media Sound` 节点里选择一个音频文件（会上传到 Asset Service，返回 asset:<id>）。",
+    "需要配置 `shugu-server-url` + `shugu-asset-write-token`（Manager connect 页）。"
+  ],
+  "howTo": [
+    "1) client 点 Start（启用 ToneAudioEngine）。",
+    "2) manager Node Graph 点 ▶ Start。",
+    "3) 在 Load Media Sound 里选择音频文件（上传后自动得到 assetRef）。",
+    "4) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "5) Patch 会自动部署到该 client；调 Tone Delay 的 Time/Wet/Feedback（实时生效，松手后保持）。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-load-media-sound",
+        "type": "load-media-sound",
+        "position": { "x": 120, "y": 180 },
+        "config": { "url": "" },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-tone-player",
+        "type": "tone-player",
+        "position": { "x": 460, "y": 180 },
+        "config": {
+          "url": "",
+          "loop": true,
+          "autostart": true,
+          "playbackRate": 1,
+          "detune": 0,
+          "volume": 0.9,
+          "bus": "main",
+          "enabled": true
+        },
+        "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-tone-delay",
+        "type": "tone-delay",
+        "position": { "x": 760, "y": 180 },
+        "config": { "time": 0.25, "feedback": 0.35, "wet": 0.3, "bus": "main", "order": 10, "enabled": true },
+        "inputValues": { "time": 0.25, "feedback": 0.35, "wet": 0.3 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 1080, "y": 180 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 1080, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-assetref-to-player",
+        "sourceNodeId": "node-load-media-sound",
+        "sourcePortId": "url",
+        "targetNodeId": "node-tone-player",
+        "targetPortId": "url"
+      },
+      {
+        "id": "conn-player-to-delay",
+        "sourceNodeId": "node-tone-player",
+        "sourcePortId": "value",
+        "targetNodeId": "node-tone-delay",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-delay-to-out",
+        "sourceNodeId": "node-tone-delay",
+        "sourcePortId": "out",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}
