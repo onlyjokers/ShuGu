@@ -3,10 +3,14 @@
  */
 import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
-import type { SensorDataMessage, ClientInfo, ScreenColorPayload } from '@shugu/protocol';
+import type { SensorDataMessage, ScreenColorPayload, ControlAction, ControlPayload, TargetSelector } from '@shugu/protocol';
+import { targetClients, targetGroup } from '@shugu/protocol';
 
 import { parameterRegistry } from '../parameters/registry';
 import { registerDefaultControlParameters } from '../parameters/presets';
+import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
+
+const SEND_TO_DISPLAY_STORAGE_KEY = 'shugu-send-to-display';
 
 // SDK instance
 let sdk: ManagerSDK | null = null;
@@ -51,6 +55,8 @@ export const clientReadiness = writable<Map<string, ClientReadiness>>(new Map())
 // Derived stores
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clients = derived(state, ($state) => $state.clients);
+export const displayClients = derived(clients, ($clients) => $clients.filter((c) => c.group === 'display'));
+export const audienceClients = derived(clients, ($clients) => $clients.filter((c) => c.group !== 'display'));
 export const selectedClients = derived(state, ($state) =>
     $state.clients.filter(c => $state.selectedClientIds.includes(c.clientId))
 );
@@ -58,6 +64,24 @@ export const timeOffset = derived(state, ($state) => $state.timeSync.offset);
 export const serverTime = derived(state, ($state) =>
     Date.now() + $state.timeSync.offset
 );
+
+export const sendToDisplayEnabled = writable(false);
+
+if (typeof window !== 'undefined') {
+    try {
+        sendToDisplayEnabled.set(window.localStorage.getItem(SEND_TO_DISPLAY_STORAGE_KEY) === '1');
+    } catch {
+        // ignore
+    }
+
+    sendToDisplayEnabled.subscribe((enabled) => {
+        try {
+            window.localStorage.setItem(SEND_TO_DISPLAY_STORAGE_KEY, enabled ? '1' : '0');
+        } catch {
+            // ignore
+        }
+    });
+}
 
 /**
  * Initialize and connect to server
@@ -75,9 +99,10 @@ export function connect(config: ManagerSDKConfig): void {
     // Subscribe to state changes
     sdk.onStateChange((newState) => {
         state.set(newState);
+        const ids = new Set((newState.clients ?? []).map((c) => c.clientId));
+
         clientReadiness.update((prev) => {
             const next = new Map(prev);
-            const ids = new Set((newState.clients ?? []).map((c) => String((c as any).clientId ?? '')).filter(Boolean));
 
             // Remove vanished clients
             for (const id of next.keys()) {
@@ -94,6 +119,14 @@ export function connect(config: ManagerSDKConfig): void {
 
             return next;
         });
+
+        sensorData.update((prev) => {
+            const next = new Map(prev);
+            for (const id of next.keys()) {
+                if (!ids.has(id)) next.delete(id);
+            }
+            return next;
+        });
     });
 
     // Subscribe to sensor data
@@ -105,7 +138,7 @@ export function connect(config: ManagerSDKConfig): void {
 
         // Parse multimedia-core readiness events (custom sensor channel).
         if (data.sensorType === 'custom') {
-            const payload: any = (data as any).payload ?? {};
+            const payload = (data.payload ?? {}) as Record<string, unknown>;
             if (payload?.kind === 'multimedia-core' && payload?.event === 'asset-preload') {
                 const status = typeof payload.status === 'string' ? payload.status : '';
                 const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : undefined;
@@ -136,6 +169,18 @@ export function connect(config: ManagerSDKConfig): void {
                     return next;
                 });
             }
+
+            if (payload?.kind === 'display' && payload?.event === 'ready') {
+                const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : undefined;
+                const at = Date.now();
+
+                clientReadiness.update((prev) => {
+                    const next = new Map(prev);
+                    const current = next.get(data.clientId) ?? { status: 'connected' as const, updatedAt: at };
+                    next.set(data.clientId, { ...current, status: 'assets-ready', manifestId, updatedAt: at });
+                    return next;
+                });
+            }
         }
     });
 
@@ -157,7 +202,8 @@ export function disconnect(): void {
  * Select clients by ID
  */
 export function selectClients(clientIds: string[]): void {
-    sdk?.selectClients(clientIds);
+    const audienceIdSet = new Set(get(audienceClients).map((c) => c.clientId));
+    sdk?.selectClients(clientIds.filter((id) => audienceIdSet.has(id)));
 }
 
 /**
@@ -178,7 +224,7 @@ export function toggleClientSelection(clientId: string): void {
  * Select all clients
  */
 export function selectAllClients(): void {
-    sdk?.selectAll();
+    selectClients(get(audienceClients).map((c) => c.clientId));
 }
 
 /**
@@ -186,6 +232,44 @@ export function selectAllClients(): void {
  */
 export function clearSelection(): void {
     sdk?.clearSelection();
+}
+
+function resolveAudienceTarget(toAll: boolean): TargetSelector | null {
+    const currentState = get(state);
+    const audienceIdSet = new Set(currentState.clients.filter((c) => c.group !== 'display').map((c) => c.clientId));
+
+    const ids = toAll
+        ? Array.from(audienceIdSet)
+        : currentState.selectedClientIds.filter((id) => audienceIdSet.has(id));
+
+    if (ids.length === 0) return null;
+    return targetClients(ids);
+}
+
+function shouldMirrorToDisplay(action: ControlAction): boolean {
+    return action === 'showImage' || action === 'hideImage' || action === 'playMedia' || action === 'stopMedia' || action === 'screenColor';
+}
+
+function maybeMirrorToDisplay(action: ControlAction, payload: ControlPayload, executeAt?: number): void {
+    if (!get(sendToDisplayEnabled)) return;
+    if (!shouldMirrorToDisplay(action)) return;
+
+    const bridge = get(displayBridgeState);
+    const hasLocal = bridge.status === 'connected';
+    const hasRemote = get(displayClients).length > 0;
+    if (!hasLocal && !hasRemote) return;
+
+    if (hasLocal) {
+        const currentState = get(state);
+        const executeAtLocal =
+            typeof executeAt === 'number' && Number.isFinite(executeAt)
+                ? executeAt - currentState.timeSync.offset
+                : undefined;
+        sendLocalDisplayControl(action, payload, executeAtLocal);
+        return;
+    }
+
+    sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
 }
 
 // Control actions
@@ -239,7 +323,11 @@ export function screenColor(
         ? { color: colorOrPayload, opacity, mode: 'solid' }
         : colorOrPayload;
 
-    sdk?.screenColor(payload, toAll, executeAt);
+    const target = resolveAudienceTarget(toAll);
+    if (target && sdk) {
+        sdk.sendControl(target, 'screenColor', payload, executeAt);
+    }
+    maybeMirrorToDisplay('screenColor', payload, executeAt);
 }
 
 export function playSound(url: string, options?: { volume?: number; loop?: boolean }, toAll = false, executeAt?: number): void {
@@ -258,11 +346,20 @@ export function playMedia(
     toAll = false,
     executeAt?: number
 ): void {
-    sdk?.playMedia(url, options, toAll, executeAt);
+    const payload = { url, ...options };
+    const target = resolveAudienceTarget(toAll);
+    if (target && sdk) {
+        sdk.sendControl(target, 'playMedia', payload, executeAt);
+    }
+    maybeMirrorToDisplay('playMedia', payload, executeAt);
 }
 
 export function stopMedia(toAll = false): void {
-    sdk?.stopMedia(toAll);
+    const target = resolveAudienceTarget(toAll);
+    if (target && sdk) {
+        sdk.sendControl(target, 'stopMedia', {});
+    }
+    maybeMirrorToDisplay('stopMedia', {}, undefined);
 }
 
 export function stopSound(toAll = false): void {
@@ -282,11 +379,20 @@ export function showImage(
     toAll = false,
     executeAt?: number
 ): void {
-    sdk?.showImage(url, options, toAll, executeAt);
+    const payload = { url, ...options };
+    const target = resolveAudienceTarget(toAll);
+    if (target && sdk) {
+        sdk.sendControl(target, 'showImage', payload, executeAt);
+    }
+    maybeMirrorToDisplay('showImage', payload, executeAt);
 }
 
 export function hideImage(toAll = false): void {
-    sdk?.hideImage(toAll);
+    const target = resolveAudienceTarget(toAll);
+    if (target && sdk) {
+        sdk.sendControl(target, 'hideImage', {});
+    }
+    maybeMirrorToDisplay('hideImage', {}, undefined);
 }
 
 export function switchScene(sceneId: string, toAll = false, executeAt?: number): void {

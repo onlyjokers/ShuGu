@@ -1,0 +1,384 @@
+/**
+ * Purpose: Local Display bridge (Manager ↔ Display) using MessageChannel/MessagePort.
+ *
+ * Phase 4 scope:
+ * - Open Display window with `pairToken/server/assetReadToken` query params
+ * - Pair via `window.postMessage` and transfer a dedicated `MessagePort`
+ * - Send local control/plugin/manifest messages to Display
+ * - Receive one-shot `shugu:display:ready` from Display
+ *
+ * Phase 5 will wire this into Manager UI (DisplayPanel).
+ *
+ * Phase 6 scope:
+ * - After pairing, immediately send latest asset-manifest to Display via MessagePort
+ * - Subscribe to manifest updates and push updates to the paired Display (still no extra ready; Display enforces readyOnce)
+ */
+
+import { get, writable } from 'svelte/store';
+import type { ControlAction, ControlPayload } from '@shugu/protocol';
+import { getLatestManifest, subscribeLatestManifest, type AssetManifest } from '$lib/nodes/asset-manifest-store';
+
+export type DisplayBridgeStatus = 'idle' | 'opening' | 'pairing' | 'connected' | 'closed' | 'error';
+
+export type DisplayBridgeState = {
+  status: DisplayBridgeStatus;
+  displayUrl: string | null;
+  displayOrigin: string | null;
+  pairToken: string | null;
+  ready: boolean;
+  readyAt: number | null;
+  readyManifestId: string | null;
+  error: string | null;
+};
+
+export const displayBridgeState = writable<DisplayBridgeState>({
+  status: 'idle',
+  displayUrl: null,
+  displayOrigin: null,
+  pairToken: null,
+  ready: false,
+  readyAt: null,
+  readyManifestId: null,
+  error: null,
+});
+
+type DisplayPairMessage = {
+  type: 'shugu:display:pair';
+  token: string;
+  managerOrigin: string;
+  serverUrl: string;
+  assetReadToken?: string;
+};
+
+type DisplayControlMessage = {
+  type: 'shugu:display:control';
+  action: ControlAction;
+  payload: ControlPayload;
+  executeAtLocal?: number;
+};
+
+type DisplayPluginMessage = {
+  type: 'shugu:display:plugin';
+  pluginId: string;
+  command: string;
+  payload?: Record<string, unknown>;
+};
+
+export type AssetManifestSnapshot = {
+  manifestId: string;
+  assets: string[];
+  updatedAt?: number;
+};
+
+type DisplayReadyMessage = {
+  type: 'shugu:display:ready';
+  manifestId?: string | null;
+  at?: number | null;
+};
+
+const DISPLAY_DEV_PORT = 5175;
+const DEFAULT_SERVER_PORT = 3001;
+const ASSET_READ_TOKEN_STORAGE_KEY = 'shugu-asset-read-token';
+
+let displayWindow: Window | null = null;
+let controlPort: MessagePort | null = null;
+let closeWatchTimer: ReturnType<typeof setInterval> | null = null;
+let manifestUnsub: (() => void) | null = null;
+let lastManifestIdSentToLocal: string | null = null;
+
+function createRandomToken(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  }
+  return `${prefix}${Math.random().toString(36).slice(2, 12)}${Date.now().toString(36)}`;
+}
+
+function getDefaultDisplayUrl(): URL {
+  const base = new URL(window.location.origin);
+  base.port = String(DISPLAY_DEV_PORT);
+  base.pathname = '/';
+  base.search = '';
+  base.hash = '';
+  return base;
+}
+
+function getDefaultServerUrl(): string {
+  const saved = window.localStorage.getItem('shugu-server-url');
+  if (saved && saved.trim()) return saved.trim();
+  return `https://${window.location.hostname}:${DEFAULT_SERVER_PORT}`;
+}
+
+function getDefaultAssetReadToken(): string {
+  const saved = window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY);
+  return saved && saved.trim() ? saved.trim() : '';
+}
+
+function stopCloseWatch(): void {
+  if (closeWatchTimer) {
+    clearInterval(closeWatchTimer);
+    closeWatchTimer = null;
+  }
+}
+
+function teardownPort(): void {
+  if (manifestUnsub) {
+    manifestUnsub();
+    manifestUnsub = null;
+  }
+  lastManifestIdSentToLocal = null;
+
+  if (!controlPort) return;
+  try {
+    controlPort.onmessage = null;
+    controlPort.close();
+  } catch {
+    // ignore
+  }
+  controlPort = null;
+}
+
+export function teardownDisplayBridge(): void {
+  stopCloseWatch();
+  teardownPort();
+  displayWindow = null;
+
+  displayBridgeState.set({
+    status: 'idle',
+    displayUrl: null,
+    displayOrigin: null,
+    pairToken: null,
+    ready: false,
+    readyAt: null,
+    readyManifestId: null,
+    error: null,
+  });
+}
+
+function ensureCloseWatch(): void {
+  stopCloseWatch();
+  closeWatchTimer = setInterval(() => {
+    if (displayWindow && displayWindow.closed) {
+      teardownPort();
+      displayWindow = null;
+      displayBridgeState.update((s) => ({
+        ...s,
+        status: 'closed',
+      }));
+      stopCloseWatch();
+    }
+  }, 350);
+}
+
+function handlePortMessage(event: MessageEvent): void {
+  const data = event.data as unknown;
+  if (!data || typeof data !== 'object') return;
+
+  const type = (data as { type?: unknown }).type;
+  if (type !== 'shugu:display:ready') return;
+
+  const ready = data as DisplayReadyMessage;
+  const at = typeof ready.at === 'number' && Number.isFinite(ready.at) ? ready.at : Date.now();
+  const manifestId = typeof ready.manifestId === 'string' ? ready.manifestId : null;
+
+  displayBridgeState.update((s) => ({
+    ...s,
+    status: s.status === 'error' ? s.status : 'connected',
+    ready: true,
+    readyAt: at,
+    readyManifestId: manifestId,
+  }));
+}
+
+function sendLatestManifestToLocal(manifest: AssetManifest | null): void {
+  if (!manifest) return;
+  if (!controlPort) return;
+  if (lastManifestIdSentToLocal === manifest.manifestId) return;
+  sendManifest(manifest);
+  lastManifestIdSentToLocal = manifest.manifestId;
+}
+
+function startManifestSync(): void {
+  if (manifestUnsub) {
+    manifestUnsub();
+    manifestUnsub = null;
+  }
+
+  sendLatestManifestToLocal(getLatestManifest());
+  manifestUnsub = subscribeLatestManifest((manifest) => {
+    sendLatestManifestToLocal(manifest);
+  });
+}
+
+export function openDisplay(options?: {
+  displayUrl?: string;
+  serverUrl?: string;
+  assetReadToken?: string | null;
+}): void {
+  if (typeof window === 'undefined') return;
+
+  if (displayWindow && !displayWindow.closed) {
+    try {
+      displayWindow.close();
+    } catch {
+      // ignore
+    }
+  }
+  stopCloseWatch();
+  displayWindow = null;
+  teardownPort();
+
+  const serverUrl = options?.serverUrl?.trim() ? options.serverUrl.trim() : getDefaultServerUrl();
+  const assetReadToken =
+    options?.assetReadToken != null ? String(options.assetReadToken ?? '') : getDefaultAssetReadToken();
+  const pairToken = createRandomToken('pt_');
+
+  const displayUrl = (() => {
+    if (options?.displayUrl?.trim()) return new URL(options.displayUrl.trim());
+    return getDefaultDisplayUrl();
+  })();
+
+  displayUrl.searchParams.set('pairToken', pairToken);
+  displayUrl.searchParams.set('server', serverUrl);
+  if (assetReadToken.trim()) {
+    displayUrl.searchParams.set('assetReadToken', assetReadToken.trim());
+  }
+
+  displayBridgeState.set({
+    status: 'opening',
+    displayUrl: displayUrl.toString(),
+    displayOrigin: displayUrl.origin,
+    pairToken,
+    ready: false,
+    readyAt: null,
+    readyManifestId: null,
+    error: null,
+  });
+
+  displayWindow = window.open(displayUrl.toString(), '_blank');
+  if (!displayWindow) {
+    displayBridgeState.update((s) => ({ ...s, status: 'error', error: 'Popup blocked: window.open returned null' }));
+    return;
+  }
+
+  ensureCloseWatch();
+
+  // Pair after a short delay to reduce the chance that Display misses the initial postMessage listener.
+  setTimeout(() => {
+    pairDisplay({ serverUrl, assetReadToken, tokenOverride: pairToken, displayOrigin: displayUrl.origin });
+  }, 250);
+}
+
+export function pairDisplay(options?: {
+  serverUrl?: string;
+  assetReadToken?: string | null;
+  tokenOverride?: string;
+  displayOrigin?: string;
+}): void {
+  if (typeof window === 'undefined') return;
+  if (!displayWindow || displayWindow.closed) {
+    displayBridgeState.update((s) => ({ ...s, status: 'error', error: 'Display window not open' }));
+    return;
+  }
+
+  teardownPort();
+
+  const stateSnapshot = get(displayBridgeState);
+  const displayUrl = stateSnapshot.displayUrl ? new URL(stateSnapshot.displayUrl) : null;
+  const serverUrlFromState = displayUrl?.searchParams.get('server')?.trim() ?? '';
+  const serverUrl = options?.serverUrl?.trim()
+    ? options.serverUrl.trim()
+    : serverUrlFromState || getDefaultServerUrl();
+
+  const assetReadToken =
+    options?.assetReadToken != null ? String(options.assetReadToken ?? '') : getDefaultAssetReadToken();
+
+  const token = options?.tokenOverride?.trim()
+    ? options.tokenOverride.trim()
+    : stateSnapshot.pairToken ?? createRandomToken('pt_');
+
+  const displayOrigin = options?.displayOrigin?.trim()
+    ? options.displayOrigin.trim()
+    : stateSnapshot.displayOrigin ?? getDefaultDisplayUrl().origin;
+
+  const channel = new MessageChannel();
+  controlPort = channel.port1;
+  controlPort.onmessage = handlePortMessage;
+  controlPort.start();
+
+  const message: DisplayPairMessage = {
+    type: 'shugu:display:pair',
+    token,
+    managerOrigin: window.location.origin,
+    serverUrl,
+    ...(assetReadToken.trim() ? { assetReadToken: assetReadToken.trim() } : {}),
+  };
+
+  try {
+    displayWindow.postMessage(message, displayOrigin, [channel.port2]);
+    displayBridgeState.update((s) => ({
+      ...s,
+      status: 'connected',
+      pairToken: token,
+      displayOrigin,
+      error: null,
+    }));
+    startManifestSync();
+  } catch (error) {
+    teardownPort();
+    displayBridgeState.update((s) => ({
+      ...s,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'postMessage failed',
+    }));
+  }
+}
+
+export function closeDisplay(): void {
+  try {
+    displayWindow?.close();
+  } catch {
+    // ignore
+  }
+  teardownDisplayBridge();
+  displayBridgeState.update((s) => ({ ...s, status: 'closed' }));
+}
+
+export function sendControl(action: ControlAction, payload: ControlPayload, executeAtLocal?: number): void {
+  if (!controlPort) return;
+  const message: DisplayControlMessage = {
+    type: 'shugu:display:control',
+    action,
+    payload,
+    ...(typeof executeAtLocal === 'number' && Number.isFinite(executeAtLocal) ? { executeAtLocal } : {}),
+  };
+  try {
+    controlPort.postMessage(message);
+  } catch {
+    // ignore
+  }
+}
+
+export function sendPlugin(pluginId: string, command: string, payload?: Record<string, unknown>): void {
+  if (!controlPort) return;
+  const message: DisplayPluginMessage = {
+    type: 'shugu:display:plugin',
+    pluginId,
+    command,
+    ...(payload ? { payload } : {}),
+  };
+  try {
+    controlPort.postMessage(message);
+  } catch {
+    // ignore
+  }
+}
+
+export function sendManifest(manifest: AssetManifestSnapshot): void {
+  sendPlugin('multimedia-core', 'configure', {
+    manifestId: manifest.manifestId,
+    assets: manifest.assets,
+    ...(typeof manifest.updatedAt === 'number' && Number.isFinite(manifest.updatedAt)
+      ? { updatedAt: manifest.updatedAt }
+      : {}),
+  });
+}

@@ -38,7 +38,7 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'tone-pitch') return 'sound';
   if (type === 'tone-reverb') return 'sound';
   if (type === 'tone-granular') return 'sound';
-  if (type === 'tone-player') return 'sound';
+  if (type === 'tone-lfo') return 'sound';
   if (type === 'play-media') return 'sound';
   if (type === 'proc-scene-switch') return 'visual';
   if (type === 'audio-out') return 'sound';
@@ -548,7 +548,7 @@ class NodeEngineClass {
       'client-object',
       'proc-client-sensors',
       'math',
-      'lfo',
+      'tone-lfo',
       'number',
       'number-stabilizer',
       'proc-flashlight',
@@ -561,7 +561,6 @@ class NodeEngineClass {
       'tone-pitch',
       'tone-reverb',
       'tone-granular',
-      'tone-player',
       'play-media',
     ]);
 
@@ -632,7 +631,7 @@ class NodeEngineClass {
       'logic-if',
       'logic-for',
       'logic-sleep',
-      'lfo',
+      'tone-lfo',
       'number',
       'number-stabilizer',
       // Audio sources/effects
@@ -643,7 +642,6 @@ class NodeEngineClass {
       'tone-pitch',
       'tone-reverb',
       'tone-granular',
-      'tone-player',
       'play-media',
       // Patch root
       'audio-out',

@@ -1,7 +1,7 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "MIDI → (Start/End Sec) → Load Audio From Assets (Timeline) → Tone Player",
+  "title": "MIDI → (Start/End Sec) → Load Audio From Assets (Timeline) → Tone Delay",
   "purpose": "演示 Start/End 端口可接 MIDI 数字口：用 manager-only MIDI 节点通过 override bridge 实时控制 client 侧的片段播放范围。",
   "notes": [
     "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
@@ -22,25 +22,24 @@
         "id": "node-load-audio",
         "type": "load-audio-from-assets",
         "position": { "x": 520, "y": 220 },
-        "config": { "assetId": "", "timeline": { "startSec": 0, "endSec": -1, "cursorSec": -1 } },
-        "inputValues": { "startSec": 0, "endSec": -1, "cursorSec": -1, "loop": true, "play": true, "reverse": false },
-        "outputValues": {}
-      },
-      {
-        "id": "node-tone-player",
-        "type": "tone-player",
-        "position": { "x": 880, "y": 220 },
         "config": {
-          "url": "",
-          "loop": false,
-          "autostart": false,
+          "assetId": "",
           "playbackRate": 1,
           "detune": 0,
-          "volume": 0.9,
           "bus": "main",
-          "enabled": false
+          "timeline": { "startSec": 0, "endSec": -1, "cursorSec": -1 }
         },
-        "inputValues": { "trigger": 0, "playbackRate": 1, "detune": 0, "volume": 0.9 },
+        "inputValues": {
+          "startSec": 0,
+          "endSec": -1,
+          "cursorSec": -1,
+          "loop": true,
+          "play": true,
+          "reverse": false,
+          "playbackRate": 1,
+          "detune": 0,
+          "bus": "main"
+        },
         "outputValues": {}
       },
       {
@@ -102,16 +101,9 @@
     ],
     "connections": [
       {
-        "id": "conn-assetref-to-player",
+        "id": "conn-load-audio-to-delay",
         "sourceNodeId": "node-load-audio",
         "sourcePortId": "ref",
-        "targetNodeId": "node-tone-player",
-        "targetPortId": "url"
-      },
-      {
-        "id": "conn-player-to-delay",
-        "sourceNodeId": "node-tone-player",
-        "sourcePortId": "value",
         "targetNodeId": "node-delay",
         "targetPortId": "in"
       },

@@ -75,6 +75,11 @@ export interface ClientSDKConfig {
     reconnectionDelay?: number;
     timeSyncInterval?: number;
     identity?: ClientIdentity;
+    /**
+     * Optional Socket.io query parameters appended to the connection URL.
+     * Note: `role` is always forced to `client` by the SDK.
+     */
+    query?: Record<string, string>;
 }
 
 type ClientSDKInternalConfig = {
@@ -84,6 +89,7 @@ type ClientSDKInternalConfig = {
     reconnectionDelay: number;
     timeSyncInterval: number;
     identity?: ClientIdentity;
+    query?: Record<string, string>;
 };
 
 /**
@@ -107,6 +113,7 @@ export class ClientSDK {
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
             identity: config.identity,
+            query: config.query,
         };
 
         this.state = {
@@ -133,7 +140,7 @@ export class ClientSDK {
         const auth = this.config.identity ?? undefined;
 
         this.socket = io(this.config.serverUrl, {
-            query: { role: 'client' },
+            query: { ...(this.config.query ?? {}), role: 'client' },
             auth,
             // Use polling first for better mobile compatibility, then upgrade to websocket
             transports: ['polling', 'websocket'],

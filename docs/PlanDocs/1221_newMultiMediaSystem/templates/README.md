@@ -14,13 +14,17 @@ How to import:
   - No assets required; best first test for音频 patch + 实时参数更新。
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标（不再使用 Toolbar Patch）。
 
+- `10_tone_lfo_delay_wet.json`
+  - Tone LFO（audio-rate）→ Tone Delay(Wet)
+  - 演示 `tone-lfo.value → tone-delay.wet` 的连续调制（ToneAdapter 走 Tone.LFO.connect，而不是 30Hz 数值写入）。
+
 - `02_patch_asset_player_delay_audio_out.json`
-  - Load Audio From Assets → Tone Player → Tone Delay → Audio Patch to Client
+  - Load Audio From Assets → Tone Delay → Audio Patch to Client
   - Requires uploading an audio asset first in `Assets Manager`, then picking it via `Load Audio From Assets`.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `03_load_audio_from_assets_timeline.json`
-  - Load Audio From Assets（Timeline/Loop/Play）→ Tone Player → Audio Patch to Client
+  - Load Audio From Assets（Timeline/Loop/Play）→ Audio Patch to Client
   - Shows the new clip Timeline (2 cursors + playhead) + Loop + Play(Pause) + Reverse + Seek controls.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
@@ -30,7 +34,7 @@ How to import:
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `08_midi_control_audio_clip_range.json`
-  - MIDI → (Start/End Sec) → Load Audio From Assets → Tone Player
+  - MIDI → (Start/End Sec) → Load Audio From Assets → Tone Delay
   - 演示 `startSec/endSec` 端口可接 MIDI 数字口（manager-only MIDI → override bridge）。
 
 - `09_midi_select_waveform_tone_osc.json`

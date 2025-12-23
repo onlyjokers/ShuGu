@@ -23,7 +23,7 @@ import type {
   PluginControlMessage,
   ControlAction,
   ControlPayload,
-  type ControlBatchPayload,
+  ControlBatchPayload,
   FlashlightPayload,
   ScreenColorPayload,
   VibratePayload,

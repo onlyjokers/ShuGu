@@ -25,6 +25,7 @@
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
   import { getSDK, selectClients, state as managerState } from '$lib/stores/manager';
+  import { displayBridgeState, sendPlugin as sendLocalDisplayPlugin } from '$lib/display/display-bridge';
   import type {
     NodeInstance,
     Connection as EngineConnection,
@@ -77,6 +78,7 @@
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
+  let displayBridgeUnsub: (() => void) | null = null;
 
   const sockets = {
     number: new ClassicPreset.Socket('number'),
@@ -247,6 +249,28 @@
   let patchPendingCommitByKey = new Map<string, ReturnType<typeof setTimeout>>();
 
   // ===== Patch Deployment (Graph-driven, no toolbar controls) =====
+  // Note: `audio-out(cmd) -> client-object(in)` is the routing edge for deploying an audio patch.
+  // Display extends this pattern via `audio-out(cmd) -> display-object(in)`.
+  const LOCAL_DISPLAY_TARGET_ID = 'local:display';
+
+  const isLocalDisplayTarget = (id: string): boolean => id === LOCAL_DISPLAY_TARGET_ID;
+
+  const sendNodeExecutorPluginControl = (targetId: string, command: string, payload: Record<string, unknown>) => {
+    const id = String(targetId ?? '');
+    if (!id) return;
+
+    if (isLocalDisplayTarget(id)) {
+      const bridge = get(displayBridgeState);
+      if (bridge.status !== 'connected') return;
+      sendLocalDisplayPlugin('node-executor', command, payload);
+      return;
+    }
+
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', command as any, payload as any);
+  };
+
   type DeployedPatch = {
     patchId: string;
     nodeIds: Set<string>;
@@ -365,9 +389,6 @@
       return;
     }
 
-    const sdk = getSDK();
-    if (!sdk) return;
-
     const { routes, keys } = computeMidiBridgeRoutes(patchNodeIds);
     midiBridgeRoutes = routes;
     midiBridgeDesiredKeys = keys;
@@ -382,7 +403,7 @@
           const [nodeId, portId] = k.split('|');
           return { nodeId, kind: 'input', portId };
         });
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-remove', {
           loopId: patch.patchId,
           overrides,
         } as any);
@@ -439,9 +460,6 @@
     if (now - midiBridgeLastSendAt < 30) return;
     midiBridgeLastSendAt = now;
 
-    const sdk = getSDK();
-    if (!sdk) return;
-
     for (const [clientId, patch] of deployedPatchByClientId.entries()) {
       const overrides: any[] = [];
       const removals: any[] = [];
@@ -482,14 +500,14 @@
       midiBridgeActiveKeysByClientId.set(clientId, activeKeys);
 
       if (removals.length > 0) {
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-remove', {
           loopId: patch.patchId,
           overrides: removals,
         } as any);
       }
 
       if (overrides.length > 0) {
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-set', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-set', {
           loopId: patch.patchId,
           overrides,
         } as any);
@@ -530,12 +548,14 @@
     const connections = graphState.connections ?? [];
 
     // Patch target routing: `audio-out(cmd) -> client-object(in)`.
+    // Display target routing: `audio-out(cmd) -> display-object(in)`.
     const deployToClientConns = connections.filter(
       (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
     );
 
     const out: string[] = [];
     const seen = new Set<string>();
+    let hasDisplayTarget = false;
 
     const resolveClientId = (nodeId: string, outputPortId: string) => {
       const runtimeNode = nodeEngine.getNode(nodeId);
@@ -552,11 +572,35 @@
     for (const c of deployToClientConns) {
       const targetNodeId = String(c.targetNodeId);
       const runtimeNode = nodeEngine.getNode(targetNodeId);
-      if (String(runtimeNode?.type ?? '') !== 'client-object') continue;
+      const type = String(runtimeNode?.type ?? '');
+      if (type === 'display-object') {
+        hasDisplayTarget = true;
+        continue;
+      }
+      if (type !== 'client-object') continue;
       const id = resolveClientId(targetNodeId, 'out');
       if (!id || !connected.has(id) || seen.has(id)) continue;
       seen.add(id);
       out.push(id);
+    }
+
+    if (hasDisplayTarget) {
+      const bridge = get(displayBridgeState);
+      if (bridge.status === 'connected' && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
+        seen.add(LOCAL_DISPLAY_TARGET_ID);
+        out.push(LOCAL_DISPLAY_TARGET_ID);
+      }
+
+      const displayIds = (get(managerState).clients ?? [])
+        .filter((c: any) => String(c?.group ?? '') === 'display')
+        .map((c: any) => String(c?.clientId ?? ''))
+        .filter((id) => Boolean(id) && connected.has(id));
+
+      for (const id of displayIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
     }
 
     return out;
@@ -566,14 +610,8 @@
     const id = String(clientId ?? '');
     const loopId = String(patchId ?? '');
     if (!id || !loopId) return;
-    const sdk = getSDK();
-    if (!sdk) return;
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'stop', {
-      loopId,
-    } as any);
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'remove', {
-      loopId,
-    } as any);
+    sendNodeExecutorPluginControl(id, 'stop', { loopId } as any);
+    sendNodeExecutorPluginControl(id, 'remove', { loopId } as any);
   };
 
   const stopAllDeployedPatches = () => {
@@ -656,9 +694,7 @@
       for (const clientId of targets) {
         const status = statusMap.get(clientId) ?? null;
         if (status?.loopId === patchId && status.running === false) {
-          sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
-            loopId: patchId,
-          } as any);
+          sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
         }
       }
 
@@ -674,15 +710,8 @@
     midiBridgeActiveKeysByClientId = new Map();
 
     for (const clientId of targets) {
-      sdk.sendPluginControl(
-        { mode: 'clientIds', ids: [clientId] },
-        'node-executor',
-        'deploy',
-        payload
-      );
-      sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
-        loopId: patchId,
-      } as any);
+      sendNodeExecutorPluginControl(String(clientId), 'deploy', payload);
+      sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
 
       deployedPatchByClientId.set(String(clientId), {
         patchId,
@@ -953,32 +982,20 @@
     if (patchTargets.length === 0) return;
 
     for (const target of patchTargets) {
-      sdk.sendPluginControl(
-        { mode: 'clientIds', ids: [target.clientId] },
-        'node-executor',
-        'override-set',
-        {
-          loopId: target.patch.patchId,
-          overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
-        } as any
-      );
+      sendNodeExecutorPluginControl(String(target.clientId), 'override-set', {
+        loopId: target.patch.patchId,
+        overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+      } as any);
 
       const key = `${target.clientId}|${target.patch.patchId}|${nodeId}|${kind}|${portId}`;
       const existing = patchPendingCommitByKey.get(key);
       if (existing) clearTimeout(existing);
       const timer = setTimeout(() => {
         patchPendingCommitByKey.delete(key);
-        const sdkNow = getSDK();
-        if (!sdkNow) return;
-        sdkNow.sendPluginControl(
-          { mode: 'clientIds', ids: [target.clientId] },
-          'node-executor',
-          'override-set',
-          {
-            loopId: target.patch.patchId,
-            overrides: [{ nodeId, kind, portId, value }],
-          } as any
-        );
+        sendNodeExecutorPluginControl(String(target.clientId), 'override-set', {
+          loopId: target.patch.patchId,
+          overrides: [{ nodeId, kind, portId, value }],
+        } as any);
       }, 420);
       patchPendingCommitByKey.set(key, timer);
     }
@@ -1724,6 +1741,16 @@
       }
     });
 
+    // Patch targets can include local display (MessagePort), which is outside `managerState.clients`.
+    // Reconcile patch deployment when the Display bridge connects/disconnects.
+    let lastDisplayBridgeKey = '';
+    displayBridgeUnsub = displayBridgeState.subscribe((s) => {
+      const nextKey = `${s.status}|${s.ready ? 1 : 0}`;
+      if (nextKey === lastDisplayBridgeKey) return;
+      lastDisplayBridgeKey = nextKey;
+      schedulePatchReconcile('display-bridge');
+    });
+
     bindRetePipes({
       editor,
       areaPlugin,
@@ -1999,6 +2026,7 @@
     runningUnsub?.();
     groupDisabledUnsub?.();
     managerUnsub?.();
+    displayBridgeUnsub?.();
     midiController.stop();
     if (patchDeployTimer) clearTimeout(patchDeployTimer);
     for (const timer of patchPendingCommitByKey.values()) clearTimeout(timer);

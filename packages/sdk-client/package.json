@@ -10,6 +10,10 @@
         ".": {
             "types": "./dist-out/index.d.ts",
             "import": "./dist-out/index.js"
+        },
+        "./client-sdk": {
+            "types": "./dist-out/client-sdk.d.ts",
+            "import": "./dist-out/client-sdk.js"
         }
     },
     "scripts": {

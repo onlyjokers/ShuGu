@@ -135,17 +135,16 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createLogicIfNode());
   registry.register(createLogicForNode());
   registry.register(createLogicSleepNode());
-  registry.register(createLFONode());
   registry.register(createNumberNode());
   registry.register(createNumberStabilizerNode());
   // Tone.js audio nodes (client runtime overrides these definitions).
+  registry.register(createToneLFONode());
   registry.register(createToneOscNode());
   registry.register(createToneDelayNode());
   registry.register(createToneResonatorNode());
   registry.register(createTonePitchNode());
   registry.register(createToneReverbNode());
   registry.register(createToneGranularNode());
-  registry.register(createTonePlayerNode());
   // Media playback helpers.
   registry.register(createLoadAudioFromAssetsNode());
   registry.register(createLoadImageFromAssetsNode());
@@ -171,8 +170,11 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -181,6 +183,9 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
         assetKind: 'audio',
         defaultValue: '',
       },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
         label: 'Timeline',
@@ -192,34 +197,11 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
     ],
     process: (inputs, config) => {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-      const startSecRaw = inputs.startSec;
-      const endSecRaw = inputs.endSec;
-      const cursorSecRaw = inputs.cursorSec;
-      const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
-      const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
-      const cursorSec =
-        typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
-
-      const loopRaw = inputs.loop;
-      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
       const playRaw = inputs.play;
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-      const reverseRaw = inputs.reverse;
-      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
-
-      const startClamped = Math.max(0, startSec);
-      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
-      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
-
-      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
-      const positionParam =
-        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
-
-      return {
-        ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
-          : '',
-      };
+      // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
+      // Return a simple gate value so downstream nodes can reflect play/pause state.
+      return { ref: assetId && play ? 1 : 0 };
     },
   };
 }
@@ -829,43 +811,70 @@ function createLogicSleepNode(): NodeDefinition {
   };
 }
 
-function createLFONode(): NodeDefinition {
+const TONE_LFO_WAVEFORM_OPTIONS = [
+  { value: 'sine', label: 'Sine' },
+  { value: 'square', label: 'Square' },
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'sawtooth', label: 'Sawtooth' },
+] as const satisfies { value: string; label: string }[];
+
+function createToneLFONode(): NodeDefinition {
   return {
-    type: 'lfo',
-    label: 'LFO',
-    category: 'Generators',
+    type: 'tone-lfo',
+    label: 'Tone LFO',
+    category: 'Audio',
     inputs: [
-      { id: 'frequency', label: 'Freq (Hz)', type: 'number', defaultValue: 1 },
-      { id: 'amplitude', label: 'Amplitude', type: 'number', defaultValue: 1 },
-      { id: 'offset', label: 'Offset', type: 'number', defaultValue: 0 },
+      { id: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      { id: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
+      { id: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
+      { id: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
       { id: 'waveform', label: 'Waveform', type: 'string' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     outputs: [{ id: 'value', label: 'Value', type: 'number' }],
     configSchema: [
+      { key: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      { key: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
+      { key: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
+      { key: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
       {
         key: 'waveform',
         label: 'Waveform',
         type: 'select',
         defaultValue: 'sine',
-        options: [
-          { value: 'sine', label: 'Sine' },
-          { value: 'square', label: 'Square' },
-          { value: 'triangle', label: 'Triangle' },
-          { value: 'sawtooth', label: 'Sawtooth' },
-        ],
+        options: TONE_LFO_WAVEFORM_OPTIONS as unknown as { value: string; label: string }[],
       },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) => {
-      const frequency = (inputs.frequency as number) ?? 1;
-      const amplitude = (inputs.amplitude as number) ?? 1;
-      const offset = (inputs.offset as number) ?? 0;
+      const frequencyHz =
+        typeof inputs.frequencyHz === 'number'
+          ? (inputs.frequencyHz as number)
+          : Number(config.frequencyHz ?? 1);
+      const min = typeof inputs.min === 'number' ? (inputs.min as number) : Number(config.min ?? 0);
+      const max = typeof inputs.max === 'number' ? (inputs.max as number) : Number(config.max ?? 1);
+      const amplitudeRaw =
+        typeof inputs.amplitude === 'number' ? (inputs.amplitude as number) : Number(config.amplitude ?? 1);
+      const amplitude = Number.isFinite(amplitudeRaw) ? Math.max(0, Math.min(1, amplitudeRaw)) : 1;
+
+      const enabledRaw = inputs.enabled;
+      const enabled =
+        typeof enabledRaw === 'number'
+          ? enabledRaw >= 0.5
+          : typeof enabledRaw === 'boolean'
+            ? enabledRaw
+            : Boolean(config.enabled ?? true);
+
       const waveform = (() => {
-        const fromInput = inputs.waveform;
-        if (typeof fromInput === 'string' && fromInput.trim()) return fromInput.trim();
+        const v = inputs.waveform;
+        if (typeof v === 'string' && v.trim()) return v.trim();
         return String(config.waveform ?? 'sine');
       })();
 
-      const phase = (context.time / 1000) * frequency * 2 * Math.PI;
+      if (!enabled) return { value: min };
+
+      const freq = Number.isFinite(frequencyHz) ? Math.max(0, frequencyHz) : 1;
+      const phase = (context.time / 1000) * freq * 2 * Math.PI;
 
       let normalized: number;
       switch (waveform) {
@@ -876,16 +885,17 @@ function createLFONode(): NodeDefinition {
           normalized = Math.sin(phase) >= 0 ? 1 : 0;
           break;
         case 'triangle':
-          normalized = Math.abs(((context.time / 1000) * frequency * 2) % 2 - 1);
+          normalized = Math.abs(((context.time / 1000) * freq * 2) % 2 - 1);
           break;
         case 'sawtooth':
-          normalized = ((context.time / 1000) * frequency) % 1;
+          normalized = ((context.time / 1000) * freq) % 1;
           break;
         default:
           normalized = (Math.sin(phase) + 1) / 2;
       }
 
-      const value = offset + normalized * amplitude;
+      const centered = 0.5 + (normalized - 0.5) * amplitude;
+      const value = min + centered * (max - min);
       return { value };
     },
   };
@@ -1317,41 +1327,6 @@ function createPlayMediaNode(): NodeDefinition {
 
       // Reuse the cached command object to avoid deepEqual JSON stringify on large payloads.
       return { cmd: cached.cmd };
-    },
-  };
-}
-
-function createTonePlayerNode(): NodeDefinition {
-  return {
-    type: 'tone-player',
-    label: 'Tone Player',
-    category: 'Audio',
-    inputs: [
-      { id: 'url', label: 'URL', type: 'string' },
-      { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
-      { id: 'enabled', label: 'Enabled', type: 'boolean' },
-      { id: 'loop', label: 'Loop', type: 'boolean' },
-      { id: 'autostart', label: 'Autostart', type: 'boolean' },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
-      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
-      { id: 'bus', label: 'Bus', type: 'string' },
-    ],
-    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
-    configSchema: [
-      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
-      { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
-      { key: 'autostart', label: 'Autostart', type: 'boolean', defaultValue: false },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
-      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
-      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-    ],
-    process: (inputs, config) => {
-      const volume =
-        typeof inputs.volume === 'number' ? (inputs.volume as number) : Number(config.volume ?? 1);
-      return { value: volume };
     },
   };
 }

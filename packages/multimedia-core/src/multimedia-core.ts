@@ -35,7 +35,8 @@ export type MultimediaCoreConfig = {
   cacheName?: string;
   /**
    * Max concurrent downloads.
-   * Keep modest to avoid impacting realtime controls.
+   * Keep modest for audience clients to avoid impacting realtime controls.
+   * Display app may choose a higher value for aggressive preloading.
    */
   concurrency?: number;
   /**
@@ -47,6 +48,7 @@ export type MultimediaCoreConfig = {
 type StateListener = (state: MultimediaCoreState) => void;
 
 const LAST_MANIFEST_KEY = 'shugu-last-asset-manifest-v1';
+const MAX_CONCURRENCY = 32;
 
 function normalizeEtag(value: string | null): string | null {
   if (!value) return null;
@@ -100,7 +102,7 @@ export class MultimediaCore {
     this.serverUrl = config.serverUrl;
     this.assetReadToken = config.assetReadToken?.trim() ? config.assetReadToken.trim() : null;
     this.cacheName = config.cacheName ?? 'shugu-assets-v1';
-    this.concurrency = Math.max(1, Math.min(8, Math.floor(config.concurrency ?? 4)));
+    this.concurrency = Math.max(1, Math.min(MAX_CONCURRENCY, Math.floor(config.concurrency ?? 4)));
 
     this.media = new MediaEngine({ resolveUrl: (url) => this.resolveAssetRef(url) });
 

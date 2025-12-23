@@ -1,0 +1,10 @@
+{
+  "__purpose": "Manager-only routing sink that executes incoming command messages on Display (prefers local bridge, falls back to server group).",
+  "type": "display-object",
+  "label": "Display",
+  "category": "Objects",
+  "inputs": [{ "id": "in", "label": "In", "type": "command", "kind": "sink" }],
+  "outputs": [],
+  "configSchema": [],
+  "runtime": { "kind": "display-object" }
+}

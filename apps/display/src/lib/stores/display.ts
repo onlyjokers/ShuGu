@@ -1,0 +1,740 @@
+/**
+ * Purpose: Display runtime store (MultimediaCore + action dispatch).
+ *
+ * Phase 2 scope:
+ * - Full-screen player state (video/image/screenColor overlay)
+ * - Control action dispatch (subset: showImage/hideImage/playMedia/stopMedia/screenColor)
+ * - Query parsing + initialization (serverUrl / assetReadToken / pairToken)
+ *
+ * Phase 3 scope:
+ * - Server mode transport (Socket.io via ClientSDK) with `group=display`
+ * - Receive control/plugin/media messages and execute
+ * - Send a one-shot "ready" custom sensor message to managers via server
+ *
+ * Phase 4 scope:
+ * - Local mode transport (MessagePort) with origin/token validation
+ * - Local priority with timeout fallback to Server mode
+ */
+
+import { writable, derived } from 'svelte/store';
+import { MultimediaCore, toneAudioEngine, type MultimediaCoreState, type MediaEngineState } from '@shugu/multimedia-core';
+import type {
+  ControlAction,
+  ControlPayload,
+  ControlMessage,
+  PluginControlMessage,
+  MediaMetaMessage,
+  PlayMediaPayload,
+  ScreenColorPayload,
+  ShowImagePayload,
+} from '@shugu/protocol';
+import { ClientSDK, NodeExecutor, type NodeCommand, type ClientState, type ClientIdentity } from '@shugu/sdk-client';
+
+export type DisplayInitConfig = {
+  serverUrl: string;
+  assetReadToken?: string | null;
+  pairToken?: string | null;
+};
+
+export type ScreenOverlayState = {
+  visible: boolean;
+  color: string;
+  opacity: number;
+};
+
+type MediaClipParams = {
+  baseUrl: string;
+  startSec: number;
+  endSec: number;
+  loop: boolean | null;
+  play: boolean | null;
+  reverse: boolean | null;
+  cursorSec: number | null;
+};
+
+function parseMediaClipParams(raw: string): MediaClipParams {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { baseUrl: '', startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+  }
+
+  const hashIndex = trimmed.indexOf('#');
+  if (hashIndex < 0) {
+    return { baseUrl: trimmed, startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+  }
+
+  const baseUrl = trimmed.slice(0, hashIndex).trim();
+  const hash = trimmed.slice(hashIndex + 1);
+  const params = new URLSearchParams(hash);
+
+  const toNumber = (value: string | null, fallback: number): number => {
+    if (value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const toBoolean = (value: string | null, fallback: boolean): boolean => {
+    if (value == null) return fallback;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    const n = Number(normalized);
+    if (Number.isFinite(n)) return n >= 0.5;
+    return fallback;
+  };
+
+  const tRaw = params.get('t');
+  let startSec = 0;
+  let endSec = -1;
+  if (tRaw !== null) {
+    const parts = tRaw.split(',');
+    const startCandidate = parts[0]?.trim() ?? '';
+    const endCandidate = parts[1]?.trim() ?? '';
+    startSec = toNumber(startCandidate || null, 0);
+    if (parts.length > 1) {
+      endSec = endCandidate ? toNumber(endCandidate, -1) : -1;
+    }
+  }
+
+  const loopRaw = params.get('loop');
+  const playRaw = params.get('play');
+  const reverseRaw = params.get('rev');
+  const cursorRaw = params.get('p');
+
+  const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
+  const cursorSec = cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0 ? cursorParsed : null;
+
+  return {
+    baseUrl,
+    startSec: Number.isFinite(startSec) ? startSec : 0,
+    endSec: Number.isFinite(endSec) ? endSec : -1,
+    loop: loopRaw === null ? null : toBoolean(loopRaw, false),
+    play: playRaw === null ? null : toBoolean(playRaw, true),
+    reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
+    cursorSec,
+  };
+}
+
+const DEFAULT_SERVER_URL = 'https://localhost:3001';
+
+let multimediaCore: MultimediaCore | null = null;
+let mediaUnsub: (() => void) | null = null;
+let coreUnsub: (() => void) | null = null;
+
+let sdk: ClientSDK | null = null;
+let sdkUnsub: (() => void) | null = null;
+let controlUnsub: (() => void) | null = null;
+let pluginUnsub: (() => void) | null = null;
+let mediaMsgUnsub: (() => void) | null = null;
+let nodeExecutor: NodeExecutor | null = null;
+
+let localPort: MessagePort | null = null;
+let windowPairListener: ((event: MessageEvent) => void) | null = null;
+let pairTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+let transportDecision: 'uninitialized' | 'pending' | 'local' | 'server' = 'uninitialized';
+
+export const runtime = writable<{
+  serverUrl: string;
+  assetReadToken: string;
+  pairToken: string;
+}>({
+  serverUrl: DEFAULT_SERVER_URL,
+  assetReadToken: '',
+  pairToken: '',
+});
+
+export const mode = writable<'uninitialized' | 'local-pending' | 'local' | 'server'>('uninitialized');
+
+export const serverState = writable<ClientState>({
+  status: 'disconnected',
+  clientId: null,
+  timeSync: {
+    offset: 0,
+    samples: [],
+    maxSamples: 10,
+    initialized: false,
+    lastSyncTime: 0,
+  },
+  error: null,
+});
+
+export const coreState = writable<MultimediaCoreState>({
+  status: 'idle',
+  manifestId: null,
+  loaded: 0,
+  total: 0,
+  error: null,
+  updatedAt: Date.now(),
+});
+
+export const videoState = writable<MediaEngineState['video']>({
+  url: null,
+  playing: false,
+  muted: true,
+  loop: false,
+  volume: 1,
+  startSec: 0,
+  endSec: -1,
+  cursorSec: -1,
+  reverse: false,
+});
+
+export const imageState = writable<MediaEngineState['image']>({
+  url: null,
+  visible: false,
+  duration: undefined,
+});
+
+export const screenOverlay = writable<ScreenOverlayState>({
+  visible: false,
+  color: '#000000',
+  opacity: 0,
+});
+
+export const isReady = derived(coreState, ($coreState) => $coreState.status === 'ready');
+
+export const readyOnce = writable<{
+  ready: boolean;
+  at: number | null;
+  manifestId: string | null;
+  reportedToServer: boolean;
+  reportedToLocal: boolean;
+}>({
+  ready: false,
+  at: null,
+  manifestId: null,
+  reportedToServer: false,
+  reportedToLocal: false,
+});
+
+export const audioState = writable(toneAudioEngine.getStatus());
+
+export async function enableAudio(): Promise<{ enabled: boolean; error?: string } | null> {
+  const result = await toneAudioEngine.start();
+  audioState.set(toneAudioEngine.getStatus());
+
+  if (result.enabled) {
+    const loopId = nodeExecutor?.getStatus?.().loopId ?? null;
+    if (loopId) {
+      nodeExecutor?.handlePluginControl({ pluginId: 'node-executor', command: 'start', payload: { loopId } } as any);
+    }
+  }
+
+  return result;
+}
+
+const DISPLAY_DEVICE_ID_STORAGE_KEY = 'shugu-display-device-id';
+const DISPLAY_INSTANCE_ID_STORAGE_KEY = 'shugu-display-instance-id';
+const DISPLAY_CLIENT_ID_STORAGE_KEY = 'shugu-display-client-id';
+
+function createRandomId(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  }
+  return `${prefix}${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
+
+function getOrCreateStorageId(storage: Storage, key: string, prefix: string): string {
+  const existing = storage.getItem(key);
+  if (existing && existing.trim()) return existing;
+  const id = createRandomId(prefix);
+  storage.setItem(key, id);
+  return id;
+}
+
+function getOrCreateDisplayIdentity(): ClientIdentity | null {
+  if (typeof window === 'undefined') return null;
+
+  const deviceId = getOrCreateStorageId(window.localStorage, DISPLAY_DEVICE_ID_STORAGE_KEY, 'd_');
+  const instanceId = getOrCreateStorageId(window.sessionStorage, DISPLAY_INSTANCE_ID_STORAGE_KEY, 'i_');
+
+  const storedClientId = window.sessionStorage.getItem(DISPLAY_CLIENT_ID_STORAGE_KEY);
+  const clientId = storedClientId && storedClientId.trim() ? storedClientId : deviceId;
+  window.sessionStorage.setItem(DISPLAY_CLIENT_ID_STORAGE_KEY, clientId);
+
+  return { deviceId, instanceId, clientId };
+}
+
+function persistAssignedClientId(assignedClientId: string): void {
+  if (typeof window === 'undefined') return;
+  if (!assignedClientId) return;
+  const current = window.sessionStorage.getItem(DISPLAY_CLIENT_ID_STORAGE_KEY);
+  if (current === assignedClientId) return;
+  window.sessionStorage.setItem(DISPLAY_CLIENT_ID_STORAGE_KEY, assignedClientId);
+}
+
+function teardownServerTransport(): void {
+  mediaMsgUnsub?.();
+  mediaMsgUnsub = null;
+
+  pluginUnsub?.();
+  pluginUnsub = null;
+
+  controlUnsub?.();
+  controlUnsub = null;
+
+  sdkUnsub?.();
+  sdkUnsub = null;
+
+  nodeExecutor?.destroy();
+  nodeExecutor = null;
+
+  sdk?.disconnect();
+  sdk = null;
+
+  serverState.set({
+    status: 'disconnected',
+    clientId: null,
+    timeSync: {
+      offset: 0,
+      samples: [],
+      maxSamples: 10,
+      initialized: false,
+      lastSyncTime: 0,
+    },
+    error: null,
+  });
+}
+
+function teardownLocalTransport(): void {
+  if (pairTimeoutHandle) {
+    clearTimeout(pairTimeoutHandle);
+    pairTimeoutHandle = null;
+  }
+
+  if (typeof window !== 'undefined' && windowPairListener) {
+    window.removeEventListener('message', windowPairListener);
+  }
+  windowPairListener = null;
+
+  if (localPort) {
+    try {
+      localPort.onmessage = null;
+      localPort.close();
+    } catch {
+      // ignore
+    }
+  }
+  localPort = null;
+
+  transportDecision = 'uninitialized';
+}
+
+function isAllowedManagerOrigin(origin: string): boolean {
+  if (!origin) return false;
+  if (typeof window === 'undefined') return false;
+
+  const allowed = new Set<string>(['https://localhost:5173', 'https://127.0.0.1:5173']);
+
+  try {
+    const url = new URL(window.location.origin);
+    url.port = '5173';
+    allowed.add(url.origin);
+  } catch {
+    // ignore
+  }
+
+  return allowed.has(origin);
+}
+
+export function initializeDisplay(config: DisplayInitConfig): void {
+  const serverUrl = config.serverUrl?.trim() ? config.serverUrl.trim() : DEFAULT_SERVER_URL;
+  const assetReadToken = config.assetReadToken?.trim() ? config.assetReadToken.trim() : '';
+  const pairToken = config.pairToken?.trim() ? config.pairToken.trim() : '';
+  runtime.set({ serverUrl, assetReadToken, pairToken });
+  mode.set(pairToken ? 'local-pending' : 'server');
+  readyOnce.set({ ready: false, at: null, manifestId: null, reportedToServer: false, reportedToLocal: false });
+  audioState.set(toneAudioEngine.getStatus());
+
+  let readySent = false;
+  let readyReported = false;
+  let readyAt: number | null = null;
+  let readyManifestId: string | null = null;
+
+  const reportReadyIfPossible = () => {
+    if (readyReported) return;
+    if (!readySent) return;
+
+    if (transportDecision === 'local' && localPort) {
+      try {
+        localPort.postMessage({
+          type: 'shugu:display:ready',
+          manifestId: readyManifestId,
+          at: readyAt,
+        });
+        readyReported = true;
+        readyOnce.set({
+          ready: true,
+          at: readyAt,
+          manifestId: readyManifestId,
+          reportedToServer: false,
+          reportedToLocal: true,
+        });
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    if (transportDecision !== 'server' || !sdk) return;
+
+    const state = sdk.getState();
+    if (state.status !== 'connected' || !state.clientId) return;
+
+    try {
+      sdk.sendSensorData(
+        'custom',
+        {
+          kind: 'display',
+          event: 'ready',
+          manifestId: readyManifestId,
+          at: readyAt,
+        },
+        { trackLatest: false }
+      );
+      readyReported = true;
+      readyOnce.set({
+        ready: true,
+        at: readyAt,
+        manifestId: readyManifestId,
+        reportedToServer: true,
+        reportedToLocal: false,
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  multimediaCore?.destroy();
+  multimediaCore = new MultimediaCore({
+    serverUrl,
+    assetReadToken: assetReadToken || null,
+    autoStart: true,
+    concurrency: 16,
+  });
+
+  coreUnsub?.();
+  coreUnsub = multimediaCore.subscribeState((s) => {
+    coreState.set(s);
+    if (!readySent && s.status === 'ready') {
+      readySent = true;
+      readyAt = Date.now();
+      readyManifestId = s.manifestId;
+      readyOnce.set({
+        ready: true,
+        at: readyAt,
+        manifestId: readyManifestId,
+        reportedToServer: false,
+        reportedToLocal: false,
+      });
+      reportReadyIfPossible();
+    }
+  });
+
+  mediaUnsub?.();
+  mediaUnsub = multimediaCore.media.subscribeState((s: MediaEngineState) => {
+    videoState.set(s.video);
+    imageState.set(s.image);
+  });
+
+  teardownLocalTransport();
+  teardownServerTransport();
+
+  const handleAssetManifest = (payload: Record<string, unknown> | undefined) => {
+    const snapshot = payload ?? {};
+    const manifestId = typeof snapshot.manifestId === 'string' ? snapshot.manifestId : '';
+    const assets = Array.isArray(snapshot.assets) ? snapshot.assets.map(String) : [];
+    const updatedAtRaw = snapshot.updatedAt;
+    const updatedAt =
+      typeof updatedAtRaw === 'number' && Number.isFinite(updatedAtRaw) ? updatedAtRaw : undefined;
+    if (!manifestId) return;
+    multimediaCore?.setAssetManifest({ manifestId, assets, updatedAt });
+  };
+
+  const identity = getOrCreateDisplayIdentity();
+  sdk = new ClientSDK({
+    serverUrl,
+    identity: identity ?? undefined,
+    query: { group: 'display' },
+  });
+
+  sdkUnsub = sdk.onStateChange((s) => {
+    serverState.set(s);
+    if (s.clientId) {
+      persistAssignedClientId(s.clientId);
+    }
+    reportReadyIfPossible();
+  });
+
+  controlUnsub = sdk.onControl((message: ControlMessage) => {
+    const offset = sdk?.getOffset?.() ?? 0;
+    const executeAtLocal =
+      typeof message.executeAt === 'number' && Number.isFinite(message.executeAt) ? message.executeAt - offset : undefined;
+    executeControl(message.action, message.payload, executeAtLocal);
+  });
+
+  nodeExecutor?.destroy();
+  nodeExecutor = new NodeExecutor(
+    sdk,
+    (cmd: NodeCommand) => {
+      const offset = sdk?.getOffset?.() ?? 0;
+      const executeAtLocal =
+        typeof cmd.executeAt === 'number' && Number.isFinite(cmd.executeAt) ? cmd.executeAt - offset : undefined;
+      executeControl(cmd.action, cmd.payload, executeAtLocal);
+    },
+    {
+      resolveAssetRef: (ref: string) => multimediaCore?.resolveAssetRef(ref) ?? ref,
+    }
+  );
+
+  pluginUnsub = sdk.onPluginControl((message: PluginControlMessage) => {
+    if (message.pluginId === 'node-executor') {
+      nodeExecutor?.handlePluginControl(message);
+      return;
+    }
+
+    if (message.pluginId === 'multimedia-core' && message.command === 'configure') {
+      handleAssetManifest(message.payload);
+      return;
+    }
+
+    console.info('[Display] plugin noop:', message.pluginId, message.command);
+  });
+
+  mediaMsgUnsub = sdk.onMedia((message: MediaMetaMessage) => {
+    const options = message.options ?? {};
+    const payload: PlayMediaPayload = {
+      url: message.url,
+      mediaType: message.mediaType,
+      loop: options.loop,
+      volume: options.volume,
+      muted: message.mediaType === 'video' ? true : undefined,
+    };
+
+    const offset = sdk?.getOffset?.() ?? 0;
+    const executeAtLocal = typeof message.executeAt === 'number' ? message.executeAt - offset : undefined;
+    executeControl('playMedia', payload, executeAtLocal);
+  });
+
+  const enterServerMode = () => {
+    if (transportDecision !== 'pending' && transportDecision !== 'uninitialized') return;
+    transportDecision = 'server';
+    mode.set('server');
+
+    if (pairTimeoutHandle) {
+      clearTimeout(pairTimeoutHandle);
+      pairTimeoutHandle = null;
+    }
+    if (typeof window !== 'undefined' && windowPairListener) {
+      window.removeEventListener('message', windowPairListener);
+      windowPairListener = null;
+    }
+
+    sdk?.connect();
+  };
+
+  if (!pairToken) {
+    transportDecision = 'uninitialized';
+    enterServerMode();
+    return;
+  }
+
+  transportDecision = 'pending';
+
+  const onLocalPortMessage = (event: MessageEvent) => {
+    const data = event.data as unknown;
+    if (!data || typeof data !== 'object') return;
+
+    const type = (data as { type?: unknown }).type;
+    if (type === 'shugu:display:control') {
+      const action = (data as { action?: unknown }).action;
+      const payload = (data as { payload?: unknown }).payload;
+      const executeAtLocalRaw = (data as { executeAtLocal?: unknown }).executeAtLocal;
+      const executeAtLocal =
+        typeof executeAtLocalRaw === 'number' && Number.isFinite(executeAtLocalRaw) ? executeAtLocalRaw : undefined;
+      if (typeof action !== 'string') return;
+      executeControl(action as ControlAction, (payload ?? {}) as ControlPayload, executeAtLocal);
+      return;
+    }
+
+    if (type === 'shugu:display:plugin') {
+      const pluginId = (data as { pluginId?: unknown }).pluginId;
+      const command = (data as { command?: unknown }).command;
+      const payload = (data as { payload?: unknown }).payload;
+
+      if (pluginId === 'node-executor' && typeof command === 'string') {
+        nodeExecutor?.handlePluginControl({
+          pluginId: 'node-executor',
+          command: command as any,
+          payload: (payload ?? undefined) as any,
+        } as any);
+        return;
+      }
+
+      if (pluginId !== 'multimedia-core' || command !== 'configure') {
+        console.info('[Display] local plugin noop:', pluginId, command);
+        return;
+      }
+      handleAssetManifest((payload ?? undefined) as Record<string, unknown> | undefined);
+      return;
+    }
+
+    console.info('[Display] local message noop:', type);
+  };
+
+  const enterLocalMode = (port: MessagePort) => {
+    if (transportDecision !== 'pending') return;
+    transportDecision = 'local';
+    mode.set('local');
+
+    if (pairTimeoutHandle) {
+      clearTimeout(pairTimeoutHandle);
+      pairTimeoutHandle = null;
+    }
+    if (typeof window !== 'undefined' && windowPairListener) {
+      window.removeEventListener('message', windowPairListener);
+      windowPairListener = null;
+    }
+
+    localPort = port;
+    localPort.onmessage = onLocalPortMessage;
+    try {
+      localPort.start();
+    } catch {
+      // ignore
+    }
+
+    reportReadyIfPossible();
+  };
+
+  windowPairListener = (event: MessageEvent) => {
+    if (transportDecision !== 'pending') return;
+    if (!isAllowedManagerOrigin(event.origin)) return;
+
+    const data = event.data as unknown;
+    if (!data || typeof data !== 'object') return;
+
+    const type = (data as { type?: unknown }).type;
+    if (type !== 'shugu:display:pair') return;
+
+    const token = (data as { token?: unknown }).token;
+    if (typeof token !== 'string' || token !== pairToken) return;
+
+    const port = event.ports?.[0];
+    if (!port) return;
+
+    enterLocalMode(port);
+  };
+
+  window.addEventListener('message', windowPairListener);
+
+  // Phase 4: Local priority. If pairing fails (no opener / slow load / origin mismatch), fallback to Server mode.
+  pairTimeoutHandle = setTimeout(() => {
+    if (transportDecision !== 'pending') return;
+    enterServerMode();
+  }, 1200);
+}
+
+export function destroyDisplay(): void {
+  coreUnsub?.();
+  coreUnsub = null;
+
+  mediaUnsub?.();
+  mediaUnsub = null;
+
+  multimediaCore?.destroy();
+  multimediaCore = null;
+
+  teardownLocalTransport();
+  teardownServerTransport();
+}
+
+function setScreenColor(payload: ScreenColorPayload): void {
+  const color = typeof payload.color === 'string' && payload.color.trim() ? payload.color.trim() : '#000000';
+  const opacityRaw = payload.opacity ?? 1;
+  const opacity =
+    typeof opacityRaw === 'number' && Number.isFinite(opacityRaw) ? Math.max(0, Math.min(1, opacityRaw)) : 1;
+
+  screenOverlay.set({
+    visible: opacity > 0,
+    color,
+    opacity,
+  });
+}
+
+function executeNow(action: ControlAction, payload: ControlPayload): void {
+  switch (action) {
+    case 'showImage': {
+      const imagePayload = payload as ShowImagePayload;
+      multimediaCore?.media.showImage({ url: String(imagePayload.url ?? ''), duration: imagePayload.duration });
+      return;
+    }
+
+    case 'hideImage':
+      multimediaCore?.media.hideImage();
+      return;
+
+    case 'playMedia': {
+      const mediaPayload = payload as PlayMediaPayload;
+      const clip = typeof mediaPayload.url === 'string' ? parseMediaClipParams(mediaPayload.url) : null;
+      const baseUrl = clip ? clip.baseUrl : mediaPayload.url;
+      const url = typeof baseUrl === 'string' ? baseUrl : String(baseUrl ?? '');
+      const resolvedUrl = url;
+
+      const resolvedUrlString = typeof resolvedUrl === 'string' ? resolvedUrl : String(resolvedUrl ?? '');
+      const isVideo =
+        mediaPayload.mediaType === 'video' || /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
+
+      if (!isVideo) {
+        console.info('[Display] playMedia(audio) noop:', mediaPayload.url);
+        return;
+      }
+
+      const loop = clip?.loop ?? mediaPayload.loop ?? false;
+      const playing = clip?.play ?? Boolean(resolvedUrlString);
+      const startSec = clip ? Math.max(0, clip.startSec) : 0;
+      const endSec = clip ? clip.endSec : -1;
+      const cursorSec = clip?.cursorSec ?? -1;
+      const reverse = clip?.reverse ?? false;
+
+      multimediaCore?.media.playVideo({
+        url: resolvedUrlString,
+        muted: mediaPayload.muted ?? true,
+        loop,
+        volume: mediaPayload.volume ?? 1,
+        playing,
+        startSec,
+        endSec,
+        cursorSec,
+        reverse,
+      });
+      return;
+    }
+
+    case 'stopMedia':
+      multimediaCore?.media.stopVideo();
+      return;
+
+    case 'screenColor': {
+      const colorPayload = payload as ScreenColorPayload;
+      setScreenColor(colorPayload);
+      return;
+    }
+
+    default:
+      console.info('[Display] noop action:', action, payload);
+  }
+}
+
+export function executeControl(action: ControlAction, payload: ControlPayload, executeAtLocal?: number): void {
+  if (typeof executeAtLocal === 'number' && Number.isFinite(executeAtLocal)) {
+    const delay = executeAtLocal - Date.now();
+    if (delay > 0) {
+      setTimeout(() => executeNow(action, payload), delay);
+      return;
+    }
+  }
+
+  executeNow(action, payload);
+}

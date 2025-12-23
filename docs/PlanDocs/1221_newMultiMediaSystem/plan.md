@@ -844,6 +844,26 @@ UI 层（NodeCanvas）：
 - Manager 中所有节点的可调项都能被连线或 MIDI 调制（包括 select/颜色/布尔），不再出现“只能手填”
 - 导入已有模板不报错，且旧图里存于 config 的 select/color 仍能正确显示初始值
 
+---
+
+### Phase 2.9 - Tone LFO（音频参数 audio-rate 调制）
+
+> 目标：提供一个真正 Tone.js 的 LFO 节点，用于对 Tone 参数做 audio-rate 调制，避免 30Hz stepping/zipper noise。
+
+- [x] node-core：新增 `tone-lfo`（Audio）节点（frequency/min/max/depth/waveform/enabled）
+- [x] node-core：删除旧 `lfo`（原 Generators）节点，避免与 Tone LFO 语义混淆
+- [x] sdk-client：tone-adapter 实现 `tone-lfo` 为 `Tone.LFO`，并支持 `tone-lfo.value` 连接到：
+  - `tone-delay`：`wet/time/feedback`
+  - `tone-resonator`：`wet/delayTime`
+  - `tone-reverb`：`wet`
+  - `tone-pitch`：`wet`
+- [x] sdk-client：当目标参数被 Tone LFO 调制时，跳过 control-rate 写入（避免与 Tone LFO 冲突）
+- [x] manager：patch/loop 导出 whitelist + capability 增加 `tone-lfo`
+- [x] templates：新增 `10_tone_lfo_delay_wet.json`
+
+验收：
+- 导入 `10_tone_lfo_delay_wet.json`：Tone Osc 正常发声，Tone Delay 的 Wet 被 Tone LFO 连续调制（无明显 stepping），调节 LFO 参数实时生效
+
 ### Phase 3 - Client 集成：MultimediaCore（登录即预加载 + 缓存/校验 + readiness 上报）
 
 1) MultimediaCore 框架落地（解耦 apps/client）
