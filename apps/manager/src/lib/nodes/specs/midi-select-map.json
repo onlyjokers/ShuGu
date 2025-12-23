@@ -2,7 +2,10 @@
   "type": "midi-select-map",
   "label": "Selection Mapping",
   "category": "MIDI",
-  "inputs": [{ "id": "in", "label": "In", "type": "fuzzy" }],
+  "inputs": [
+    { "id": "in", "label": "In", "type": "fuzzy" },
+    { "id": "invert", "label": "Invert", "type": "boolean" }
+  ],
   "outputs": [{ "id": "out", "label": "Out", "type": "string" }],
   "configSchema": [
     { "key": "invert", "label": "Invert", "type": "boolean", "defaultValue": false }

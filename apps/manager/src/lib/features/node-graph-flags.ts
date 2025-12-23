@@ -5,7 +5,7 @@
  * Allows switching between renderers and controlling performance optimizations.
  *
  * Usage:
- *   - URL params: ?ng_renderer=xyflow&ng_shadows=off&ng_perf=on
+ *   - URL params: ?ng_renderer=xyflow&ng_shadows=off&ng_perf=on（XYFlow 已弃用，需要删除）
  *   - Or toggle via the DEV UI in NodeCanvasToolbar
  */
 import { writable, derived, get } from 'svelte/store';

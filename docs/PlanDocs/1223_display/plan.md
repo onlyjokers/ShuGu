@@ -397,67 +397,143 @@ Display 作为独立 SvelteKit app，端口建议 5175（与 manager 5173 / clie
 
 # 6. 实施步骤（按最短闭环 + 可回滚）
 
-## Phase 0：设计冻结（0.5 天）
+## Phase 0：设计冻结
 
-1) 冻结第一期 Display 支持动作白名单（4.1）。  
-2) 冻结 ready 的语义：`MultimediaCore.status === 'ready'` 首次到达即 ready。  
-3) 冻结 Local 配对超时（建议 800ms–1500ms，可配置）。  
+> 说明：本章节**每一个小项都是 checkbox**，用于非常细的进度追踪；建议严格按 Phase 顺序推进，做到每个 Phase 都可独立回滚。
 
-输出：本文档更新为 `Status: Approved`（或在末尾记录确认项）。
+- [ ] P0-01 冻结第一期 Display 支持动作白名单（见 4.1），并确认“不支持动作”的行为：必须安全 noop、不能报错。
+- [ ] P0-02 冻结 ready 的语义：以 `MultimediaCore.status === 'ready'` **首次到达**作为 ready（见 4.4.1）。
+- [ ] P0-03 冻结 “只回传一次 ready” 的边界：
+  - [ ] 仅首次 ready 回传（后续 manifest 更新导致再次 preload：不再回传）
+  - [ ] Server 模式与 Local 模式都遵循同一条规则
+- [ ] P0-04 冻结 Local 配对超时与状态机（见 4.2）：
+  - [ ] 超时建议值（800ms–1500ms，是否需要可配置）
+  - [ ] 超时后是否允许“晚到的配对消息”把 Server 模式切回 Local（推荐：不切回；只接受首次判定）
+- [ ] P0-05 冻结允许配对的 origin 列表（默认仅 `https://localhost:5173`；见 4.2.2）。
+- [ ] P0-06 确认 Display URL 参数 schema（沿用 client 的 `server` 命名，见 `apps/client/src/routes/+page.svelte`）：
+  - [ ] `server`（serverUrl）
+  - [ ] `assetReadToken`（可选；本机开发可为空）
+  - [ ] `pairToken`（仅 Manager 打开时携带）
+- [ ] P0-07 文档状态更新：把头部 `Status: Draft` 改为 `Approved`（或在文末追加“冻结决策记录”）。
 
-## Phase 1：Server group 支持（0.5 天）
+## Phase 1：Server group 支持
 
-1) 修改 `EventsGateway.handleConnection` 支持 query.group 写入 registry。  
-2) 验证 `clientList` 消息里 `ClientInfo.group` 正确透出。  
-3) 验证 manager 使用 `targetGroup('display')` 可以命中。  
+- [ ] P1-01 定位改动点：`apps/server/src/events/events.gateway.ts` 的 `handleConnection` 目前只读取 `query.role`，未写入 group。
+- [ ] P1-02 解析 `client.handshake.query.group`（string）并做 sanitize（建议与 `ClientRegistryService` 的 `sanitizeId` 规则一致：长度限制 + 字符集限制）。
+- [ ] P1-03 在 `registerConnection(...)` 返回 `clientId` 后写入 group：
+  - [ ] `clientRegistry.setClientGroup(clientId, group)`
+  - [ ] 仅对 `role === 'client'` 生效（manager 不需要 group）
+- [ ] P1-04 透出验证：`apps/server/src/client-registry/client-registry.service.ts#getAllClients()` 已包含 `group` 字段（确认连通即可，无需额外改动）。
+- [ ] P1-05 路由验证：`apps/server/src/message-router/message-router.service.ts#resolveTargetSocketIds()` 已支持 `target.mode === 'group'`（确认连通即可）。
+- [ ] P1-06 冒烟验证（最小闭环）：用任意 socket.io client 以 `query: { role:'client', group:'display' }` 连接，Manager 端能在 `clientList` 看到 `group:'display'`。
 
-## Phase 2：新增 Display app（1 天）
+## Phase 2：新增 Display app
 
-1) 建 `apps/display` 基础工程（SvelteKit、端口 5175、基础页面）。  
-2) 引入 `@shugu/multimedia-core`：
-   - 配置更高并发（例如 16）
-   - 订阅 media state 驱动 `VideoPlayer`/`ImageDisplay` 渲染
-3) 实现 action dispatch（先做 showImage/hideImage/playMedia/stopMedia/screenColor）。  
+- [ ] P2-01 创建 `apps/display/`（推荐直接以 `apps/client/` 为模板复制一份，再删掉不需要的功能，保证 SvelteKit/SSL/cacheDir 约定一致）。
+- [ ] P2-02 `apps/display/package.json`：
+  - [ ] `dev` 端口固定为 5175（对齐 manager 5173 / client 5174）
+  - [ ] 依赖最小集合：`@shugu/multimedia-core`、`@shugu/protocol`、`@shugu/ui-kit`、`socket.io-client`（仅 Server 模式需要）
+- [ ] P2-03 `apps/display/vite.config.ts`：复制 `apps/client/vite.config.ts`，仅修改端口为 5175（保留 `basicSsl()` 与 `cacheDir` 规则）。
+- [ ] P2-04 `apps/display/src/routes/+page.svelte`（纯播放器 UI）：
+  - [ ] 解析 query：`server` / `assetReadToken` / `pairToken`（参考 `apps/client/src/routes/+page.svelte` 的解析逻辑）
+  - [ ] 全屏渲染：Video + Image + ScreenColor overlay（不引入 node graph）
+  - [ ] 在 UI 上提供最小 debug 信息（当前模式 local/server、ready 状态、manifestId）
+- [ ] P2-05 `apps/display/src/lib/stores/display.ts`（运行时核心）：
+  - [ ] 初始化 `MultimediaCore`（参考 `apps/client/src/lib/stores/client.ts` 的初始化段落），并把 `concurrency` 调大（建议 16）
+  - [ ] 订阅 `multimediaCore.media.subscribeState(...)` 驱动 `VideoPlayer` / `ImageDisplay`（参考 `apps/client/src/lib/stores/client.ts`）
+  - [ ] 实现 ready 判定与“只发一次”门闩（`readySent`）
+- [ ] P2-06 复用播放器组件（第一期最快路径：拷贝，不做抽包）：
+  - [ ] `apps/client/src/lib/components/VideoPlayer.svelte` → `apps/display/src/lib/components/VideoPlayer.svelte`
+  - [ ] `apps/client/src/lib/components/ImageDisplay.svelte` → `apps/display/src/lib/components/ImageDisplay.svelte`
+- [ ] P2-07 实现 action 白名单 dispatch（参考 `apps/client/src/lib/stores/client.ts#executeControl`，只保留子集）：
+  - [ ] `showImage` / `hideImage`（走 `multimediaCore.media.showImage/hideImage`，并支持 `asset:`）
+  - [ ] `playMedia` / `stopMedia`（走 `multimediaCore.media.playVideo/stopVideo`，并支持 clip 参数解析策略）
+  - [ ] `screenColor`（第一期允许简单 solid 覆盖层即可；后续再补全 pulse/cycle）
+  - [ ] 其他 action：安全 noop（仅 `console.info`）
 
-## Phase 3：Server 模式 transport（0.5–1 天）
+## Phase 3：Server 模式 transport
 
-1) Display 走 Socket.io：
-   - `query: { role:'client', group:'display' }`
-2) 接收 `ControlMessage/PluginControlMessage/MediaMetaMessage` 并执行：
-   - `multimedia-core:configure` → `setAssetManifest` → preload
-3) ready 回传一次：
-   - 发送 `SensorDataMessage` custom（server 会转发给 manager）
+- [ ] P3-01 选择实现路径（推荐优先复用现有 SDK，避免自己实现 time-sync/schedule）：
+  - [ ] 方案 A（推荐）：Display 复用 `@shugu/sdk-client` 的 `ClientSDK`，并给它加可选 query 扩展（见下一条）
+  - [ ] 方案 B：Display 自己用 `socket.io-client` 直连（需要自己处理 `executeAt` 调度与 time sync，工作量更大）
+- [ ] P3-02（方案 A）改造 `packages/sdk-client/src/client-sdk.ts`：
+  - [ ] `ClientSDKConfig` 增加 `query?: Record<string, string>`（或显式 `group?: string`）
+  - [ ] `io(..., { query: { role:'client', ...config.query } })`（默认不传时行为不变）
+- [ ] P3-03 Display Server 模式连接参数：
+  - [ ] `query: { group:'display' }`（role 仍由 SDK 固定为 client）
+  - [ ] identity：可复用 client 的 identity 逻辑，但建议前缀 `d_`（避免与 audience client 混淆）
+- [ ] P3-04 Display 接收消息并执行（复用 client 的处理方式）：
+  - [ ] `onControl` → action dispatch（P2-07）
+  - [ ] `onPluginControl` → 仅处理 `pluginId:'multimedia-core', command:'configure'`（参考 `apps/client/src/lib/stores/client.ts#handlePluginControlMessage`）
+  - [ ] （可选）`onMedia`：如果未来使用 `MediaMetaMessage`，在这里接入
+- [ ] P3-05 Server 模式 ready 回传一次（严格一次）：
+  - [ ] 触发点：`MultimediaCore` 首次进入 `ready`
+  - [ ] 发送：`sdk.sendSensorData('custom', { kind:'display', event:'ready', manifestId, at }, { trackLatest:false })`
+  - [ ] 处理竞态：如果 `MultimediaCore` ready 早于 SDK `connected+clientId`，需在 SDK 连接后补发一次（但仍保证只发一次）
 
-## Phase 4：Local 模式 transport + Manager Bridge（1–1.5 天）
+## Phase 4：Local 模式 transport + Manager Bridge
 
-1) Manager 新增 `display-bridge.ts`：
-   - `openDisplay()` 用 token 打开 URL
-   - `postMessage + MessageChannel` 配对
-   - 提供 `sendControl/sendPlugin/sendManifest`
-2) Display 新增配对监听：
-   - 校验 origin + token
-   - 接收 port 并进入 local mode
-3) Display ready（一次）通过 port 回传。  
+- [ ] P4-01 新增 `apps/manager/src/lib/display/display-bridge.ts`（Manager 侧）：
+  - [ ] `openDisplay()`：`window.open(displayUrl)`（带 `pairToken/server/assetReadToken` query）
+  - [ ] `pair()`：`postMessage({ type:'shugu:display:pair', token, serverUrl, assetReadToken }, '*', [port2])`
+  - [ ] `sendControl/sendPlugin/sendManifest`：统一封装本机消息 schema（见 4.2.3）
+  - [ ] 生命周期：超时、窗口关闭、port 断开后的清理
+- [ ] P4-02 Display 侧配对监听（建议放在 `apps/display/src/lib/stores/display.ts`）：
+  - [ ] `window.addEventListener('message', ...)` 等待 `{ type:'shugu:display:pair' }`
+  - [ ] 校验 `event.origin` 在白名单 + `token === pairToken`
+  - [ ] 取 `event.ports[0]` 作为专用 `MessagePort`，并绑定 `port.onmessage`
+- [ ] P4-03 Local 模式下的消息接入：
+  - [ ] `shugu:display:control` → action dispatch（P2-07）
+  - [ ] `shugu:display:plugin` → 仅处理 `multimedia-core:configure`（P2-06 / Phase 6 会用到）
+- [ ] P4-04 Local 模式 ready 回传一次：
+  - [ ] `port.postMessage({ type:'shugu:display:ready', manifestId, at })`
+  - [ ] 仍受 `readySent` 门闩约束（不重复）
+- [ ] P4-05 Local 优先 + Server 回退联动（和 P0-04 冻结的状态机一致）：
+  - [ ] 在 Display 侧启动配对超时计时器；超时后进入 Server 模式（Phase 3）
+  - [ ] 配对成功后：取消超时，并保证不再建立 socket 连接
 
-## Phase 5：Manager UI（0.5–1 天）
+## Phase 5：Manager UI
 
-1) 新增 `DisplayPanel.svelte`：
-   - 显示 local display 状态
-   - 显示 server display（group=display）列表与 ready 状态
-2) 修改 clients UI：排除 display：
-   - `ClientSelector`/`selectAll` 过滤
-3) 增加 “Send To Display” 开关并接入控制发送路径。  
+- [ ] P5-01 Manager store 增加 Display 专用派生数据（按 5.4 约定）：
+  - [ ] `displayClients = clients.filter(c.group === 'display')`
+  - [ ] `audienceClients = clients.filter(c.group !== 'display')`（给 ClientSelector/ClientList 使用）
+- [ ] P5-02 修改 `apps/manager/src/lib/components/ClientList.svelte` 使用 `audienceClients`，确保 Display 不出现在可选列表。
+- [ ] P5-03 修改 `apps/manager/src/lib/stores/manager.ts#selectAllClients()`：
+  - [ ] 不再调用 `sdk.selectAll()`（会包含 display）
+  - [ ] 改为 `sdk.selectClients(audienceClients.map(c => c.clientId))`
+- [ ] P5-04 新增 `apps/manager/src/lib/components/DisplayPanel.svelte`：
+  - [ ] Local Display：显示 bridge 状态（disconnected/pairing/connected/ready）、按钮（Open/Reconnect/Close）
+  - [ ] Remote Display：显示 `displayClients` 列表（通常 0/1）与 ready 状态
+- [ ] P5-05 将 `DisplayPanel` 接入 `apps/manager/src/routes/+page.svelte`（与 Clients 面板分区，不放在 ClientSelector 旁边）。
+- [ ] P5-06 新增 “Send To Display” 全局开关（参考 4.5.3）：
+  - [ ] UI：在 Dashboard 放置 toggle（仅当存在 local 或 remote display 时可用）
+  - [ ] 状态：建议落在 `apps/manager/src/lib/stores/manager.ts`（可选 localStorage 持久化）
+- [ ] P5-07 接入发送路径（做到“输入给 client 的行为 Display 也可接受”）：
+  - [ ] 在 `apps/manager/src/lib/stores/manager.ts` 中抽一个内部方法：`maybeMirrorToDisplay(action, payload, executeAt)`
+  - [ ] local 优先：若 bridge 已连接 → 走 `display-bridge.ts` 的 `sendControl`
+  - [ ] 否则 server 回退：`sdk.sendControl(targetGroup('display'), action, payload, executeAt)`
+  - [ ] 仅镜像控制子集（4.1）与必要的 manifest（Phase 6），不转发 node-executor 等部署类插件消息
 
-## Phase 6：manifest 对 local display 推送（0.5 天）
+## Phase 6：manifest 对 local display 推送
 
-1) 改造 `asset-manifest.ts` 导出最新 manifest（store/gsetter + subscribe）。  
-2) Local 配对成功后立即发送最新 manifest；后续更新也发送。  
-3) Display 只在第一次 ready 时回传；更新后不再回传。  
+- [ ] P6-01 改造 `apps/manager/src/lib/nodes/asset-manifest.ts`：把 `latestManifest` 变为可消费的输出：
+  - [ ] 导出 `getLatestManifest(): AssetManifest | null`
+  - [ ] 导出 `subscribeLatestManifest(cb): () => void`（或直接导出一个 Svelte store）
+- [ ] P6-02 `apps/manager/src/lib/display/display-bridge.ts` 在配对成功后：
+  - [ ] 立刻 `sendManifest(getLatestManifest())`
+  - [ ] `subscribeLatestManifest`：后续更新再推送一次（Display 会继续下载但不会再次 ready）
+- [ ] P6-03 Display 侧处理 `shugu:display:plugin`（`multimedia-core:configure`）：
+  - [ ] `multimediaCore.setAssetManifest({ manifestId, assets, updatedAt })`
+  - [ ] 触发 preload（由 MultimediaCore 自己管理）
+- [ ] P6-04 ready “严格一次”回归验证：manifest 更新导致第二次 preload 时，Display 仍不会发第二次 ready（`readySent` 必须挡住）。
 
-## Phase 7：回归验证与文档（0.5 天）
+## Phase 7：回归验证与文档
 
-1) 手动验证清单（见 7）。  
-2) 更新 README（可选）：增加 `pnpm dev:display` 与打开方式说明。  
+- [ ] P7-01 根脚本补齐：根 `package.json` 增加 `dev:display`（与 5.7 对齐）。
+- [ ] P7-02 完成手动验证清单：逐条跑完 7.1 / 7.2 / 7.3（建议边跑边截图/录屏，便于回溯）。
+- [ ] P7-03 回归确认：ClientSelector/ClientList/`selectAll` 不包含 Display，但 asset manifest 仍会推到 Server 模式 Display（因为它仍在 `state.clients` 里）。
+- [ ] P7-04 执行质量门槛：`pnpm lint`（必要）+ `pnpm build:all`（推荐）。
+- [ ] P7-05 文档更新（可选）：README 增加 `pnpm dev:display`、打开 URL、Local/Server 模式判定说明。
 
 ---
 

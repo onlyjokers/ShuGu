@@ -21,6 +21,8 @@ import {
     TargetSelector,
     ControlAction,
     ControlPayload,
+    ControlBatchPayload,
+    type ControlBatchItem,
     ScreenColorPayload,
     PluginId,
     PluginCommand,
@@ -63,6 +65,13 @@ export class ManagerSDK {
     private stateListeners: Set<(state: ManagerState) => void> = new Set();
     private sensorDataHandlers: Set<MessageHandler<SensorDataMessage>> = new Set();
     private timeSyncIntervalId: ReturnType<typeof setInterval> | null = null;
+
+    // Batch multiple `sendControl(...)` calls in the same tick into a single `custom` message.
+    private pendingControlByTargetKey: Map<
+        string,
+        { target: TargetSelector; items: ControlBatchItem[] }
+    > = new Map();
+    private pendingControlFlushScheduled = false;
 
     constructor(config: ManagerSDKConfig) {
         this.config = {
@@ -190,8 +199,117 @@ export class ManagerSDK {
         executeAt?: number
     ): void {
         if (!this.socket?.connected) return;
-        const message = createControlMessage(target, action, payload, executeAt);
+
+        // Avoid wrapping custom payloads (unknown semantics) unless it is already a control-batch.
+        if (action === 'custom') {
+            const kind = (payload as any)?.kind;
+            if (kind === 'control-batch') {
+                const message = createControlMessage(target, action, payload, executeAt);
+                this.socket.emit(SOCKET_EVENTS.MSG, message);
+                return;
+            }
+
+            const message = createControlMessage(target, action, payload, executeAt);
+            this.socket.emit(SOCKET_EVENTS.MSG, message);
+            return;
+        }
+
+        this.queueControl(target, { action, payload: payload as any, executeAt });
+    }
+
+    /**
+     * Send multiple control actions in a single message (ControlAction: 'custom').
+     *
+     * This is used to keep MIDI-driven updates in sync and reduce server message pressure.
+     */
+    sendControlBatch(target: TargetSelector, items: ControlBatchItem[], executeAt?: number): void {
+        if (!this.socket?.connected) return;
+        const payload: ControlBatchPayload = {
+            kind: 'control-batch',
+            items,
+            ...(typeof executeAt === 'number' && Number.isFinite(executeAt) ? { executeAt } : {}),
+        };
+        const message = createControlMessage(target, 'custom', payload, executeAt);
         this.socket.emit(SOCKET_EVENTS.MSG, message);
+    }
+
+    private targetKey(target: TargetSelector): string {
+        if (target.mode === 'all') return 'all';
+        if (target.mode === 'group') return `group:${target.groupId}`;
+        const ids = (target.ids ?? []).map(String).filter(Boolean).sort();
+        return `clientIds:${ids.join(',')}`;
+    }
+
+    private normalizeTarget(target: TargetSelector): TargetSelector {
+        if (target.mode !== 'clientIds') return target;
+        const ids = (target.ids ?? []).map(String).filter(Boolean).sort();
+        return { mode: 'clientIds', ids };
+    }
+
+    private queueControl(target: TargetSelector, item: ControlBatchItem): void {
+        const key = this.targetKey(target);
+        const existing = this.pendingControlByTargetKey.get(key) ?? {
+            target: this.normalizeTarget(target),
+            items: [],
+        };
+
+        // Optional optimization: merge "update" style actions in the same tick (keep last, merge payload fields).
+        if (item.action === 'modulateSoundUpdate') {
+            const idx = existing.items.findIndex((entry) => entry.action === 'modulateSoundUpdate');
+            if (idx >= 0) {
+                const prev = existing.items[idx];
+                existing.items[idx] = {
+                    action: 'modulateSoundUpdate',
+                    payload: { ...(prev.payload as any), ...(item.payload as any) },
+                    executeAt: item.executeAt ?? prev.executeAt,
+                };
+            } else {
+                existing.items.push(item);
+            }
+        } else {
+            existing.items.push(item);
+        }
+
+        this.pendingControlByTargetKey.set(key, existing);
+
+        if (this.pendingControlFlushScheduled) return;
+        this.pendingControlFlushScheduled = true;
+        queueMicrotask(() => this.flushQueuedControls());
+    }
+
+    private flushQueuedControls(): void {
+        this.pendingControlFlushScheduled = false;
+        if (!this.socket?.connected) {
+            this.pendingControlByTargetKey.clear();
+            return;
+        }
+
+        for (const entry of this.pendingControlByTargetKey.values()) {
+            if (entry.items.length === 0) continue;
+
+            if (entry.items.length === 1) {
+                const single = entry.items[0];
+                const message = createControlMessage(entry.target, single.action, single.payload, single.executeAt);
+                this.socket.emit(SOCKET_EVENTS.MSG, message);
+                continue;
+            }
+
+            const sharedExecuteAt = entry.items[0].executeAt;
+            const hasSharedExecuteAt =
+                typeof sharedExecuteAt === 'number' &&
+                Number.isFinite(sharedExecuteAt) &&
+                entry.items.every((item) => item.executeAt === sharedExecuteAt);
+
+            if (hasSharedExecuteAt) {
+                const items = entry.items.map(({ action, payload }) => ({ action, payload }));
+                this.sendControlBatch(entry.target, items, sharedExecuteAt);
+                continue;
+            }
+
+            this.sendControlBatch(entry.target, entry.items, undefined);
+        }
+
+        this.pendingControlByTargetKey.clear();
     }
 
     /**

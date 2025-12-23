@@ -74,3 +74,46 @@
 - `apps/manager/src/lib/components/nodes/node-canvas/controllers/loop-helpers.ts`
 - `apps/manager/src/lib/components/nodes/node-canvas/ui/overlays/LoopFramesOverlay.svelte`
 - `packages/sdk-client/src/node-executor.ts`
+
+#### Step 5 — 节点注册体系：node-core SOT + JSON overlay ✅
+
+**已完成:**
+- [x] node-core 作为运行时 SOT：Manager 启动时先 `registerDefaultNodeDefinitions(nodeRegistry, ...)` 注册 core definitions
+- [x] JSON specs 变为 UI overlay：对已存在于 registry 的 core type，不再跳过，而是合并 label/category + ports/configSchema 的 label/min/max/step
+- [x] 兼容旧 JSON：仅当 core registry 不存在该 type 时，才使用 JSON 的 `runtime.kind` 作为 manager-only 节点来源（缺字段会 warn 并跳过）
+- [x] 工具：新增 `pnpm validate:node-specs` 扫描 JSON overlay 冲突（端口/key 不存在、type 不匹配、min/max 冲突、core 类型仍含 runtime 等）
+- [x] 文档：更新 specs README，说明 JSON overlay / manager-only 的边界与校验方式
+
+**验证:**
+- `pnpm --filter ./apps/manager lint` ✅（0 errors）
+- `pnpm validate:node-specs` ✅（0 errors, warnings only）
+
+**涉及文件（核心）:**
+- `apps/manager/src/lib/nodes/specs/register.ts`
+- `apps/manager/src/lib/nodes/specs/README.md`
+- `scripts/validate-node-specs.mjs`
+- `package.json`
+- `docs/PlanDocs/1222_improveNodeGraph/plan.md`
+
+#### Step 6 — MIDI 批量下发（同 tick 合并，减少 server 压力）✅
+
+**已完成:**
+- [x] Batch 协议：新增 `ControlBatchPayload(kind='control-batch')` 与 `ControlBatchItem`，仍走 `ControlAction: 'custom'`（不新增 message type）。
+- [x] Manager 聚合：`sdk-manager` 在同一 tick 内对同一 target 的多次 `sendControl(...)` 自动聚合；flush 时仅发送 1 条 control（多条→`custom` batch，单条保持原 action）。
+- [x] Client 执行：Client 侧 `executeControl` 支持 `custom` batch，展开 items 并按 `item.executeAt ?? batch.executeAt ?? message.executeAt` 执行。
+
+**验证:**
+- `pnpm --filter @shugu/protocol build` ✅
+- `pnpm --filter @shugu/sdk-manager build` ✅
+- `pnpm --filter @shugu/sdk-manager lint` ✅（0 errors）
+- `pnpm --filter @shugu/client lint` ✅（0 errors）
+- `pnpm --filter @shugu/manager lint` ✅（0 errors）
+
+**手动回归:**
+- Manager 开启 MIDI，同时按两键/推两路 MIDI 到同一个 client-object：server 侧应只看到 1 条 `control(action='custom', payload.kind='control-batch')`，client 侧变化更同步。
+
+**涉及文件（核心）:**
+- `packages/protocol/src/types.ts`
+- `packages/sdk-manager/src/manager-sdk.ts`
+- `apps/client/src/lib/stores/client.ts`
+- `docs/PlanDocs/1222_improveNodeGraph/plan.md`

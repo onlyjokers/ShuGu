@@ -870,3 +870,60 @@
    - 导入：`docs/PlanDocs/1221_newMultiMediaSystem/templates/08_midi_control_audio_clip_range.json`
    - 分别 Learn 两个 MIDI 控制（Start/End）
    - 转动 MIDI：StartSec/EndSec 会通过 override bridge 写入 client patch，片段范围实时变化
+
+---
+
+## ✅ Phase 2.8：All Nodes Connectable（所有参数可接线）
+
+你要求「所有 node 都可以接对应的输入口（不再只能手动填值）」。本阶段把“config-only 参数”系统性补齐为 inputs，并修正 Manager UI 的写入路径，确保连线/调制是单一语义。
+
+### 变更摘要
+
+1) **node-core：补齐缺失 inputs（SOT）**
+   - `packages/node-core/src/definitions.ts`
+     - `math`：新增输入 `operation`（string）
+     - `lfo`：新增输入 `waveform`（string）
+     - `number`：新增输入 `value`（number；行为变成“number box / 可被上游驱动”）
+     - `number-stabilizer`：新增输入 `smoothing`（number）
+     - `proc-scene-switch`：新增输入 `sceneId`（string）
+     - Tone：补齐 `bus/order/enabled` 等 inputs；`tone-granular` 增加 `url/loop` 输入；`tone-player` 增加 `loop/autostart/enabled/bus` 输入
+
+2) **sdk-client：Tone 节点同步 inputs，并从 inputs 读取（优先）**
+   - `packages/sdk-client/src/tone-adapter.ts`
+     - effects：`bus/order/enabled` 支持接线（inputs 优先，fallback config）
+     - osc：`waveform/bus/enabled/loop` 支持接线
+     - granular：`url/loop/enabled/bus` 支持接线（允许从 Assets 输出 ref 直接驱动）
+     - player：`enabled/loop/autostart/bus` 支持接线；`url` hash 中的 `play/loop` 仍然优先（保证 clip 节点控制语义不被破坏）
+
+3) **manager：Select/Color inline control 写 inputValues（而不是写 config）**
+   - `apps/manager/src/lib/components/nodes/node-canvas/rete/rete-builder.ts`
+     - select 输入与 color 输入现在写 `node.inputValues[...]` 并发送 override kind=`input`
+     - 兼容旧图：若旧图把 select/color 存在 config，仍会作为初始值展示
+
+4) **manager-only specs：补齐 MIDI/参数节点缺失 inputs，并在 runtime 中 inputs 优先**
+   - JSON specs：
+     - `apps/manager/src/lib/nodes/specs/midi-boolean.json`：新增 `threshold` input
+     - `apps/manager/src/lib/nodes/specs/midi-map.json`：新增 `min/max/integer` inputs
+     - `apps/manager/src/lib/nodes/specs/midi-color-map.json`：新增 `from/to/invert` inputs
+     - `apps/manager/src/lib/nodes/specs/midi-select-map.json`：新增 `invert` input
+     - `apps/manager/src/lib/nodes/specs/param-set.json`：新增 `mode` input（select → string）
+   - runtime：
+     - `apps/manager/src/lib/nodes/specs/register.ts`：对应节点实现改为 `inputs[...]` 优先，fallback config
+
+### 你如何验证（推荐）
+
+- 在 Manager 的 Node Graph：
+  1) 新建 `Math` 或 `LFO`，确认 `Operation/Waveform` 是一个“输入口上的 Select 控件”，并且可被连线覆盖。
+  2) 新建 `Number`：确认它有 `Value` 输入口（可手动改，也可从上游连线驱动）。
+  3) 新建 `Tone Delay`：确认 `Bus/Order/Enabled` 现在也是输入口（可接线/可被 MIDI 控制）。
+  4) 新建 `midi-map`：确认 `Min/Max/Integer` 也能被连线控制（不必再写死在 config）。
+  5) 直接导入模板：`docs/PlanDocs/1221_newMultiMediaSystem/templates/09_midi_select_waveform_tone_osc.json`
+     - MIDI → Select → Tone Osc(Waveform)，验证 select 参数可被 MIDI 实时调制（manager-only → override bridge）。
+
+### ✅ 验证记录
+
+- `pnpm -C packages/node-core run build` ✅
+- `pnpm -C packages/sdk-client run build` ✅
+- `pnpm -C apps/manager run check` ✅（仅有 svelte unused CSS 警告）
+- `pnpm -C apps/client run check` ✅
+- 缺口扫描脚本：node-core / manager-json 的 `configSchema(number/boolean/string/select)` 均有对应输入口 ✅（missing=0）

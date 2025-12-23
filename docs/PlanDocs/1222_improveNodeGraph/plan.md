@@ -421,11 +421,11 @@ UI 文案/状态：
 
 ---
 
-## [ ] Step 5 — 节点注册体系：node-core SOT + JSON overlay（保留 JSON 优点）
+## [x] Step 5 — 节点注册体系：node-core SOT + JSON overlay（保留 JSON 优点）
 
-### [ ] Step 5.1 明确职责分层
+### [x] Step 5.1 明确职责分层
 
-#### [ ] Step 5.1.1 运行时层（SOT）
+#### [x] Step 5.1.1 运行时层（SOT）
 
 来源：`@shugu/node-core`（NodeDefinition）
 
@@ -433,7 +433,7 @@ UI 文案/状态：
 - configSchema（含 min/max/step 默认）
 - process/onSink（运行时逻辑）
 
-#### [ ] Step 5.1.2 UI overlay 层（JSON）
+#### [x] Step 5.1.2 UI overlay 层（JSON）
 
 来源：`apps/manager/src/lib/nodes/specs/**/*.json`
 
@@ -448,7 +448,7 @@ UI 文案/状态：
 
 - runtime.kind / process/onSink 的选择（逐步废弃）
 
-### [ ] Step 5.2 兼容策略（不破坏现有节点）
+### [x] Step 5.2 兼容策略（不破坏现有节点）
 
 短期（过渡）：
 
@@ -462,7 +462,7 @@ UI 文案/状态：
 - 把常用节点（math/lfo/proc-* 等）全部迁移为 node-core 主导
 - JSON 只保留 overlay 字段
 
-### [ ] Step 5.3 工具与校验
+### [x] Step 5.3 工具与校验
 
 - 增加一个校验脚本（dev）：扫描 JSON，报告：
   - overlay 字段是否合法
@@ -476,11 +476,11 @@ UI 文案/状态：
 
 ---
 
-## [ ] Step 6 — MIDI 批量下发（同 tick 合并，减少 server 压力）
+## [x] Step 6 — MIDI 批量下发（同 tick 合并，减少 server 压力）
 
 > 目标：你同时按两个键/推两个 MIDI，参数“一起传过去”，而不是 2 条消息错开。
 
-### [ ] Step 6.1 Batch 协议（不破坏现有协议类型）
+### [x] Step 6.1 Batch 协议（不破坏现有协议类型）
 
 使用现有 `ControlAction: 'custom'` 作为载体：
 
@@ -490,7 +490,7 @@ UI 文案/状态：
   - `items: Array<{ action: ControlAction; payload: ControlPayload; executeAt?: number }>`
   - 可选：`executeAt`（统一调度）
 
-### [ ] Step 6.2 Manager 聚合策略
+### [x] Step 6.2 Manager 聚合策略
 
 聚合位置建议（二选一）：
 
@@ -508,7 +508,7 @@ UI 文案/状态：
   - 默认：按顺序保留全部 items
   - 可选优化：对 `modulateSoundUpdate` 等“update 类 action”同 tick 合并（只保留最后一次，并 merge payload 字段）
 
-### [ ] Step 6.3 Client 执行策略
+### [x] Step 6.3 Client 执行策略
 
 在 `apps/client/src/lib/stores/client.ts` 的 `executeControl` 中处理：
 
@@ -524,7 +524,7 @@ UI 文案/状态：
 
 ---
 
-## [ ] Step 7 — WebGPU 渲染增强（仅当前两步仍不理想时进入）
+## [ ] Step 7 — WebGPU 渲染增强（可选）
 
 ### [ ] Step 7.1 目标
 

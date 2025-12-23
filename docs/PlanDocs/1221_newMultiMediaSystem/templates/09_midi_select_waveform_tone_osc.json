@@ -1,0 +1,87 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Patch: MIDI Select → Tone Osc(Waveform) → Audio Patch to Client",
+  "purpose": "验证“select 类型参数可接线/可被 MIDI 调制”：midi-fuzzy → midi-select-map 输出字符串，驱动 Tone Osc 的 Waveform 输入口。",
+  "howTo": [
+    "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
+    "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
+    "3) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "4) 在 MIDI Fuzzy 节点上 Learn 一个旋钮/推子（或任意连续 MIDI 源）。",
+    "5) 转动旋钮：Tone Osc 的 Waveform 会在 sine/square/triangle/sawtooth 之间切换，client 端实时变化。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-midi",
+        "type": "midi-fuzzy",
+        "position": { "x": 120, "y": 320 },
+        "config": { "source": null },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-midi-select",
+        "type": "midi-select-map",
+        "position": { "x": 380, "y": 320 },
+        "config": { "invert": false },
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-osc",
+        "type": "tone-osc",
+        "position": { "x": 380, "y": 160 },
+        "config": { "waveform": "sine", "bus": "main", "enabled": true, "loop": "" },
+        "inputValues": { "frequency": 220, "amplitude": 0.15 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 720, "y": 160 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 720, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-midi-to-select",
+        "sourceNodeId": "node-midi",
+        "sourcePortId": "value",
+        "targetNodeId": "node-midi-select",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-select-to-waveform",
+        "sourceNodeId": "node-midi-select",
+        "sourcePortId": "out",
+        "targetNodeId": "node-osc",
+        "targetPortId": "waveform"
+      },
+      {
+        "id": "conn-osc-to-out",
+        "sourceNodeId": "node-osc",
+        "sourcePortId": "value",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}

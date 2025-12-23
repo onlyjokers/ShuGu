@@ -196,9 +196,12 @@ export interface DataReportingRatePayload {
 }
 
 /**
- * Union type for all control payloads
+ * Union type for base (single) control payloads.
+ *
+ * Note: `custom` batch payloads are layered on top as `ControlPayload` (see below) to avoid
+ * circular type references.
  */
-export type ControlPayload =
+export type BaseControlPayload =
   | FlashlightPayload
   | ScreenColorPayload
   | VibratePayload
@@ -211,6 +214,34 @@ export type ControlPayload =
   | VisualSceneSwitchPayload
   | DataReportingRatePayload
   | Record<string, unknown>;
+
+/**
+ * Batch item for `ControlAction: 'custom'`.
+ */
+export type ControlBatchItem = {
+  action: ControlAction;
+  payload: BaseControlPayload;
+  executeAt?: number;
+};
+
+/**
+ * Batch payload for `ControlAction: 'custom'`.
+ *
+ * Used to deliver multiple control actions in a single message for better sync and lower server load.
+ */
+export interface ControlBatchPayload {
+  kind: 'control-batch';
+  items: ControlBatchItem[];
+  /**
+   * Optional unified execute time applied to items that don't specify `executeAt`.
+   */
+  executeAt?: number;
+}
+
+/**
+ * Union type for all control payloads.
+ */
+export type ControlPayload = BaseControlPayload | ControlBatchPayload;
 
 /**
  * Control message sent from manager to control client behavior

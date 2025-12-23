@@ -1,11 +1,13 @@
 /**
- * JSON Node Specs (Manager)
+ * JSON Node Specs / UI Overlays (Manager)
  *
- * Node metadata (ports, config fields, constraints) lives in JSON files under this folder.
- * Add a new `*.json` file to add a node to the Manager Node Graph.
+ * Node runtime behavior and the authoritative port/config schema live in `@shugu/node-core`.
+ * JSON files under this folder act as a *UI overlay* layer (label/category/constraints/etc).
  *
- * Runtime behavior is selected via `runtime.kind`. This keeps node UI/constraints data-driven
- * while still using safe, built-in runtimes (no `eval`).
+ * Back-compat:
+ * - JSON files may still include `runtime.kind`. This is only used to define manager-only nodes
+ *   (e.g. MIDI helpers) that do not exist in node-core yet.
+ * - For node-core node types, `runtime` is ignored and only overlay fields are applied.
  */
 import { get } from 'svelte/store';
 import {
@@ -124,12 +126,12 @@ type NodeRuntime =
 
 export type NodeSpec = {
   type: string;
-  label: string;
-  category: string;
-  inputs: NodePort[];
-  outputs: NodePort[];
-  configSchema: ConfigField[];
-  runtime: NodeRuntime;
+  label?: string;
+  category?: string;
+  inputs?: NodePort[];
+  outputs?: NodePort[];
+  configSchema?: ConfigField[];
+  runtime?: NodeRuntime;
 };
 
 type CoreRuntimeImpl = Pick<NodeDefinition, 'process' | 'onSink'>;
@@ -533,11 +535,11 @@ function createCommandProcess(runtime: CommandRuntime): NodeDefinition['process'
   };
 }
 
-function createDefinition(spec: NodeSpec): NodeDefinition {
+function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefinition {
   const base: Omit<NodeDefinition, 'process' | 'onSink'> = {
     type: spec.type,
-    label: spec.label,
-    category: spec.category,
+    label: spec.label ?? spec.type,
+    category: spec.category ?? 'Other',
     inputs: spec.inputs ?? [],
     outputs: spec.outputs ?? [],
     configSchema: spec.configSchema ?? [],
@@ -653,7 +655,11 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
         ...base,
         process: (inputs, config, context: ProcessContext) => {
           const path = String(config.path ?? '');
-          const mode = String(config.mode ?? 'REMOTE') as 'REMOTE' | 'MODULATION';
+          const modeRaw =
+            typeof (inputs as any).mode === 'string' && String((inputs as any).mode).trim()
+              ? String((inputs as any).mode).trim()
+              : String(config.mode ?? 'REMOTE');
+          const mode = modeRaw === 'MODULATION' ? 'MODULATION' : 'REMOTE';
           const value = (inputs.value as number) ?? 0;
           const bypass = (inputs.bypass as boolean) ?? false;
 
@@ -686,10 +692,14 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
     case 'midi-boolean': {
       return {
         ...base,
-        process: (_inputs, config, context) => {
+        process: (inputs, config, context) => {
           const source = (config.source ?? null) as MidiSource | null;
           const key = midiSourceKey(source);
-          const thresholdRaw = Number(config.threshold ?? 0.5);
+          const thresholdFromInput = (inputs as any).threshold;
+          const thresholdRaw =
+            typeof thresholdFromInput === 'number' && Number.isFinite(thresholdFromInput)
+              ? thresholdFromInput
+              : Number(config.threshold ?? 0.5);
           const threshold = Number.isFinite(thresholdRaw) ? thresholdRaw : 0.5;
 
           if (!source || !key) {
@@ -739,18 +749,14 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
           const value = typeof inputs.in === 'number' ? (inputs.in as number) : null;
           if (value === null || !Number.isFinite(value)) return { out: null };
 
-          const min = Number(config.min ?? 0);
-          const max = Number(config.max ?? 1);
-          const invert =
-            typeof (inputs as any).invert === 'boolean'
-              ? Boolean((inputs as any).invert)
-              : Boolean(config.invert);
-          const round =
-            typeof (inputs as any).round === 'boolean'
-              ? Boolean((inputs as any).round)
-              : Boolean(config.round);
+          const minRaw = typeof (inputs as any).min === 'number' ? (inputs as any).min : Number(config.min ?? 0);
+          const maxRaw = typeof (inputs as any).max === 'number' ? (inputs as any).max : Number(config.max ?? 1);
+          const min = Number.isFinite(minRaw) ? minRaw : 0;
+          const max = Number.isFinite(maxRaw) ? maxRaw : 1;
+          const invert = coerceBoolean((inputs as any).invert, Boolean(config.invert));
+          const round = coerceBoolean((inputs as any).round, Boolean(config.round));
           // Integer output helper: avoids float inputs for discrete targets (e.g. client index/range).
-          const integer = Boolean((config as any).integer);
+          const integer = coerceBoolean((inputs as any).integer, Boolean((config as any).integer));
 
           const mapped = mapRangeWithOptions(value, min, max, invert);
           const out = integer || round ? Math.round(mapped) : mapped;
@@ -767,7 +773,7 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
           const value = typeof inputs.in === 'number' ? (inputs.in as number) : null;
           if (value === null || !Number.isFinite(value)) return { out: null };
 
-          const invert = Boolean(config.invert);
+          const invert = coerceBoolean((inputs as any).invert, Boolean(config.invert));
           const rawOptions = Array.isArray((config as any).options) ? ((config as any).options as unknown[]) : [];
           const options = rawOptions.map((opt) => String(opt)).filter((opt) => opt !== '');
 
@@ -823,11 +829,13 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
         ...base,
         process: (inputs, config) => {
           const raw = typeof inputs.in === 'number' ? (inputs.in as number) : 0;
-          const invert = Boolean(config.invert);
+          const invert = coerceBoolean((inputs as any).invert, Boolean(config.invert));
           const t = invert ? 1 - clamp01(raw) : clamp01(raw);
 
-          const fromRaw = config.from ?? '#6366f1';
-          const toRaw = config.to ?? '#ffffff';
+          const fromInput = (inputs as any).from;
+          const toInput = (inputs as any).to;
+          const fromRaw = typeof fromInput === 'string' && fromInput.trim() ? fromInput.trim() : (config.from ?? '#6366f1');
+          const toRaw = typeof toInput === 'string' && toInput.trim() ? toInput.trim() : (config.to ?? '#ffffff');
           const from = parseHexColor(fromRaw) ?? parseHexColor('#6366f1');
           const to = parseHexColor(toRaw) ?? parseHexColor('#ffffff');
           if (!from || !to) return { out: null };
@@ -846,16 +854,113 @@ function createDefinition(spec: NodeSpec): NodeDefinition {
   }
 }
 
+function applySpecOverlay(base: NodeDefinition, spec: NodeSpec): NodeDefinition {
+  const nextLabel = typeof spec.label === 'string' && spec.label.trim() ? spec.label.trim() : base.label;
+  const nextCategory =
+    typeof spec.category === 'string' && spec.category.trim() ? spec.category.trim() : base.category;
+
+  const mergeMin = (baseMin: number | undefined, overlayMin: unknown): number | undefined => {
+    const ov = isFiniteNumber(overlayMin) ? overlayMin : undefined;
+    if (ov === undefined) return baseMin;
+    if (baseMin === undefined) return ov;
+    return Math.max(baseMin, ov);
+  };
+
+  const mergeMax = (baseMax: number | undefined, overlayMax: unknown): number | undefined => {
+    const ov = isFiniteNumber(overlayMax) ? overlayMax : undefined;
+    if (ov === undefined) return baseMax;
+    if (baseMax === undefined) return ov;
+    return Math.min(baseMax, ov);
+  };
+
+  const mergeStep = (baseStep: number | undefined, overlayStep: unknown): number | undefined => {
+    const ov = isFiniteNumber(overlayStep) ? overlayStep : undefined;
+    if (ov === undefined || ov <= 0) return baseStep;
+    return ov;
+  };
+
+  const mergePorts = (basePorts: NodePort[], overlayPorts: unknown): NodePort[] => {
+    if (!Array.isArray(overlayPorts) || overlayPorts.length === 0) return basePorts;
+
+    const byId = new Map<string, any>();
+    for (const raw of overlayPorts) {
+      if (!raw || typeof raw !== 'object') continue;
+      const id = typeof (raw as any).id === 'string' ? String((raw as any).id) : '';
+      if (!id) continue;
+      byId.set(id, raw);
+    }
+
+    return basePorts.map((port) => {
+      const overlay = byId.get(String(port.id));
+      if (!overlay) return port;
+      const overlayType = typeof overlay.type === 'string' ? String(overlay.type) : '';
+      if (overlayType && overlayType !== String(port.type)) return port;
+
+      const label =
+        typeof overlay.label === 'string' && overlay.label.trim() ? overlay.label.trim() : port.label;
+
+      const min = mergeMin(port.min, overlay.min);
+      const max = mergeMax(port.max, overlay.max);
+      const step = mergeStep(port.step, overlay.step);
+
+      const safeMin = min !== undefined && max !== undefined && min > max ? port.min : min;
+      const safeMax = min !== undefined && max !== undefined && min > max ? port.max : max;
+
+      return { ...port, label, min: safeMin, max: safeMax, step };
+    });
+  };
+
+  const mergeConfigSchema = (baseSchema: ConfigField[], overlaySchema: unknown): ConfigField[] => {
+    if (!Array.isArray(overlaySchema) || overlaySchema.length === 0) return baseSchema;
+
+    const byKey = new Map<string, any>();
+    for (const raw of overlaySchema) {
+      if (!raw || typeof raw !== 'object') continue;
+      const key = typeof (raw as any).key === 'string' ? String((raw as any).key) : '';
+      if (!key) continue;
+      byKey.set(key, raw);
+    }
+
+    return baseSchema.map((field) => {
+      const overlay = byKey.get(String(field.key));
+      if (!overlay) return field;
+      const overlayType = typeof overlay.type === 'string' ? String(overlay.type) : '';
+      if (overlayType && overlayType !== String(field.type)) return field;
+
+      const label =
+        typeof overlay.label === 'string' && overlay.label.trim() ? overlay.label.trim() : field.label;
+
+      const min = mergeMin(field.min, overlay.min);
+      const max = mergeMax(field.max, overlay.max);
+      const step = mergeStep(field.step, overlay.step);
+
+      const safeMin = min !== undefined && max !== undefined && min > max ? field.min : min;
+      const safeMax = min !== undefined && max !== undefined && min > max ? field.max : max;
+
+      return { ...field, label, min: safeMin, max: safeMax, step };
+    });
+  };
+
+  return {
+    ...base,
+    label: nextLabel,
+    category: nextCategory,
+    inputs: mergePorts(base.inputs, spec.inputs),
+    outputs: mergePorts(base.outputs, spec.outputs),
+    configSchema: mergeConfigSchema(base.configSchema, spec.configSchema),
+  };
+}
+
 function loadSpecs(): NodeSpec[] {
-  const modules = import.meta.glob('./**/*.json', { eager: true }) as Record<string, { default: NodeSpec }>;
+  const modules = import.meta.glob('./**/*.json', { eager: true }) as Record<string, { default: unknown }>;
   const specs: NodeSpec[] = [];
 
-  for (const [path, mod] of Object.entries(modules)) {
-    const spec = mod?.default;
+  for (const mod of Object.values(modules)) {
+    const spec = (mod as any)?.default as any;
     if (!spec || typeof spec !== 'object') continue;
-    if (!spec.type || !spec.label || !spec.category) continue;
-    if (!spec.runtime || typeof (spec as any).runtime?.kind !== 'string') continue;
-    specs.push(spec);
+    const type = typeof spec.type === 'string' ? spec.type.trim() : '';
+    if (!type) continue;
+    specs.push(spec as NodeSpec);
   }
 
   // Stable order for debugging/determinism.
@@ -1053,9 +1158,26 @@ if (!nodeRegistry.get('load-video-from-assets')) {
 
 for (const spec of loadSpecs()) {
   try {
-    // Single Source of Truth: never override node-core definitions via hand-written specs.
-    if (nodeRegistry.get(spec.type)) continue;
-    nodeRegistry.register(createDefinition(spec));
+    const type = String(spec.type ?? '');
+    if (!type) continue;
+
+    const existing = nodeRegistry.get(type);
+    if (existing) {
+      nodeRegistry.register(applySpecOverlay(existing, spec));
+      continue;
+    }
+
+    // Manager-only node (not in node-core): still defined via JSON runtime.kind (backward-compatible path).
+    if (!spec.runtime || typeof (spec as any).runtime?.kind !== 'string') {
+      console.warn('[node-specs] missing runtime.kind for manager-only spec:', type);
+      continue;
+    }
+    if (!spec.label || !spec.category) {
+      console.warn('[node-specs] missing label/category for manager-only spec:', type);
+      continue;
+    }
+
+    nodeRegistry.register(createDefinition(spec as NodeSpec & { runtime: NodeRuntime }));
   } catch (err) {
     console.warn('[node-specs] failed to register', spec?.type, err);
   }

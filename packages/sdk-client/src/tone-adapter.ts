@@ -1276,6 +1276,10 @@ export function registerToneClientDefinitions(
     inputs: [
       { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
       { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
+      { id: 'waveform', label: 'Waveform', type: 'string' },
+      { id: 'bus', label: 'Bus', type: 'string' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
+      { id: 'loop', label: 'Loop (pattern)', type: 'string' },
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1298,11 +1302,27 @@ export function registerToneClientDefinitions(
     process: (inputs, config, context: ProcessContext) => {
       const frequency = toNumber(inputs.frequency ?? config.frequency, 440);
       const inputAmplitude = toNumber(inputs.amplitude ?? config.amplitude, 1);
-      const enabled = toBoolean(config.enabled, false);
+      const enabled =
+        inputs.enabled !== undefined && inputs.enabled !== null
+          ? toBoolean(inputs.enabled, false)
+          : toBoolean(config.enabled, false);
       const amplitude = enabled ? inputAmplitude : 0;
-      const waveform = toString(config.waveform, 'sine');
-      const busName = toString(config.bus, DEFAULT_BUS);
-      const loopKey = enabled ? loopKeyOf(config.loop) : null;
+      const waveform = (() => {
+        const v = inputs.waveform;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.waveform, 'sine');
+      })();
+      const busName = (() => {
+        const v = inputs.bus;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.bus, DEFAULT_BUS);
+      })();
+      const loopPattern = (() => {
+        const v = inputs.loop;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.loop, '');
+      })();
+      const loopKey = enabled ? loopKeyOf(loopPattern) : null;
 
       if (!toneAudioEngine.isEnabled()) {
         return { value: amplitude };
@@ -1361,7 +1381,7 @@ export function registerToneClientDefinitions(
           Math.abs(instance.loopDefaults.amplitude - amplitude) > 0.001;
 
         if (loopKey !== instance.loopKey || defaultsChanged) {
-          const parsed = parseLoopPattern(config.loop, { frequency, amplitude });
+          const parsed = parseLoopPattern(loopPattern, { frequency, amplitude });
           if (parsed) {
             updateLoop(instance, parsed, deps, toNumber((config as any).loopStartAt, NaN));
             instance.loopKey = loopKey;
@@ -1386,9 +1406,16 @@ export function registerToneClientDefinitions(
     defaults: Record<string, number>
   ): Record<string, unknown> => {
     const inputValue = toNumber(inputs.in, 0);
-    const busName = toString(config.bus, DEFAULT_BUS);
-    const order = Math.floor(toNumber(config.order, defaults.order ?? 0));
-    const enabled = toBoolean(config.enabled, true);
+    const busName = (() => {
+      const v = inputs.bus;
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      return toString(config.bus, DEFAULT_BUS);
+    })();
+    const order = Math.floor(toNumber(inputs.order ?? config.order, defaults.order ?? 0));
+    const enabled =
+      inputs.enabled !== undefined && inputs.enabled !== null
+        ? toBoolean(inputs.enabled, true)
+        : toBoolean(config.enabled, true);
 
     const params: Record<string, number> = { ...defaults };
     Object.keys(defaults).forEach((key) => {
@@ -1426,6 +1453,9 @@ export function registerToneClientDefinitions(
       { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+      { id: 'order', label: 'Order', type: 'number' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1456,6 +1486,9 @@ export function registerToneClientDefinitions(
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+      { id: 'order', label: 'Order', type: 'number' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1488,6 +1521,9 @@ export function registerToneClientDefinitions(
       { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+      { id: 'order', label: 'Order', type: 'number' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1519,6 +1555,9 @@ export function registerToneClientDefinitions(
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
       { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+      { id: 'order', label: 'Order', type: 'number' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1544,12 +1583,16 @@ export function registerToneClientDefinitions(
     label: 'Tone Granular (client)',
     category: 'Audio',
     inputs: [
+      { id: 'url', label: 'URL', type: 'string' },
       { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
+      { id: 'loop', label: 'Loop', type: 'boolean' },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
       { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
+      { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1569,12 +1612,24 @@ export function registerToneClientDefinitions(
       const grainSize = toNumber(inputs.grainSize ?? config.grainSize, 0.2);
       const overlap = toNumber(inputs.overlap ?? config.overlap, 0.1);
       const volume = toNumber(inputs.volume ?? config.volume, 0.6);
-      const urlRaw = toString(config.url, '');
+      const urlRaw = toString(inputs.url ?? config.url, '');
       const url = deps.resolveAssetRef ? deps.resolveAssetRef(urlRaw) : urlRaw;
-      const loop = toBoolean(config.loop, true);
+      const loop =
+        inputs.loop !== undefined && inputs.loop !== null
+          ? toBoolean(inputs.loop, true)
+          : toBoolean(config.loop, true);
       const gate = toNumber(inputs.gate, 0);
-      const enabled = toBoolean(config.enabled, false) || gate > 0;
-      const busName = toString(config.bus, DEFAULT_BUS);
+      const enabledConfig = toBoolean(config.enabled, false);
+      const enabledInput =
+        inputs.enabled !== undefined && inputs.enabled !== null
+          ? toBoolean(inputs.enabled, enabledConfig)
+          : enabledConfig;
+      const enabled = enabledInput || gate > 0;
+      const busName = (() => {
+        const v = inputs.bus;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.bus, DEFAULT_BUS);
+      })();
 
       if (!toneAudioEngine.isEnabled()) {
         return { value: volume };
@@ -1660,9 +1715,13 @@ export function registerToneClientDefinitions(
     inputs: [
       { id: 'url', label: 'URL', type: 'string' },
       { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
+      { id: 'loop', label: 'Loop', type: 'boolean' },
+      { id: 'autostart', label: 'Autostart', type: 'boolean' },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
+      { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
@@ -1686,7 +1745,12 @@ export function registerToneClientDefinitions(
       const playbackRate = toNumber(inputs.playbackRate ?? config.playbackRate, 1);
       const detune = toNumber(inputs.detune ?? config.detune, 0);
       const volume = toNumber(inputs.volume ?? config.volume, 1);
-      const loop = clipParams.loop ?? toBoolean(config.loop, false);
+      const loopConfig = toBoolean(config.loop, false);
+      const loopInput =
+        inputs.loop !== undefined && inputs.loop !== null
+          ? toBoolean(inputs.loop, loopConfig)
+          : loopConfig;
+      const loop = clipParams.loop ?? loopInput;
       const playGate = clipParams.play;
       const reverse = clipParams.reverse ?? false;
       const cursorRequestedRaw = clipParams.cursorSec;
@@ -1695,9 +1759,22 @@ export function registerToneClientDefinitions(
           ? cursorRequestedRaw
           : null;
       const enabledConfig = toBoolean(config.enabled, false);
-      const enabled = playGate ?? enabledConfig;
-      const autostart = playGate !== null ? false : toBoolean(config.autostart, false);
-      const busName = toString(config.bus, DEFAULT_BUS);
+      const enabledInput =
+        inputs.enabled !== undefined && inputs.enabled !== null
+          ? toBoolean(inputs.enabled, enabledConfig)
+          : enabledConfig;
+      const enabled = playGate ?? enabledInput;
+      const autostartConfig = toBoolean(config.autostart, false);
+      const autostartInput =
+        inputs.autostart !== undefined && inputs.autostart !== null
+          ? toBoolean(inputs.autostart, autostartConfig)
+          : autostartConfig;
+      const autostart = playGate !== null ? false : autostartInput;
+      const busName = (() => {
+        const v = inputs.bus;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.bus, DEFAULT_BUS);
+      })();
 
       if (!toneAudioEngine.isEnabled()) {
         return { value: volume };

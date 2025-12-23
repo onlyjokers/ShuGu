@@ -23,6 +23,7 @@ import type {
   PluginControlMessage,
   ControlAction,
   ControlPayload,
+  type ControlBatchPayload,
   FlashlightPayload,
   ScreenColorPayload,
   VibratePayload,
@@ -507,7 +508,32 @@ function handleControlMessage(message: ControlMessage): void {
   executeControl(message.action, message.payload, message.executeAt);
 }
 
+function isControlBatchPayload(payload: ControlPayload): payload is ControlBatchPayload {
+  if (!payload || typeof payload !== 'object') return false;
+  if ((payload as any).kind !== 'control-batch') return false;
+  return Array.isArray((payload as any).items);
+}
+
 function executeControl(action: ControlAction, payload: ControlPayload, executeAt?: number): void {
+  // Expand control batches early so we don't schedule the wrapper message (avoid double scheduling).
+  if (action === 'custom' && isControlBatchPayload(payload)) {
+    const batch = payload as ControlBatchPayload;
+    const batchExecuteAt =
+      typeof batch.executeAt === 'number' && Number.isFinite(batch.executeAt) ? batch.executeAt : executeAt;
+
+    for (const raw of batch.items) {
+      if (!raw || typeof raw !== 'object') continue;
+      const itemAction = (raw as any).action as ControlAction | undefined;
+      if (!itemAction) continue;
+      const itemPayload = ((raw as any).payload ?? {}) as ControlPayload;
+      const itemExecuteAtRaw = (raw as any).executeAt;
+      const itemExecuteAt =
+        typeof itemExecuteAtRaw === 'number' && Number.isFinite(itemExecuteAtRaw) ? itemExecuteAtRaw : batchExecuteAt;
+      executeControl(itemAction, itemPayload, itemExecuteAt);
+    }
+    return;
+  }
+
   const executeAction = (delaySeconds = 0) => {
     if (import.meta.env.DEV && typeof window !== 'undefined' && (window as any).__SHUGU_E2E) {
       const entry = { at: Date.now(), action, payload, executeAt };
@@ -675,6 +701,10 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'asciiResolution':
         asciiResolution.set((payload as { cellSize: number }).cellSize);
+        break;
+
+      case 'custom':
+        console.log('[Client] Unknown custom payload:', payload);
         break;
 
       default:

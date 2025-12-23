@@ -216,18 +216,18 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
 
       if (!isSink && input.type === 'color') {
         const initial =
-          typeof instance.config?.[input.id] === 'string'
-            ? String(instance.config[input.id])
-            : typeof current === 'string'
-              ? String(current)
+          typeof current === 'string'
+            ? String(current)
+            : typeof instance.config?.[input.id] === 'string'
+              ? String(instance.config[input.id])
               : String(derivedDefault ?? '#ffffff');
         inp.addControl(
           (() => {
             const control: any = new ClassicPreset.InputControl('text', {
               initial,
               change: (value) => {
-                nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
-                sendNodeOverride(instance.id, 'config', input.id, value);
+                nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+                sendNodeOverride(instance.id, 'input', input.id, value);
               },
             });
             control.inline = true;
@@ -239,16 +239,23 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
       }
 
       if (!isSink && configField?.type === 'select') {
+        const initial =
+          typeof current === 'string'
+            ? String(current)
+            : typeof instance.config?.[input.id] === 'string'
+              ? String(instance.config[input.id])
+              : String(configField.defaultValue ?? '');
         const control: any = new SelectControl({
-          initial: String(instance.config?.[input.id] ?? configField.defaultValue ?? ''),
+          initial,
           options: configField.options ?? [],
           change: (value) => {
-            nodeEngine.updateNodeConfig(instance.id, { [input.id]: value });
-            sendNodeOverride(instance.id, 'config', input.id, value);
+            nodeEngine.updateNodeInputValue(instance.id, input.id, value);
+            sendNodeOverride(instance.id, 'input', input.id, value);
           },
         });
         control.inline = true;
         inp.addControl(control);
+        inp.showControl = true;
         inputControlKeys.add(input.id);
       }
 

@@ -826,6 +826,24 @@ UI 层（NodeCanvas）：
 验收：
 - 导入 `05_media_video_play.json`：选择视频资产，调 Timeline/Loop/Play/Reverse/Seek，client 视频实时响应（不重新下载）
 
+---
+
+### Phase 2.8 - All Nodes Connectable（所有参数可接线）
+
+> 目标：所有“可调参数”都必须有对应的输入口（可连线/可被 MIDI/逻辑节点调制），不再出现“只能手动填值”的节点。
+
+- [x] node-core：补齐缺失输入口（inputs）
+  - `math.operation`、`lfo.waveform`、`number.value`、`number-stabilizer.smoothing`
+  - `proc-scene-switch.sceneId`
+  - Tone 系列：`bus/order/enabled`、`tone-osc.waveform/loop`、`tone-player.loop/autostart`、`tone-granular.url/loop`
+- [x] sdk-client：tone-adapter 同步 inputs，并从 inputs 读取 `bus/order/enabled/loop/url/autostart`（fallback 到 config）
+- [x] manager：Select/Color 这类“看起来是 input 但实际写 config”的 UI 行为修正为写 `inputValues`（kind=`input`）
+- [x] manager-only nodes：补齐 `midi-*` / `param-set` 的缺失输入口，并在 runtime 中 inputs 优先
+
+验收：
+- Manager 中所有节点的可调项都能被连线或 MIDI 调制（包括 select/颜色/布尔），不再出现“只能手填”
+- 导入已有模板不报错，且旧图里存于 config 的 select/color 仍能正确显示初始值
+
 ### Phase 3 - Client 集成：MultimediaCore（登录即预加载 + 缓存/校验 + readiness 上报）
 
 1) MultimediaCore 框架落地（解耦 apps/client）

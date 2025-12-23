@@ -33,6 +33,10 @@ How to import:
   - MIDI → (Start/End Sec) → Load Audio From Assets → Tone Player
   - 演示 `startSec/endSec` 端口可接 MIDI 数字口（manager-only MIDI → override bridge）。
 
+- `09_midi_select_waveform_tone_osc.json`
+  - MIDI → Select → Tone Osc(Waveform) → Audio Patch to Client
+  - 演示 select 类型参数（Waveform）现在也是“输入口”，可接线/可被 MIDI 实时调制。
+
 ## Media (Manager command path)
 
 - `04_media_image_show.json`
