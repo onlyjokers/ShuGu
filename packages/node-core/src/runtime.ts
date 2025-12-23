@@ -148,6 +148,7 @@ export class NodeRuntime {
     }
     const nodeIds = new Set(this.nodes.keys());
     const nextConnections: Connection[] = [];
+    const connectedInputKeys = new Set<string>();
     for (const conn of state.connections ?? []) {
       if (!nodeIds.has(conn.sourceNodeId) || !nodeIds.has(conn.targetNodeId)) {
         throw new Error(`invalid connection: ${conn.id}`);
@@ -161,6 +162,11 @@ export class NodeRuntime {
       const targetPort = targetDef?.inputs.find((p) => p.id === conn.targetPortId);
       if (!sourcePort || !targetPort) continue;
 
+      const inputKey = `${String(conn.targetNodeId)}:${String(conn.targetPortId)}`;
+      if (connectedInputKeys.has(inputKey)) {
+        throw new Error(`input already connected: ${String(conn.targetNodeId)}:${String(conn.targetPortId)}`);
+      }
+      connectedInputKeys.add(inputKey);
       nextConnections.push(conn);
     }
     this.connections = nextConnections;

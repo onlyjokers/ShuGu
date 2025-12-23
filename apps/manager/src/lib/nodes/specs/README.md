@@ -38,6 +38,7 @@ JSON 作为 UI overlay，只会应用：
 - `logic-add`, `logic-multiple`, `logic-subtract`, `logic-divide`, `logic-if`, `logic-for`
 - `param-get`, `param-set`
 - `client-object`, `proc-client-sensors`
+- `display-object`
 - `midi-fuzzy`, `midi-boolean`, `midi-map`, `midi-select-map`, `midi-color-map`
 
 ## 校验

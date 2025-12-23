@@ -16,12 +16,15 @@ import type { GraphState } from './types';
 import { nodeEngine } from './engine';
 import { nodeRegistry } from './registry';
 import { getSDK, state as managerState } from '$lib/stores/manager';
+import {
+  type AssetManifest,
+  getLatestManifest,
+  setLatestManifest,
+  subscribeLatestManifest,
+} from './asset-manifest-store';
 
-export type AssetManifest = {
-  manifestId: string;
-  assets: string[];
-  updatedAt: number;
-};
+export type { AssetManifest };
+export { getLatestManifest, subscribeLatestManifest };
 
 const MANIFEST_DEBOUNCE_MS = 250;
 const PLUGIN_ID = 'multimedia-core';
@@ -148,10 +151,10 @@ function scanGraphForAssetRefs(graph: GraphState): string[] {
     // Also include asset-picker config fields (they may store bare assetIds, not `asset:<id>`).
     const def = nodeRegistry.get(String(node.type));
     for (const field of def?.configSchema ?? []) {
-      if ((field as any)?.type !== 'asset-picker') continue;
-      const key = String((field as any).key ?? '');
+      if (field.type !== 'asset-picker') continue;
+      const key = String(field.key ?? '');
       if (!key) continue;
-      const normalized = normalizeAssetPickerValue((node.config as any)?.[key]);
+      const normalized = normalizeAssetPickerValue(node.config?.[key]);
       if (normalized && !seen.has(normalized)) {
         seen.add(normalized);
         out.push(normalized);
@@ -193,11 +196,12 @@ function recomputeAndMaybePush(graph: GraphState): void {
 
   if (latestManifest && latestManifest.manifestId === next.manifestId) return;
   latestManifest = next;
+  setLatestManifest(next);
 
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    const clients = (get(managerState).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+    const clients = (get(managerState).clients ?? []).map((c) => c.clientId);
     const pending = clients.filter((id) => sentManifestIdByClient.get(id) !== next.manifestId);
     pushManifestToClientIds(pending, next);
   }, MANIFEST_DEBOUNCE_MS);
@@ -211,7 +215,7 @@ nodeEngine.graphState.subscribe((graph) => {
 // Push manifest to clients that join after the last graph update.
 managerState.subscribe(($state) => {
   if (!latestManifest) return;
-  const ids = ($state.clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+  const ids = ($state.clients ?? []).map((c) => c.clientId);
   const pending = ids.filter((id) => sentManifestIdByClient.get(id) !== latestManifest?.manifestId);
   if (pending.length === 0) return;
   pushManifestToClientIds(pending, latestManifest);

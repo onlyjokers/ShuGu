@@ -14,6 +14,7 @@ type GraphSyncOptions = {
   nodeMap: Map<string, any>;
   connectionMap: Map<string, any>;
   nodeRegistry: NodeRegistry;
+  socketFor: (type?: string) => ClassicPreset.Socket;
   buildReteNode: (instance: NodeInstance) => any;
   nodeLabel: (node: NodeInstance) => string;
   applyMidiMapRangeConstraints: (
@@ -35,6 +36,60 @@ export type GraphSyncController = {
 export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
   let queuedGraphState: { nodes: NodeInstance[]; connections: EngineConnection[] } | null = null;
   let syncLoop: Promise<void> | null = null;
+
+  const ensureCmdAggregatorInputs = async (
+    instance: NodeInstance,
+    reteNode: any,
+    connections: EngineConnection[]
+  ) => {
+    if (!opts.areaPlugin) return;
+    if (String(instance.type) !== 'cmd-aggregator') return;
+
+    const def = opts.nodeRegistry.get('cmd-aggregator');
+    if (!def) return;
+
+    const maxFromDef = def.inputs.reduce((best, port) => {
+      const match = /^in(\d+)$/.exec(String(port.id));
+      if (!match) return best;
+      const idx = Number(match[1]);
+      if (!Number.isFinite(idx) || idx <= 0) return best;
+      return Math.max(best, idx);
+    }, 0);
+    if (maxFromDef <= 0) return;
+
+    const raw = (instance.config as any)?.inCount;
+    const fromConfig = typeof raw === 'number' ? raw : Number(raw);
+    const configCount = Number.isFinite(fromConfig) ? Math.max(1, Math.floor(fromConfig)) : 1;
+
+    let requiredCount = 1;
+    for (const c of connections) {
+      if (String(c.targetNodeId) !== String(instance.id)) continue;
+      const match = /^in(\d+)$/.exec(String(c.targetPortId));
+      if (!match) continue;
+      const idx = Number(match[1]);
+      if (!Number.isFinite(idx) || idx <= 0) continue;
+      requiredCount = Math.max(requiredCount, idx);
+    }
+
+    const desiredCount = Math.min(maxFromDef, Math.max(configCount, requiredCount));
+
+    let updated = false;
+    for (let i = 1; i <= desiredCount; i += 1) {
+      const portId = `in${i}`;
+      if (reteNode?.inputs?.[portId]) continue;
+      const portDef = def.inputs.find((p) => String(p.id) === portId);
+      if (!portDef) continue;
+      const input: any = new ClassicPreset.Input(
+        opts.socketFor(portDef.type),
+        portDef.label ?? portDef.id,
+        true
+      );
+      reteNode.addInput(portId, input);
+      updated = true;
+    }
+
+    if (updated) await opts.areaPlugin.update('node', reteNode.id);
+  };
 
   const syncGraph = async (state: { nodes: NodeInstance[]; connections: EngineConnection[] }) => {
     if (!opts.editor || !opts.areaPlugin) return;
@@ -70,6 +125,8 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
             await opts.areaPlugin.update('node', reteNode.id);
           }
         }
+
+        await ensureCmdAggregatorInputs(n, reteNode, state.connections);
         await opts.areaPlugin.translate(reteNode.id, { x: n.position.x, y: n.position.y });
       }
 

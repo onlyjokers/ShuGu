@@ -33,7 +33,7 @@ export type NodeExecutorOptions = {
   canRunCapability?: (capability: string) => boolean;
   /**
    * Optional asset resolver for URL-like inputs (e.g. `asset:<id>` -> https://.../content?token=...).
-   * When provided, Tone nodes (tone-player/granular) will resolve before loading.
+   * When provided, Tone nodes (load-audio-from-assets/granular) will resolve before loading.
    */
   resolveAssetRef?: (ref: string) => string;
   limits?: {
@@ -289,13 +289,14 @@ export class NodeExecutor {
       parsed.graph.nodes
         .filter((node) =>
           [
+            'load-audio-from-assets',
             'tone-osc',
             'tone-delay',
             'tone-resonator',
             'tone-pitch',
             'tone-reverb',
             'tone-granular',
-            'tone-player',
+            'tone-lfo',
           ].includes(node.type)
         )
         .map((node) => node.id)

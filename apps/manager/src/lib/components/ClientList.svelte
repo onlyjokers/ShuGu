@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    clients,
+    audienceClients,
     clientReadiness,
     state,
     toggleClientSelection,
@@ -38,13 +38,13 @@
 
 <div class="client-list-container">
   <div class="header">
-    <h3 class="title">Clients ({$clients.length})</h3>
+    <h3 class="title">Clients ({$audienceClients.length})</h3>
     <div class="actions">
       <Button
         variant="ghost"
         size="sm"
         on:click={selectAllClients}
-        disabled={$clients.length === 0}
+        disabled={$audienceClients.length === 0}
       >
         All
       </Button>
@@ -60,12 +60,12 @@
   </div>
 
   <div class="list-content">
-    {#if $clients.length === 0}
+    {#if $audienceClients.length === 0}
       <div class="empty-state">
         <span class="text-muted">No clients connected</span>
       </div>
     {:else}
-      {#each $clients as client (client.clientId)}
+      {#each $audienceClients as client (client.clientId)}
         <button
           class="client-item"
           class:selected={selectedIds.includes(client.clientId)}

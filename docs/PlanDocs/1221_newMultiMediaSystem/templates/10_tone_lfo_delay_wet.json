@@ -1,0 +1,86 @@
+{
+  "kind": "node-graph",
+  "version": 1,
+  "title": "Tone LFO: Modulate Tone Delay (Wet)",
+  "purpose": "体验真正的 Tone.LFO（audio-rate）调制 Tone 参数：tone-lfo.value → tone-delay.wet。注意这条连线在 UI 上是 number，但在 client runtime 会被 ToneAdapter 识别为 LFO modulation，而不是 30Hz 数值写入。",
+  "howTo": [
+    "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
+    "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
+    "3) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。",
+    "4) Patch 会自动部署到该 client；调整 Tone LFO 的 Freq/Min/Max/Depth/Waveform，client 端 Delay(Wet) 会被连续调制。"
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-osc",
+        "type": "tone-osc",
+        "position": { "x": 120, "y": 180 },
+        "config": { "waveform": "sine", "bus": "main", "enabled": true, "loop": "" },
+        "inputValues": { "frequency": 220, "amplitude": 0.14 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-delay",
+        "type": "tone-delay",
+        "position": { "x": 460, "y": 180 },
+        "config": { "time": 0.25, "feedback": 0.35, "wet": 0.3, "bus": "main", "order": 10, "enabled": true },
+        "inputValues": { "time": 0.25, "feedback": 0.35, "wet": 0.3 },
+        "outputValues": {}
+      },
+      {
+        "id": "node-lfo",
+        "type": "tone-lfo",
+        "position": { "x": 460, "y": 360 },
+        "config": { "frequencyHz": 0.6, "min": 0.0, "max": 1.0, "amplitude": 1.0, "waveform": "sine", "enabled": true },
+        "inputValues": { "frequencyHz": 0.6, "min": 0.0, "max": 1.0, "amplitude": 1.0, "enabled": true },
+        "outputValues": {}
+      },
+      {
+        "id": "node-audio-out",
+        "type": "audio-out",
+        "position": { "x": 820, "y": 180 },
+        "config": {},
+        "inputValues": {},
+        "outputValues": {}
+      },
+      {
+        "id": "node-client",
+        "type": "client-object",
+        "position": { "x": 820, "y": 320 },
+        "config": { "clientId": "" },
+        "inputValues": { "index": 1, "range": 1, "random": false },
+        "outputValues": {}
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-osc-to-delay",
+        "sourceNodeId": "node-osc",
+        "sourcePortId": "value",
+        "targetNodeId": "node-delay",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-lfo-to-delay-wet",
+        "sourceNodeId": "node-lfo",
+        "sourcePortId": "value",
+        "targetNodeId": "node-delay",
+        "targetPortId": "wet"
+      },
+      {
+        "id": "conn-delay-to-out",
+        "sourceNodeId": "node-delay",
+        "sourcePortId": "out",
+        "targetNodeId": "node-audio-out",
+        "targetPortId": "in"
+      },
+      {
+        "id": "conn-audio-out-to-client",
+        "sourceNodeId": "node-audio-out",
+        "sourcePortId": "cmd",
+        "targetNodeId": "node-client",
+        "targetPortId": "in"
+      }
+    ]
+  }
+}

@@ -47,6 +47,7 @@ function selectClientIdsForNode(nodeId, clients, options) {
 }
 export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createClientObjectNode(deps));
+    registry.register(createCmdAggregatorNode());
     registry.register(createClientSensorsProcessorNode());
     registry.register(createMathNode());
     registry.register(createLogicAddNode());
@@ -56,17 +57,18 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createLogicIfNode());
     registry.register(createLogicForNode());
     registry.register(createLogicSleepNode());
-    registry.register(createLFONode());
     registry.register(createNumberNode());
+    registry.register(createStringNode());
+    registry.register(createBoolNode());
     registry.register(createNumberStabilizerNode());
     // Tone.js audio nodes (client runtime overrides these definitions).
+    registry.register(createToneLFONode());
     registry.register(createToneOscNode());
     registry.register(createToneDelayNode());
     registry.register(createToneResonatorNode());
     registry.register(createTonePitchNode());
     registry.register(createToneReverbNode());
     registry.register(createToneGranularNode());
-    registry.register(createTonePlayerNode());
     // Media playback helpers.
     registry.register(createLoadAudioFromAssetsNode());
     registry.register(createLoadImageFromAssetsNode());
@@ -74,6 +76,8 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createPlayMediaNode());
     // Patch root sinks (Max/MSP style).
     registry.register(createAudioOutNode());
+    registry.register(createImageOutNode(deps));
+    registry.register(createVideoOutNode(deps));
     registry.register(createFlashlightProcessorNode());
     registry.register(createScreenColorProcessorNode());
     registry.register(createSynthUpdateProcessorNode());
@@ -91,8 +95,11 @@ function createLoadAudioFromAssetsNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { id: 'bus', label: 'Bus', type: 'string' },
         ],
-        outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+        outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
         configSchema: [
             {
                 key: 'assetId',
@@ -101,6 +108,9 @@ function createLoadAudioFromAssetsNode() {
                 assetKind: 'audio',
                 defaultValue: '',
             },
+            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             {
                 key: 'timeline',
                 label: 'Timeline',
@@ -112,28 +122,11 @@ function createLoadAudioFromAssetsNode() {
         ],
         process: (inputs, config) => {
             const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-            const startSecRaw = inputs.startSec;
-            const endSecRaw = inputs.endSec;
-            const cursorSecRaw = inputs.cursorSec;
-            const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
-            const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
-            const cursorSec = typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
-            const loopRaw = inputs.loop;
-            const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
             const playRaw = inputs.play;
             const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-            const reverseRaw = inputs.reverse;
-            const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
-            const startClamped = Math.max(0, startSec);
-            const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
-            const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
-            const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
-            const positionParam = cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
-            return {
-                ref: assetId
-                    ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
-                    : '',
-            };
+            // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
+            // Return a simple gate value so downstream nodes can reflect play/pause state.
+            return { ref: assetId && play ? 1 : 0 };
         },
     };
 }
@@ -143,7 +136,7 @@ function createLoadImageFromAssetsNode() {
         label: 'Load Image From Assets',
         category: 'Assets',
         inputs: [],
-        outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+        outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
         configSchema: [
             {
                 key: 'assetId',
@@ -171,8 +164,9 @@ function createLoadVideoFromAssetsNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
         ],
-        outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+        outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
         configSchema: [
             {
                 key: 'assetId',
@@ -204,6 +198,8 @@ function createLoadVideoFromAssetsNode() {
             const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
             const reverseRaw = inputs.reverse;
             const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+            const mutedRaw = inputs.muted;
+            const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
             const startClamped = Math.max(0, startSec);
             const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
             const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
@@ -211,7 +207,7 @@ function createLoadVideoFromAssetsNode() {
             const positionParam = cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
             return {
                 ref: assetId
-                    ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+                    ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
                     : '',
             };
         },
@@ -221,7 +217,7 @@ function createAudioOutNode() {
     return {
         type: 'audio-out',
         label: 'Audio Patch to Client',
-        category: 'Audio',
+        category: 'Media',
         inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
         outputs: [
             // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
@@ -230,6 +226,136 @@ function createAudioOutNode() {
         ],
         configSchema: [],
         process: () => ({}),
+    };
+}
+function createImageOutNode(deps) {
+    const resolveUrl = (raw) => {
+        if (typeof raw === 'string')
+            return raw.trim();
+        if (Array.isArray(raw)) {
+            for (const item of raw) {
+                if (typeof item === 'string' && item.trim())
+                    return item.trim();
+                if (item && typeof item === 'object' && typeof item.url === 'string') {
+                    const url = String(item.url).trim();
+                    if (url)
+                        return url;
+                }
+            }
+            return '';
+        }
+        if (raw && typeof raw === 'object' && typeof raw.url === 'string') {
+            return String(raw.url).trim();
+        }
+        return '';
+    };
+    const hide = () => {
+        deps.executeCommand({ action: 'hideImage', payload: {} });
+    };
+    return {
+        type: 'image-out',
+        label: 'Image to Client',
+        category: 'Media',
+        inputs: [{ id: 'in', label: 'In', type: 'image', kind: 'sink' }],
+        outputs: [
+            // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+            // This output is not part of the exported client patch subgraph.
+            { id: 'cmd', label: 'Deploy', type: 'command' },
+        ],
+        configSchema: [],
+        process: () => ({}),
+        onSink: (inputs) => {
+            const url = resolveUrl(inputs.in);
+            if (!url) {
+                hide();
+                return;
+            }
+            deps.executeCommand({ action: 'showImage', payload: { url } });
+        },
+        onDisable: () => {
+            hide();
+        },
+    };
+}
+function createVideoOutNode(deps) {
+    const resolveUrl = (raw) => {
+        if (typeof raw === 'string')
+            return raw.trim();
+        if (Array.isArray(raw)) {
+            for (const item of raw) {
+                if (typeof item === 'string' && item.trim())
+                    return item.trim();
+                if (item && typeof item === 'object' && typeof item.url === 'string') {
+                    const url = String(item.url).trim();
+                    if (url)
+                        return url;
+                }
+            }
+            return '';
+        }
+        if (raw && typeof raw === 'object' && typeof raw.url === 'string') {
+            return String(raw.url).trim();
+        }
+        return '';
+    };
+    const parseMutedFromUrl = (url) => {
+        const trimmed = url.trim();
+        if (!trimmed)
+            return null;
+        const index = trimmed.indexOf('#');
+        const paramsRaw = index >= 0 ? trimmed.slice(index + 1) : '';
+        if (!paramsRaw)
+            return null;
+        const params = new URLSearchParams(paramsRaw);
+        const value = params.get('muted');
+        if (value === null)
+            return null;
+        const normalized = value.trim().toLowerCase();
+        if (!normalized)
+            return null;
+        if (normalized === 'true')
+            return true;
+        if (normalized === 'false')
+            return false;
+        const n = Number(normalized);
+        if (Number.isFinite(n))
+            return n >= 0.5;
+        return null;
+    };
+    const stop = () => {
+        deps.executeCommand({ action: 'stopMedia', payload: {} });
+    };
+    return {
+        type: 'video-out',
+        label: 'Video to Client',
+        category: 'Media',
+        inputs: [{ id: 'in', label: 'In', type: 'video', kind: 'sink' }],
+        outputs: [
+            // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+            // This output is not part of the exported client patch subgraph.
+            { id: 'cmd', label: 'Deploy', type: 'command' },
+        ],
+        configSchema: [],
+        process: () => ({}),
+        onSink: (inputs) => {
+            const url = resolveUrl(inputs.in);
+            if (!url) {
+                stop();
+                return;
+            }
+            const muted = parseMutedFromUrl(url);
+            deps.executeCommand({
+                action: 'playMedia',
+                payload: {
+                    url,
+                    mediaType: 'video',
+                    ...(muted === null ? {} : { muted }),
+                },
+            });
+        },
+        onDisable: () => {
+            stop();
+        },
     };
 }
 function createClientObjectNode(deps) {
@@ -352,6 +478,38 @@ function createClientObjectNode(deps) {
                 for (const cmd of cleanupCommands)
                     send(clientId, cmd);
             }
+        },
+    };
+}
+function createCmdAggregatorNode() {
+    const maxInputs = 8;
+    const inputs = Array.from({ length: maxInputs }, (_, idx) => {
+        const n = idx + 1;
+        return { id: `in${n}`, label: `In ${n}`, type: 'command' };
+    });
+    const flattenCommands = (value, out) => {
+        if (value === null || value === undefined)
+            return;
+        if (Array.isArray(value)) {
+            for (const item of value)
+                flattenCommands(item, out);
+            return;
+        }
+        out.push(value);
+    };
+    return {
+        type: 'cmd-aggregator',
+        label: 'Cmd Aggregator',
+        category: 'Objects',
+        inputs: [...inputs],
+        outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+        configSchema: [],
+        process: (nodeInputs) => {
+            const cmds = [];
+            for (const port of inputs) {
+                flattenCommands(nodeInputs[port.id], cmds);
+            }
+            return { cmd: cmds.length > 0 ? cmds : null };
         },
     };
 }
@@ -686,43 +844,64 @@ function createLogicSleepNode() {
         },
     };
 }
-function createLFONode() {
+const TONE_LFO_WAVEFORM_OPTIONS = [
+    { value: 'sine', label: 'Sine' },
+    { value: 'square', label: 'Square' },
+    { value: 'triangle', label: 'Triangle' },
+    { value: 'sawtooth', label: 'Sawtooth' },
+];
+function createToneLFONode() {
     return {
-        type: 'lfo',
-        label: 'LFO',
-        category: 'Generators',
+        type: 'tone-lfo',
+        label: 'Tone LFO',
+        category: 'Audio',
         inputs: [
-            { id: 'frequency', label: 'Freq (Hz)', type: 'number', defaultValue: 1 },
-            { id: 'amplitude', label: 'Amplitude', type: 'number', defaultValue: 1 },
-            { id: 'offset', label: 'Offset', type: 'number', defaultValue: 0 },
+            { id: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+            { id: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
+            { id: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
+            { id: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
             { id: 'waveform', label: 'Waveform', type: 'string' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         outputs: [{ id: 'value', label: 'Value', type: 'number' }],
         configSchema: [
+            { key: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+            { key: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
+            { key: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
+            { key: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
             {
                 key: 'waveform',
                 label: 'Waveform',
                 type: 'select',
                 defaultValue: 'sine',
-                options: [
-                    { value: 'sine', label: 'Sine' },
-                    { value: 'square', label: 'Square' },
-                    { value: 'triangle', label: 'Triangle' },
-                    { value: 'sawtooth', label: 'Sawtooth' },
-                ],
+                options: TONE_LFO_WAVEFORM_OPTIONS,
             },
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs, config, context) => {
-            const frequency = inputs.frequency ?? 1;
-            const amplitude = inputs.amplitude ?? 1;
-            const offset = inputs.offset ?? 0;
+            const frequencyHz = typeof inputs.frequencyHz === 'number'
+                ? inputs.frequencyHz
+                : Number(config.frequencyHz ?? 1);
+            const min = typeof inputs.min === 'number' ? inputs.min : Number(config.min ?? 0);
+            const max = typeof inputs.max === 'number' ? inputs.max : Number(config.max ?? 1);
+            const amplitudeRaw = typeof inputs.amplitude === 'number' ? inputs.amplitude : Number(config.amplitude ?? 1);
+            const amplitude = Number.isFinite(amplitudeRaw) ? Math.max(0, Math.min(1, amplitudeRaw)) : 1;
+            const enabledRaw = inputs.enabled;
+            const enabled = typeof enabledRaw === 'number'
+                ? enabledRaw >= 0.5
+                : typeof enabledRaw === 'boolean'
+                    ? enabledRaw
+                    : Boolean(config.enabled ?? true);
             const waveform = (() => {
-                const fromInput = inputs.waveform;
-                if (typeof fromInput === 'string' && fromInput.trim())
-                    return fromInput.trim();
+                const v = inputs.waveform;
+                if (typeof v === 'string' && v.trim())
+                    return v.trim();
                 return String(config.waveform ?? 'sine');
             })();
-            const phase = (context.time / 1000) * frequency * 2 * Math.PI;
+            if (!enabled)
+                return { value: min };
+            const freq = Number.isFinite(frequencyHz) ? Math.max(0, frequencyHz) : 1;
+            const phase = (context.time / 1000) * freq * 2 * Math.PI;
             let normalized;
             switch (waveform) {
                 case 'sine':
@@ -732,19 +911,21 @@ function createLFONode() {
                     normalized = Math.sin(phase) >= 0 ? 1 : 0;
                     break;
                 case 'triangle':
-                    normalized = Math.abs(((context.time / 1000) * frequency * 2) % 2 - 1);
+                    normalized = Math.abs(((context.time / 1000) * freq * 2) % 2 - 1);
                     break;
                 case 'sawtooth':
-                    normalized = ((context.time / 1000) * frequency) % 1;
+                    normalized = ((context.time / 1000) * freq) % 1;
                     break;
                 default:
                     normalized = (Math.sin(phase) + 1) / 2;
             }
-            const value = offset + normalized * amplitude;
+            const centered = 0.5 + (normalized - 0.5) * amplitude;
+            const value = min + centered * (max - min);
             return { value };
         },
     };
 }
+// Value-box style nodes: editable constants that also pass through connected inputs.
 function createNumberNode() {
     return {
         type: 'number',
@@ -759,6 +940,55 @@ function createNumberNode() {
                 return { value: fromInput };
             const fallback = Number(config.value ?? 0);
             return { value: Number.isFinite(fallback) ? fallback : 0 };
+        },
+    };
+}
+function createStringNode() {
+    return {
+        type: 'string',
+        label: 'String',
+        category: 'Values',
+        inputs: [{ id: 'value', label: 'Value', type: 'string' }],
+        outputs: [{ id: 'value', label: 'Value', type: 'string' }],
+        configSchema: [{ key: 'value', label: 'Value', type: 'string', defaultValue: '' }],
+        process: (inputs, config) => {
+            const fromInput = inputs.value;
+            if (typeof fromInput === 'string')
+                return { value: fromInput };
+            const fallback = config.value;
+            return { value: typeof fallback === 'string' ? fallback : '' };
+        },
+    };
+}
+function createBoolNode() {
+    const coerce = (value) => {
+        if (typeof value === 'boolean')
+            return value;
+        if (typeof value === 'number')
+            return Number.isFinite(value) ? value >= 0.5 : false;
+        if (typeof value === 'string') {
+            const s = value.trim().toLowerCase();
+            if (!s)
+                return false;
+            if (s === 'true' || s === '1' || s === 'yes' || s === 'y')
+                return true;
+            if (s === 'false' || s === '0' || s === 'no' || s === 'n')
+                return false;
+            return true;
+        }
+        return false;
+    };
+    return {
+        type: 'bool',
+        label: 'Bool',
+        category: 'Values',
+        inputs: [{ id: 'value', label: 'Value', type: 'boolean' }],
+        outputs: [{ id: 'value', label: 'Value', type: 'boolean' }],
+        configSchema: [{ key: 'value', label: 'Value', type: 'boolean', defaultValue: false }],
+        process: (inputs, config) => {
+            if (inputs.value !== undefined)
+                return { value: coerce(inputs.value) };
+            return { value: coerce(config.value) };
         },
     };
 }
@@ -1139,39 +1369,6 @@ function createPlayMediaNode() {
             }
             // Reuse the cached command object to avoid deepEqual JSON stringify on large payloads.
             return { cmd: cached.cmd };
-        },
-    };
-}
-function createTonePlayerNode() {
-    return {
-        type: 'tone-player',
-        label: 'Tone Player',
-        category: 'Audio',
-        inputs: [
-            { id: 'url', label: 'URL', type: 'string' },
-            { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
-            { id: 'loop', label: 'Loop', type: 'boolean' },
-            { id: 'autostart', label: 'Autostart', type: 'boolean' },
-            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
-            { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
-            { id: 'bus', label: 'Bus', type: 'string' },
-        ],
-        outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
-        configSchema: [
-            { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
-            { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
-            { key: 'autostart', label: 'Autostart', type: 'boolean', defaultValue: false },
-            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
-            { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-            { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
-        process: (inputs, config) => {
-            const volume = typeof inputs.volume === 'number' ? inputs.volume : Number(config.volume ?? 1);
-            return { value: volume };
         },
     };
 }

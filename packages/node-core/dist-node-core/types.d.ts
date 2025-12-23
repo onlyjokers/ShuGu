@@ -4,7 +4,7 @@
  * Keep this minimal and data-only so graphs can be serialized safely.
  * Manager-only UI concerns (Svelte stores, DOM interactions) must stay outside node-core.
  */
-export type PortType = 'number' | 'boolean' | 'string' | 'color' | 'audio' | 'client' | 'command' | 'fuzzy' | 'any';
+export type PortType = 'number' | 'boolean' | 'string' | 'color' | 'audio' | 'image' | 'video' | 'client' | 'command' | 'fuzzy' | 'any';
 export type PortKind = 'data' | 'sink';
 export interface NodePort {
     id: string;

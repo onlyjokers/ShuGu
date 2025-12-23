@@ -14,6 +14,15 @@ import { MessageRouterService } from '../message-router/message-router.service.j
 import type { Message, ConnectionRole, TimePingData } from '@shugu/protocol';
 import { createTimePong, isValidMessage } from '@shugu/protocol';
 
+function sanitizeGroup(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const limited = trimmed.slice(0, 80);
+    const sanitized = limited.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return sanitized || null;
+}
+
 @WebSocketGateway({
     cors: {
         origin: '*',
@@ -39,6 +48,7 @@ export class EventsGateway
     handleConnection(client: Socket) {
         // Get role from query params
         const role = (client.handshake.query.role as ConnectionRole) || 'client';
+        const group = sanitizeGroup(client.handshake.query.group);
         const userAgent = client.handshake.headers['user-agent'];
         const auth = client.handshake.auth as Record<string, unknown> | undefined;
 
@@ -55,6 +65,10 @@ export class EventsGateway
                 clientId: typeof auth?.clientId === 'string' ? auth.clientId : undefined,
             }
         );
+
+        if (role === 'client' && group) {
+            this.clientRegistry.setClientGroup(clientId, group);
+        }
 
         if (replacedSocketId) {
             const oldSocket = this.server.sockets.sockets.get(replacedSocketId);

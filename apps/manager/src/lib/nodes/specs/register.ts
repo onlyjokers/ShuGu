@@ -12,6 +12,7 @@
 import { get } from 'svelte/store';
 import {
   targetClients,
+  targetGroup,
   type ControlAction,
   type ControlPayload,
 } from '@shugu/protocol';
@@ -20,6 +21,7 @@ import { NodeRegistry as CoreNodeRegistry, registerDefaultNodeDefinitions } from
 import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
+import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
 import { getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
@@ -95,6 +97,7 @@ type CommandRuntime = {
 
 type NodeRuntime =
   | { kind: 'client-object' }
+  | { kind: 'display-object' }
   | { kind: 'proc-client-sensors' }
   | { kind: 'param-get' }
   | { kind: 'param-set' }
@@ -108,14 +111,12 @@ type NodeRuntime =
   | { kind: 'logic-if' }
   | { kind: 'logic-for' }
   | { kind: 'logic-sleep' }
-  | { kind: 'lfo' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
   | { kind: 'tone-resonator' }
   | { kind: 'tone-pitch' }
   | { kind: 'tone-reverb' }
   | { kind: 'tone-granular' }
-  | { kind: 'tone-player' }
   | { kind: 'play-media' }
   | { kind: 'midi-fuzzy' }
   | { kind: 'midi-boolean' }
@@ -178,14 +179,12 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['logic-if', pick('logic-if')],
     ['logic-for', pick('logic-for')],
     ['logic-sleep', pick('logic-sleep')],
-    ['lfo', pick('lfo')],
     ['tone-osc', pick('tone-osc')],
     ['tone-delay', pick('tone-delay')],
     ['tone-resonator', pick('tone-resonator')],
     ['tone-pitch', pick('tone-pitch')],
     ['tone-reverb', pick('tone-reverb')],
     ['tone-granular', pick('tone-granular')],
-    ['tone-player', pick('tone-player')],
     ['play-media', pick('play-media')],
   ]);
 })();
@@ -597,6 +596,42 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         },
       };
     }
+    case 'display-object': {
+      return {
+        ...base,
+        process: () => ({}),
+        onSink: (inputs) => {
+          const raw = (inputs as any).in;
+          const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
+          if (commands.length === 0) return;
+
+          const bridge = get(displayBridgeState);
+          const hasLocal = bridge.status === 'connected';
+          const sdk = getSDK();
+          if (!hasLocal && !sdk) return;
+
+          // `executeAt` is expressed in server time; convert to local time for the local Display bridge.
+          const offset = get(state).timeSync.offset;
+
+          for (const cmd of commands) {
+            if (!cmd || typeof cmd !== 'object') continue;
+            const action = (cmd as any).action as ControlAction | undefined;
+            if (!action) continue;
+            const payload = ((cmd as any).payload ?? {}) as ControlPayload;
+            const executeAt = (cmd as any).executeAt as number | undefined;
+
+            if (hasLocal) {
+              const executeAtLocal =
+                typeof executeAt === 'number' && Number.isFinite(executeAt) ? executeAt - offset : undefined;
+              sendLocalDisplayControl(action, payload, executeAtLocal);
+              continue;
+            }
+
+            sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
+          }
+        },
+      };
+    }
     case 'proc-client-sensors':
     case 'number':
     case 'number-stabilizer':
@@ -608,9 +643,7 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
     case 'logic-if':
     case 'logic-for':
     case 'logic-sleep':
-    case 'lfo':
     case 'tone-osc':
-    case 'tone-player':
     case 'play-media':
     {
       const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
@@ -1005,8 +1038,11 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -1015,6 +1051,9 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
         assetKind: 'audio',
         defaultValue: '',
       },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
         label: 'Timeline',
@@ -1026,39 +1065,11 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
     ],
     process: (inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
-      const startSec =
-        typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
-          ? Number((inputs as any).startSec)
-          : 0;
-      const endSec =
-        typeof (inputs as any)?.endSec === 'number' && Number.isFinite((inputs as any).endSec)
-          ? Number((inputs as any).endSec)
-          : -1;
-      const cursorSec =
-        typeof (inputs as any)?.cursorSec === 'number' && Number.isFinite((inputs as any).cursorSec)
-          ? Number((inputs as any).cursorSec)
-          : -1;
-
-      const loopRaw = (inputs as any)?.loop;
       const playRaw = (inputs as any)?.play;
-      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-      const reverseRaw = (inputs as any)?.reverse;
-      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
-
-      const startClamped = Math.max(0, startSec);
-      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
-      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
-
-      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
-      const positionParam =
-        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
-
-      return {
-        ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
-          : '',
-      };
+      // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
+      // Return a simple gate value so downstream nodes can reflect play/pause state.
+      return { ref: assetId && play ? 1 : 0 };
     },
   });
 }
@@ -1069,7 +1080,7 @@ if (!nodeRegistry.get('load-image-from-assets')) {
     label: 'Load Image From Assets',
     category: 'Assets',
     inputs: [],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -1098,8 +1109,9 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -1138,6 +1150,8 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       const reverseRaw = (inputs as any)?.reverse;
       const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+      const mutedRaw = (inputs as any)?.muted;
+      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
@@ -1149,7 +1163,7 @@ if (!nodeRegistry.get('load-video-from-assets')) {
 
       return {
         ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
           : '',
       };
     },

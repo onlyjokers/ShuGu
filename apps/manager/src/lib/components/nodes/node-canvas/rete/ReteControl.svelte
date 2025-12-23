@@ -2,7 +2,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { ClassicPreset } from 'rete';
-  import { clientReadiness, sensorData, state as managerState } from '$lib/stores/manager';
+  import { audienceClients, clientReadiness, sensorData, state as managerState } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
@@ -854,11 +854,11 @@
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
     {/if}
-    {#if ($managerState.clients ?? []).length === 0}
+    {#if ($audienceClients ?? []).length === 0}
       <div class="client-empty">No clients connected</div>
     {:else}
       <div class="client-list">
-        {#each $managerState.clients as c (c.clientId)}
+        {#each $audienceClients as c (c.clientId)}
           <button
             type="button"
             class="client-item {c.clientId === primarySelectedClientId ? 'selected' : selectedClientIdSet.has(c.clientId) ? 'in-range' : ''}"

@@ -24,7 +24,8 @@
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { getSDK, selectClients, state as managerState } from '$lib/stores/manager';
+  import { getSDK, selectClients, sensorData, state as managerState } from '$lib/stores/manager';
+  import { displayBridgeState, sendPlugin as sendLocalDisplayPlugin } from '$lib/display/display-bridge';
   import type {
     NodeInstance,
     Connection as EngineConnection,
@@ -77,6 +78,7 @@
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
+  let displayBridgeUnsub: (() => void) | null = null;
 
   const sockets = {
     number: new ClassicPreset.Socket('number'),
@@ -84,6 +86,8 @@
     string: new ClassicPreset.Socket('string'),
     color: new ClassicPreset.Socket('color'),
     audio: new ClassicPreset.Socket('audio'),
+    image: new ClassicPreset.Socket('image'),
+    video: new ClassicPreset.Socket('video'),
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
     fuzzy: new ClassicPreset.Socket('fuzzy'),
@@ -247,6 +251,28 @@
   let patchPendingCommitByKey = new Map<string, ReturnType<typeof setTimeout>>();
 
   // ===== Patch Deployment (Graph-driven, no toolbar controls) =====
+  // Note: `audio-out(cmd) -> client-object(in)` is the routing edge for deploying an audio patch.
+  // Display extends this pattern via `audio-out(cmd) -> display-object(in)`.
+  const LOCAL_DISPLAY_TARGET_ID = 'local:display';
+
+  const isLocalDisplayTarget = (id: string): boolean => id === LOCAL_DISPLAY_TARGET_ID;
+
+  const sendNodeExecutorPluginControl = (targetId: string, command: string, payload: Record<string, unknown>) => {
+    const id = String(targetId ?? '');
+    if (!id) return;
+
+    if (isLocalDisplayTarget(id)) {
+      const bridge = get(displayBridgeState);
+      if (bridge.status !== 'connected') return;
+      sendLocalDisplayPlugin('node-executor', command, payload);
+      return;
+    }
+
+    const sdk = getSDK();
+    if (!sdk) return;
+    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', command as any, payload as any);
+  };
+
   type DeployedPatch = {
     patchId: string;
     nodeIds: Set<string>;
@@ -365,9 +391,6 @@
       return;
     }
 
-    const sdk = getSDK();
-    if (!sdk) return;
-
     const { routes, keys } = computeMidiBridgeRoutes(patchNodeIds);
     midiBridgeRoutes = routes;
     midiBridgeDesiredKeys = keys;
@@ -382,7 +405,7 @@
           const [nodeId, portId] = k.split('|');
           return { nodeId, kind: 'input', portId };
         });
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-remove', {
           loopId: patch.patchId,
           overrides,
         } as any);
@@ -439,9 +462,6 @@
     if (now - midiBridgeLastSendAt < 30) return;
     midiBridgeLastSendAt = now;
 
-    const sdk = getSDK();
-    if (!sdk) return;
-
     for (const [clientId, patch] of deployedPatchByClientId.entries()) {
       const overrides: any[] = [];
       const removals: any[] = [];
@@ -482,14 +502,14 @@
       midiBridgeActiveKeysByClientId.set(clientId, activeKeys);
 
       if (removals.length > 0) {
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-remove', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-remove', {
           loopId: patch.patchId,
           overrides: removals,
         } as any);
       }
 
       if (overrides.length > 0) {
-        sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'override-set', {
+        sendNodeExecutorPluginControl(String(clientId), 'override-set', {
           loopId: patch.patchId,
           overrides,
         } as any);
@@ -520,22 +540,64 @@
   };
 
   const resolvePatchTargetClientIds = (): string[] => {
-    const roots = (graphState.nodes ?? []).filter((n) => String(n.type) === 'audio-out');
-    if (roots.length !== 1) return [];
-    const rootId = String(roots[0]?.id ?? '');
-    if (!rootId) return [];
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const roots = (graphState.nodes ?? [])
+      .filter((n) => patchRootTypes.includes(String(n.type) as any))
+      .map((n) => ({ id: String(n.id ?? ''), type: String(n.type ?? '') }))
+      .filter((n) => Boolean(n.id));
+    if (roots.length === 0) return [];
 
     const connected = new Set(clientIdsInOrder());
 
     const connections = graphState.connections ?? [];
 
-    // Patch target routing: `audio-out(cmd) -> client-object(in)`.
+    const activeRoots = roots.filter((root) =>
+      connections.some(
+        (c) => String(c.sourceNodeId) === root.id && String(c.sourcePortId) === 'cmd'
+      )
+    );
+
+    const formatRootList = (items: { id: string; type: string }[]) =>
+      items
+        .map((r) => `${r.type}:${r.id}`)
+        .sort()
+        .join(', ');
+
+    const root = (() => {
+      if (roots.length === 1) return roots[0]!;
+      if (activeRoots.length === 1) return activeRoots[0]!;
+      if (activeRoots.length > 1) {
+        nodeEngine.lastError.set(
+          `Multiple active patch roots found (${formatRootList(activeRoots)}). Disconnect Deploy on all but one root.`
+        );
+        return null;
+      }
+      nodeEngine.lastError.set(
+        `Multiple patch roots found (${formatRootList(roots)}). Connect Deploy on exactly one root (or delete the others).`
+      );
+      return null;
+    })();
+
+    if (!root) return [];
+    const prevError = get(nodeEngine.lastError);
+    if (
+      typeof prevError === 'string' &&
+      (prevError.startsWith('Multiple patch roots found') ||
+        prevError.startsWith('Multiple active patch roots found'))
+    ) {
+      nodeEngine.lastError.set(null);
+    }
+    const rootId = root.id;
+
+    // Patch target routing: `<patch-root>(cmd) -> client-object(in)`.
+    // Display target routing: `<patch-root>(cmd) -> display-object(in)`.
     const deployToClientConns = connections.filter(
       (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
     );
 
     const out: string[] = [];
     const seen = new Set<string>();
+    let hasDisplayTarget = false;
 
     const resolveClientId = (nodeId: string, outputPortId: string) => {
       const runtimeNode = nodeEngine.getNode(nodeId);
@@ -552,11 +614,35 @@
     for (const c of deployToClientConns) {
       const targetNodeId = String(c.targetNodeId);
       const runtimeNode = nodeEngine.getNode(targetNodeId);
-      if (String(runtimeNode?.type ?? '') !== 'client-object') continue;
+      const type = String(runtimeNode?.type ?? '');
+      if (type === 'display-object') {
+        hasDisplayTarget = true;
+        continue;
+      }
+      if (type !== 'client-object') continue;
       const id = resolveClientId(targetNodeId, 'out');
       if (!id || !connected.has(id) || seen.has(id)) continue;
       seen.add(id);
       out.push(id);
+    }
+
+    if (hasDisplayTarget) {
+      const bridge = get(displayBridgeState);
+      if (bridge.status === 'connected' && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
+        seen.add(LOCAL_DISPLAY_TARGET_ID);
+        out.push(LOCAL_DISPLAY_TARGET_ID);
+      }
+
+      const displayIds = (get(managerState).clients ?? [])
+        .filter((c: any) => String(c?.group ?? '') === 'display')
+        .map((c: any) => String(c?.clientId ?? ''))
+        .filter((id) => Boolean(id) && connected.has(id));
+
+      for (const id of displayIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
     }
 
     return out;
@@ -566,14 +652,8 @@
     const id = String(clientId ?? '');
     const loopId = String(patchId ?? '');
     if (!id || !loopId) return;
-    const sdk = getSDK();
-    if (!sdk) return;
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'stop', {
-      loopId,
-    } as any);
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', 'remove', {
-      loopId,
-    } as any);
+    sendNodeExecutorPluginControl(id, 'stop', { loopId } as any);
+    sendNodeExecutorPluginControl(id, 'remove', { loopId } as any);
   };
 
   const stopAllDeployedPatches = () => {
@@ -656,9 +736,7 @@
       for (const clientId of targets) {
         const status = statusMap.get(clientId) ?? null;
         if (status?.loopId === patchId && status.running === false) {
-          sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
-            loopId: patchId,
-          } as any);
+          sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
         }
       }
 
@@ -674,15 +752,8 @@
     midiBridgeActiveKeysByClientId = new Map();
 
     for (const clientId of targets) {
-      sdk.sendPluginControl(
-        { mode: 'clientIds', ids: [clientId] },
-        'node-executor',
-        'deploy',
-        payload
-      );
-      sdk.sendPluginControl({ mode: 'clientIds', ids: [clientId] }, 'node-executor', 'start', {
-        loopId: patchId,
-      } as any);
+      sendNodeExecutorPluginControl(String(clientId), 'deploy', payload);
+      sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
 
       deployedPatchByClientId.set(String(clientId), {
         patchId,
@@ -829,6 +900,19 @@
 
     // Keep live display outputs usable even when the engine is stopped.
     (node.outputValues as any).indexOut = slice.index;
+    (node.outputValues as any).out = {
+      clientId: slice.firstId,
+      sensors: (() => {
+        const latest: any = slice.firstId ? get(sensorData)?.get?.(slice.firstId) : null;
+        if (!latest) return null;
+        return {
+          sensorType: latest.sensorType,
+          payload: latest.payload,
+          serverTimestamp: latest.serverTimestamp,
+          clientTimestamp: latest.clientTimestamp,
+        };
+      })(),
+    };
     nodeEngine.tickTime.set(Date.now());
 
     const reteNode = nodeMap.get(String(nodeId));
@@ -863,10 +947,13 @@
     const node = nodeEngine.getNode(nodeId);
     if (!node || node.type !== 'client-object') return;
 
-    const currentIndexRaw =
-      typeof (node.inputValues as any)?.index === 'number' ? (node.inputValues as any).index : 1;
-    const currentRangeRaw =
-      typeof (node.inputValues as any)?.range === 'number' ? (node.inputValues as any).range : 1;
+    const toFiniteNumber = (value: unknown, fallback: number): number => {
+      const n = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const currentIndexRaw = toFiniteNumber((node.inputValues as any)?.index, 1);
+    const currentRangeRaw = toFiniteNumber((node.inputValues as any)?.range, 1);
     const currentRandomRaw = (node.inputValues as any)?.random;
 
     const desiredRange = typeof next.range === 'number' ? next.range : currentRangeRaw;
@@ -953,32 +1040,20 @@
     if (patchTargets.length === 0) return;
 
     for (const target of patchTargets) {
-      sdk.sendPluginControl(
-        { mode: 'clientIds', ids: [target.clientId] },
-        'node-executor',
-        'override-set',
-        {
-          loopId: target.patch.patchId,
-          overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
-        } as any
-      );
+      sendNodeExecutorPluginControl(String(target.clientId), 'override-set', {
+        loopId: target.patch.patchId,
+        overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+      } as any);
 
       const key = `${target.clientId}|${target.patch.patchId}|${nodeId}|${kind}|${portId}`;
       const existing = patchPendingCommitByKey.get(key);
       if (existing) clearTimeout(existing);
       const timer = setTimeout(() => {
         patchPendingCommitByKey.delete(key);
-        const sdkNow = getSDK();
-        if (!sdkNow) return;
-        sdkNow.sendPluginControl(
-          { mode: 'clientIds', ids: [target.clientId] },
-          'node-executor',
-          'override-set',
-          {
-            loopId: target.patch.patchId,
-            overrides: [{ nodeId, kind, portId, value }],
-          } as any
-        );
+        sendNodeExecutorPluginControl(String(target.clientId), 'override-set', {
+          loopId: target.patch.patchId,
+          overrides: [{ nodeId, kind, portId, value }],
+        } as any);
       }, 420);
       patchPendingCommitByKey.set(key, timer);
     }
@@ -1136,16 +1211,6 @@
       return { nodeId, side, key };
     }
     return null;
-  };
-
-  const replaceSingleInputConnection = (targetNodeId: string, targetPortId: string) => {
-    if (reteBuilder.inputAllowsMultiple(targetNodeId, targetPortId)) return;
-    const state = get(graphStateStore);
-    for (const c of state.connections ?? []) {
-      if (c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) {
-        nodeEngine.removeConnection(c.id);
-      }
-    }
   };
 
   function addNode(type: string, position?: { x: number; y: number }) {
@@ -1589,12 +1654,6 @@
             desiredSide
           );
           if (snapped) {
-            if (desiredSide === 'input') {
-              replaceSingleInputConnection(snapped.nodeId, snapped.key);
-            } else {
-              replaceSingleInputConnection(initialSocket.nodeId, initialSocket.key);
-            }
-
             const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
             const engineConn: EngineConnection =
               initialSocket.side === 'output'
@@ -1640,6 +1699,7 @@
       nodeMap,
       connectionMap,
       nodeRegistry,
+      socketFor: reteBuilder.socketFor,
       buildReteNode: reteBuilder.buildReteNode,
       nodeLabel: reteBuilder.nodeLabel,
       applyMidiMapRangeConstraints: reteBuilder.applyMidiMapRangeConstraints,
@@ -1722,6 +1782,16 @@
         if (randomActive) continue;
         void syncClientNodeUi(nodeId, slice);
       }
+    });
+
+    // Patch targets can include local display (MessagePort), which is outside `managerState.clients`.
+    // Reconcile patch deployment when the Display bridge connects/disconnects.
+    let lastDisplayBridgeKey = '';
+    displayBridgeUnsub = displayBridgeState.subscribe((s) => {
+      const nextKey = `${s.status}|${s.ready ? 1 : 0}`;
+      if (nextKey === lastDisplayBridgeKey) return;
+      lastDisplayBridgeKey = nextKey;
+      schedulePatchReconcile('display-bridge');
     });
 
     bindRetePipes({
@@ -1999,6 +2069,7 @@
     runningUnsub?.();
     groupDisabledUnsub?.();
     managerUnsub?.();
+    displayBridgeUnsub?.();
     midiController.stop();
     if (patchDeployTimer) clearTimeout(patchDeployTimer);
     for (const timer of patchPendingCommitByKey.values()) clearTimeout(timer);
@@ -2299,6 +2370,14 @@
 
   :global(.node-canvas-container .socket[title='audio']) {
     background: rgba(14, 165, 233, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='image']) {
+    background: rgba(244, 114, 182, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='video']) {
+    background: rgba(34, 211, 238, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='client']) {

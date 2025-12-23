@@ -49,12 +49,13 @@ type EffectWrapper = {
   input: any;
   output: any;
   effect: any;
+  wetParam?: any;
   setWet?: (value: number) => void;
   dispose: () => void;
 };
 
 type ToneEffectKind = 'tone-delay' | 'tone-reverb' | 'tone-pitch' | 'tone-resonator';
-type ToneNodeKind = ToneEffectKind | 'tone-osc' | 'tone-granular' | 'tone-player';
+type ToneNodeKind = ToneEffectKind | 'tone-osc' | 'tone-granular' | 'load-audio-from-assets';
 
 type ToneEffectInstance = {
   nodeId: string;
@@ -111,6 +112,14 @@ type TonePlayerInstance = {
   lastParams: Record<string, number | string | boolean | null>;
 };
 
+type ToneLfoInstance = {
+  nodeId: string;
+  lfo: any;
+  enabled: boolean;
+  started: boolean;
+  lastParams: Record<string, number | string | boolean | null>;
+};
+
 const DEFAULT_RAMP_SECONDS = 0.05;
 const DEFAULT_STEP_SECONDS = 0.25;
 const DEFAULT_BUS = 'main';
@@ -121,7 +130,7 @@ const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
   'tone-pitch',
   'tone-reverb',
   'tone-granular',
-  'tone-player',
+  'load-audio-from-assets',
 ]);
 const AUDIO_INPUT_PORTS = new Map<ToneNodeKind, string[]>([
   ['tone-delay', ['in']],
@@ -136,7 +145,7 @@ const AUDIO_OUTPUT_PORTS = new Map<ToneNodeKind, string[]>([
   ['tone-pitch', ['out']],
   ['tone-reverb', ['out']],
   ['tone-granular', ['value']],
-  ['tone-player', ['value']],
+  ['load-audio-from-assets', ['ref']],
 ]);
 
 let toneModule: ToneModule | null = null;
@@ -147,11 +156,23 @@ const oscInstances = new Map<string, ToneOscInstance>();
 const effectInstances = new Map<string, ToneEffectInstance>();
 const granularInstances = new Map<string, ToneGranularInstance>();
 const playerInstances = new Map<string, TonePlayerInstance>();
+const lfoInstances = new Map<string, ToneLfoInstance>();
 const buses = new Map<string, ToneBus>();
 let latestGraphNodesById = new Map<string, NodeInstance>();
 let latestAudioConnections: Connection[] = [];
 let latestExplicitNodeIds = new Set<string>();
 let latestExplicitEffectIds = new Set<string>();
+let latestToneLfoConnections: Connection[] = [];
+let latestToneLfoDesiredTargets = new Set<string>();
+let latestToneLfoActiveTargets = new Set<string>();
+
+function toneLfoTargetKey(nodeId: string, portId: string): string {
+  return `${nodeId}|${portId}`;
+}
+
+function isToneLfoTargetActive(nodeId: string, portId: string): boolean {
+  return latestToneLfoActiveTargets.has(toneLfoTargetKey(nodeId, portId));
+}
 
 function toNumber(value: unknown, fallback: number): number {
   const num = typeof value === 'string' ? Number(value) : Number(value);
@@ -184,76 +205,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-type ToneClipParams = {
-  baseUrl: string;
-  startSec: number;
-  endSec: number;
-  loop: boolean | null;
-  play: boolean | null;
-  reverse: boolean | null;
-  cursorSec: number | null;
-};
-
-function parseToneClipParams(raw: string): ToneClipParams {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      baseUrl: '',
-      startSec: 0,
-      endSec: -1,
-      loop: null,
-      play: null,
-      reverse: null,
-      cursorSec: null,
-    };
-  }
-
-  const hashIndex = trimmed.indexOf('#');
-  if (hashIndex < 0) {
-    return {
-      baseUrl: trimmed,
-      startSec: 0,
-      endSec: -1,
-      loop: null,
-      play: null,
-      reverse: null,
-      cursorSec: null,
-    };
-  }
-
-  const baseUrl = trimmed.slice(0, hashIndex).trim();
-  const hash = trimmed.slice(hashIndex + 1);
-  const params = new URLSearchParams(hash);
-
-  const tRaw = params.get('t');
-  let startSec = 0;
-  let endSec = -1;
-  if (tRaw !== null) {
-    const parts = tRaw.split(',');
-    const startCandidate = parts[0]?.trim() ?? '';
-    const endCandidate = parts[1]?.trim() ?? '';
-    startSec = toNumber(startCandidate, 0);
-    if (parts.length > 1) {
-      endSec = endCandidate ? toNumber(endCandidate, -1) : -1;
-    }
-  }
-
-  const loopRaw = params.get('loop');
-  const playRaw = params.get('play');
-  const reverseRaw = params.get('rev');
-  const cursorRaw = params.get('p');
-
-  return {
-    baseUrl,
-    startSec: Number.isFinite(startSec) ? startSec : 0,
-    endSec: Number.isFinite(endSec) ? endSec : -1,
-    loop: loopRaw === null ? null : toBoolean(loopRaw, false),
-    play: playRaw === null ? null : toBoolean(playRaw, true),
-    reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
-    cursorSec: cursorRaw === null ? null : toNumber(cursorRaw, -1),
-  };
-}
-
 function loopKeyOf(raw: unknown): string | null {
   if (raw == null) return null;
   if (typeof raw === 'string') {
@@ -278,6 +229,16 @@ function isEffectKind(type: string): type is ToneEffectKind {
     type === 'tone-pitch' ||
     type === 'tone-resonator'
   );
+}
+
+function isToneLfoConnection(conn: Connection, nodesById: Map<string, NodeInstance>): boolean {
+  const source = nodesById.get(conn.sourceNodeId);
+  const target = nodesById.get(conn.targetNodeId);
+  if (!source || !target) return false;
+  if (source.type !== 'tone-lfo') return false;
+  if (conn.sourcePortId !== 'value') return false;
+  // LFO connections are control-rate (number) on the graph, but executed as audio-rate modulation in Tone.
+  return true;
 }
 
 function isAudioConnection(
@@ -317,6 +278,12 @@ function updateAudioGraphSnapshot(
   latestAudioConnections = nextConnections.filter((conn) =>
     isAudioConnection(conn, latestGraphNodesById, registry)
   );
+  latestToneLfoConnections = nextConnections.filter((conn) =>
+    isToneLfoConnection(conn, latestGraphNodesById)
+  );
+  latestToneLfoDesiredTargets = new Set(
+    latestToneLfoConnections.map((conn) => toneLfoTargetKey(String(conn.targetNodeId), String(conn.targetPortId)))
+  );
 
   latestExplicitNodeIds = new Set();
   latestExplicitEffectIds = new Set();
@@ -346,6 +313,70 @@ function getAudioInputNode(nodeId: string): any | null {
   const effect = effectInstances.get(nodeId);
   if (effect?.wrapper?.input) return effect.wrapper.input;
   return null;
+}
+
+function resolveToneLfoDestination(targetNodeId: string, targetPortId: string): any | null {
+  const target = latestGraphNodesById.get(targetNodeId);
+  if (!target) return null;
+
+  if (target.type === 'tone-delay') {
+    const inst = effectInstances.get(targetNodeId);
+    if (!inst || !inst.enabled) return null;
+    if (targetPortId === 'wet') return inst.wrapper.wetParam ?? null;
+    if (targetPortId === 'time') return inst.wrapper.effect?.delayTime ?? null;
+    if (targetPortId === 'feedback') return inst.wrapper.effect?.feedback ?? null;
+    return null;
+  }
+
+  if (target.type === 'tone-resonator') {
+    const inst = effectInstances.get(targetNodeId);
+    if (!inst || !inst.enabled) return null;
+    if (targetPortId === 'wet') return inst.wrapper.wetParam ?? null;
+    if (targetPortId === 'delayTime') return inst.wrapper.effect?.delayTime ?? null;
+    return null;
+  }
+
+  if (target.type === 'tone-reverb' || target.type === 'tone-pitch') {
+    const inst = effectInstances.get(targetNodeId);
+    if (!inst || !inst.enabled) return null;
+    if (targetPortId === 'wet') return inst.wrapper.wetParam ?? null;
+    return null;
+  }
+
+  return null;
+}
+
+function applyToneLfoWiring(): void {
+  if (!toneModule || !toneAudioEngine.isEnabled()) {
+    latestToneLfoActiveTargets = new Set();
+    return;
+  }
+
+  for (const inst of lfoInstances.values()) {
+    try {
+      inst.lfo.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+
+  const nextActiveTargets = new Set<string>();
+  for (const conn of latestToneLfoConnections) {
+    const inst = lfoInstances.get(conn.sourceNodeId);
+    if (!inst || !inst.enabled || !inst.started) continue;
+
+    const destination = resolveToneLfoDestination(conn.targetNodeId, conn.targetPortId);
+    if (!destination) continue;
+
+    try {
+      inst.lfo.connect(destination);
+      nextActiveTargets.add(toneLfoTargetKey(conn.targetNodeId, conn.targetPortId));
+    } catch (error) {
+      console.warn('[tone-adapter] lfo connect failed', conn, error);
+    }
+  }
+
+  latestToneLfoActiveTargets = nextActiveTargets;
 }
 
 function reconnectSourcesToBus(): void {
@@ -476,10 +507,20 @@ function applyGraphWiring(): boolean {
 
 // Mark the audio graph as dirty and rebuild if Tone is ready.
 function scheduleGraphWiring(): void {
-  if (latestAudioConnections.length === 0) return;
-  if (!toneModule) return;
-  if (!toneAudioEngine.isEnabled()) return;
-  applyGraphWiring();
+  if (!toneModule || !toneAudioEngine.isEnabled()) {
+    latestToneLfoActiveTargets = new Set();
+    return;
+  }
+
+  if (latestAudioConnections.length > 0) {
+    applyGraphWiring();
+  } else {
+    for (const inst of effectInstances.values()) inst.wiredExternally = false;
+    reconnectSourcesToBus();
+    for (const bus of buses.keys()) rebuildBusChain(bus);
+  }
+
+  applyToneLfoWiring();
 }
 
 async function ensureTone(): Promise<ToneModule> {
@@ -805,6 +846,139 @@ function createOscInstance(
   return instance;
 }
 
+function createToneLfoInstance(
+  nodeId: string,
+  params: { frequencyHz: number; min: number; max: number; amplitude: number; waveform: string }
+): ToneLfoInstance {
+  if (!toneModule) throw new Error('Tone module is not loaded');
+
+  const min = Math.min(params.min, params.max);
+  const max = Math.max(params.min, params.max);
+  const lfo = new toneModule.LFO({
+    frequency: params.frequencyHz,
+    min,
+    max,
+    type: params.waveform,
+  } as any);
+
+  try {
+    lfo.amplitude.value = params.amplitude;
+  } catch {
+    // ignore
+  }
+
+  const instance: ToneLfoInstance = {
+    nodeId,
+    lfo,
+    enabled: true,
+    started: false,
+    lastParams: { ...params, min, max, enabled: true },
+  };
+
+  try {
+    lfo.start();
+    instance.started = true;
+  } catch {
+    // ignore
+  }
+
+  lfoInstances.set(nodeId, instance);
+  scheduleGraphWiring();
+  return instance;
+}
+
+function updateToneLfoInstance(
+  instance: ToneLfoInstance,
+  params: { frequencyHz: number; min: number; max: number; amplitude: number; waveform: string; enabled: boolean }
+): void {
+  const min = Math.min(params.min, params.max);
+  const max = Math.max(params.min, params.max);
+
+  const prevEnabled = instance.enabled;
+  instance.enabled = params.enabled;
+
+  if (!params.enabled && prevEnabled) {
+    try {
+      instance.lfo.stop();
+    } catch {
+      // ignore
+    }
+    instance.started = false;
+    scheduleGraphWiring();
+    instance.lastParams = { ...instance.lastParams, ...params, min, max };
+    return;
+  }
+
+  if (!params.enabled) {
+    instance.lastParams = { ...instance.lastParams, ...params, min, max };
+    return;
+  }
+
+  if (instance.lastParams.waveform !== params.waveform) {
+    try {
+      instance.lfo.type = params.waveform;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (instance.lastParams.frequencyHz !== params.frequencyHz) {
+    try {
+      instance.lfo.frequency.rampTo(params.frequencyHz, DEFAULT_RAMP_SECONDS);
+    } catch {
+      try {
+        instance.lfo.frequency.value = params.frequencyHz;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (instance.lastParams.min !== min) {
+    try {
+      instance.lfo.min = min;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (instance.lastParams.max !== max) {
+    try {
+      instance.lfo.max = max;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (instance.lastParams.amplitude !== params.amplitude) {
+    try {
+      instance.lfo.amplitude.rampTo(params.amplitude, DEFAULT_RAMP_SECONDS);
+    } catch {
+      try {
+        instance.lfo.amplitude.value = params.amplitude;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (!instance.started) {
+    try {
+      instance.lfo.start();
+      instance.started = true;
+      scheduleGraphWiring();
+    } catch {
+      // ignore
+    }
+  }
+
+  if (prevEnabled !== params.enabled) {
+    scheduleGraphWiring();
+  }
+
+  instance.lastParams = { ...instance.lastParams, ...params, min, max };
+}
+
 function updateLoop(
   instance: ToneOscInstance,
   parsed: ParsedLoop,
@@ -864,6 +1038,7 @@ function createDelayEffect(time: number, feedback: number, wet: number): EffectW
     input: effect,
     output: effect,
     effect,
+    wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
   };
@@ -876,6 +1051,7 @@ function createReverbEffect(decay: number, preDelay: number, wet: number): Effec
     input: effect,
     output: effect,
     effect,
+    wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
   };
@@ -894,6 +1070,7 @@ function createPitchEffect(
     input: effect,
     output: effect,
     effect,
+    wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
   };
@@ -911,6 +1088,7 @@ function createResonatorEffect(delayTime: number, resonance: number, dampening: 
     input,
     output: crossfade,
     effect: comb,
+    wetParam: crossfade.fade,
     setWet,
     dispose: () => {
       input.dispose();
@@ -974,6 +1152,7 @@ function updateEffectInstance(
 ): void {
   const prevBus = instance.bus;
   const prevOrder = instance.order;
+  const prevEnabled = instance.enabled;
 
   instance.bus = bus;
   instance.order = order;
@@ -982,6 +1161,10 @@ function updateEffectInstance(
   if (bus !== prevBus || order !== prevOrder) {
     rebuildBusChain(prevBus);
     rebuildBusChain(bus);
+    scheduleGraphWiring();
+  }
+
+  if (enabled !== prevEnabled) {
     scheduleGraphWiring();
   }
 
@@ -997,9 +1180,18 @@ function updateEffectInstance(
       const time = nextParams.time;
       const feedback = nextParams.feedback;
       const wet = nextParams.wet;
-      if (instance.lastParams.time !== time) effect.delayTime.rampTo(time, DEFAULT_RAMP_SECONDS);
-      if (instance.lastParams.feedback !== feedback) effect.feedback.rampTo(feedback, DEFAULT_RAMP_SECONDS);
-      if (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) applyWet(wet);
+      if (instance.lastParams.time !== time && !isToneLfoTargetActive(instance.nodeId, 'time')) {
+        effect.delayTime.rampTo(time, DEFAULT_RAMP_SECONDS);
+      }
+      if (instance.lastParams.feedback !== feedback && !isToneLfoTargetActive(instance.nodeId, 'feedback')) {
+        effect.feedback.rampTo(feedback, DEFAULT_RAMP_SECONDS);
+      }
+      if (
+        (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) &&
+        (!isToneLfoTargetActive(instance.nodeId, 'wet') || !enabled)
+      ) {
+        applyWet(wet);
+      }
       instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
       break;
     }
@@ -1022,7 +1214,12 @@ function updateEffectInstance(
             instance.pendingGenerate = false;
           });
       }
-      if (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) applyWet(wet);
+      if (
+        (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) &&
+        (!isToneLfoTargetActive(instance.nodeId, 'wet') || !enabled)
+      ) {
+        applyWet(wet);
+      }
       instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
       break;
     }
@@ -1037,7 +1234,12 @@ function updateEffectInstance(
       if (instance.lastParams.windowSize !== windowSize) effect.windowSize = windowSize;
       if (instance.lastParams.delayTime !== delayTime) effect.delayTime = delayTime;
       if (instance.lastParams.feedback !== feedback) effect.feedback = feedback;
-      if (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) applyWet(wet);
+      if (
+        (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) &&
+        (!isToneLfoTargetActive(instance.nodeId, 'wet') || !enabled)
+      ) {
+        applyWet(wet);
+      }
       instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
       break;
     }
@@ -1047,10 +1249,17 @@ function updateEffectInstance(
       const resonance = nextParams.resonance;
       const dampening = nextParams.dampening;
       const wet = nextParams.wet;
-      if (instance.lastParams.delayTime !== delayTime) comb.delayTime.rampTo(delayTime, DEFAULT_RAMP_SECONDS);
+      if (instance.lastParams.delayTime !== delayTime && !isToneLfoTargetActive(instance.nodeId, 'delayTime')) {
+        comb.delayTime.rampTo(delayTime, DEFAULT_RAMP_SECONDS);
+      }
       if (instance.lastParams.resonance !== resonance) comb.resonance = resonance;
       if (instance.lastParams.dampening !== dampening) comb.dampening = dampening;
-      if (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) applyWet(wet);
+      if (
+        (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) &&
+        (!isToneLfoTargetActive(instance.nodeId, 'wet') || !enabled)
+      ) {
+        applyWet(wet);
+      }
       instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
       break;
     }
@@ -1258,11 +1467,29 @@ function disposePlayerInstance(nodeId: string): void {
   playerInstances.delete(nodeId);
 }
 
+function disposeToneLfoInstance(nodeId: string): void {
+  const inst = lfoInstances.get(nodeId);
+  if (!inst) return;
+  try {
+    inst.lfo?.stop();
+  } catch {
+    // ignore
+  }
+  try {
+    inst.lfo?.dispose();
+  } catch {
+    // ignore
+  }
+  lfoInstances.delete(nodeId);
+  scheduleGraphWiring();
+}
+
 function disposeNodeById(nodeId: string): void {
   disposeOscInstance(nodeId);
   disposeEffectInstance(nodeId);
   disposeGranularInstance(nodeId);
   disposePlayerInstance(nodeId);
+  disposeToneLfoInstance(nodeId);
 }
 
 export function registerToneClientDefinitions(
@@ -1395,6 +1622,110 @@ export function registerToneClientDefinitions(
       }
 
       return { value: amplitude };
+    },
+  });
+
+  registry.register({
+    type: 'tone-lfo',
+    label: 'Tone LFO (client)',
+    category: 'Audio',
+    inputs: [
+      { id: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1 },
+      { id: 'min', label: 'Min', type: 'number', defaultValue: 0 },
+      { id: 'max', label: 'Max', type: 'number', defaultValue: 1 },
+      { id: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1 },
+      { id: 'waveform', label: 'Waveform', type: 'string' },
+      { id: 'enabled', label: 'Enabled', type: 'boolean' },
+    ],
+    outputs: [{ id: 'value', label: 'Value', type: 'number' }],
+    configSchema: [
+      { key: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      { key: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
+      { key: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
+      { key: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        key: 'waveform',
+        label: 'Waveform',
+        type: 'select',
+        defaultValue: 'sine',
+        options: [
+          { value: 'sine', label: 'Sine' },
+          { value: 'square', label: 'Square' },
+          { value: 'triangle', label: 'Triangle' },
+          { value: 'sawtooth', label: 'Sawtooth' },
+        ],
+      },
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+    ],
+    process: (inputs, config, context) => {
+      const frequencyHz = Math.max(0, toNumber(inputs.frequencyHz ?? config.frequencyHz, 1));
+      const min = toNumber(inputs.min ?? config.min, 0);
+      const max = toNumber(inputs.max ?? config.max, 1);
+      const depth = clamp(toNumber(inputs.amplitude ?? config.amplitude, 1), 0, 1);
+      const waveform = (() => {
+        const v = inputs.waveform;
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        return toString(config.waveform, 'sine');
+      })();
+      const enabled =
+        inputs.enabled !== undefined && inputs.enabled !== null
+          ? toBoolean(inputs.enabled, true)
+          : toBoolean(config.enabled, true);
+
+      if (!enabled) {
+        if (lfoInstances.has(context.nodeId)) disposeToneLfoInstance(context.nodeId);
+        return { value: min };
+      }
+
+      const phase = (context.time / 1000) * frequencyHz * 2 * Math.PI;
+
+      let normalized: number;
+      switch (waveform) {
+        case 'sine':
+          normalized = (Math.sin(phase) + 1) / 2;
+          break;
+        case 'square':
+          normalized = Math.sin(phase) >= 0 ? 1 : 0;
+          break;
+        case 'triangle':
+          normalized = Math.abs(((context.time / 1000) * frequencyHz * 2) % 2 - 1);
+          break;
+        case 'sawtooth':
+          normalized = ((context.time / 1000) * frequencyHz) % 1;
+          break;
+        default:
+          normalized = (Math.sin(phase) + 1) / 2;
+      }
+
+      const centered = 0.5 + (normalized - 0.5) * depth;
+      const value = min + centered * (max - min);
+
+      if (!toneAudioEngine.isEnabled()) {
+        return { value };
+      }
+
+      if (!toneModule) {
+        void ensureTone().catch((error) =>
+          console.warn('[tone-adapter] Tone.js load failed', error)
+        );
+        return { value };
+      }
+
+      const hasTargets = latestToneLfoConnections.some((conn) => conn.sourceNodeId === context.nodeId);
+      if (!hasTargets) {
+        if (lfoInstances.has(context.nodeId)) disposeToneLfoInstance(context.nodeId);
+        return { value };
+      }
+
+      const params = { frequencyHz, min, max, amplitude: depth, waveform, enabled: true };
+      const instance = lfoInstances.get(context.nodeId);
+      if (!instance) {
+        createToneLfoInstance(context.nodeId, { frequencyHz, min, max, amplitude: depth, waveform });
+      } else {
+        updateToneLfoInstance(instance, params);
+      }
+
+      return { value };
     },
   });
 
@@ -1709,87 +2040,86 @@ export function registerToneClientDefinitions(
   });
 
   registry.register({
-    type: 'tone-player',
-    label: 'Tone Player (client)',
-    category: 'Audio',
+    type: 'load-audio-from-assets',
+    label: 'Load Audio From Assets (client)',
+    category: 'Assets',
     inputs: [
-      { id: 'url', label: 'URL', type: 'string' },
-      { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
-      { id: 'enabled', label: 'Enabled', type: 'boolean' },
-      { id: 'loop', label: 'Loop', type: 'boolean' },
-      { id: 'autostart', label: 'Autostart', type: 'boolean' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
+    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
-      { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
-      { key: 'autostart', label: 'Autostart', type: 'boolean', defaultValue: false },
+      {
+        key: 'assetId',
+        label: 'Audio Asset',
+        type: 'asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
     ],
     process: (inputs, config, context) => {
-      const urlRaw = toString(inputs.url ?? config.url, '');
-      const clipParams = parseToneClipParams(urlRaw);
-      const baseUrlRaw = clipParams.baseUrl;
+      const assetRaw = toString((config as any).assetId, '');
+      const assetRef = (() => {
+        const trimmed = assetRaw.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('asset:') || trimmed.startsWith('shugu://asset/')) return trimmed;
+        return `asset:${trimmed}`;
+      })();
+      const baseUrlRaw = assetRef;
       const url = deps.resolveAssetRef ? deps.resolveAssetRef(baseUrlRaw) : baseUrlRaw;
-      const triggerRaw = inputs.trigger;
-      const triggerActive =
-        typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);
+
       const playbackRate = toNumber(inputs.playbackRate ?? config.playbackRate, 1);
       const detune = toNumber(inputs.detune ?? config.detune, 0);
-      const volume = toNumber(inputs.volume ?? config.volume, 1);
-      const loopConfig = toBoolean(config.loop, false);
-      const loopInput =
-        inputs.loop !== undefined && inputs.loop !== null
-          ? toBoolean(inputs.loop, loopConfig)
-          : loopConfig;
-      const loop = clipParams.loop ?? loopInput;
-      const playGate = clipParams.play;
-      const reverse = clipParams.reverse ?? false;
-      const cursorRequestedRaw = clipParams.cursorSec;
+      const volume = 1;
+      const loop = toBoolean(inputs.loop, false);
+      const enabled = toBoolean(inputs.play, true);
+      const reverse = toBoolean(inputs.reverse, false);
+
+      const cursorRequestedRaw = toNumber(inputs.cursorSec, -1);
       const cursorRequested =
         typeof cursorRequestedRaw === 'number' && Number.isFinite(cursorRequestedRaw) && cursorRequestedRaw >= 0
           ? cursorRequestedRaw
           : null;
-      const enabledConfig = toBoolean(config.enabled, false);
-      const enabledInput =
-        inputs.enabled !== undefined && inputs.enabled !== null
-          ? toBoolean(inputs.enabled, enabledConfig)
-          : enabledConfig;
-      const enabled = playGate ?? enabledInput;
-      const autostartConfig = toBoolean(config.autostart, false);
-      const autostartInput =
-        inputs.autostart !== undefined && inputs.autostart !== null
-          ? toBoolean(inputs.autostart, autostartConfig)
-          : autostartConfig;
-      const autostart = playGate !== null ? false : autostartInput;
       const busName = (() => {
         const v = inputs.bus;
         if (typeof v === 'string' && v.trim()) return v.trim();
         return toString(config.bus, DEFAULT_BUS);
       })();
 
+      const outValue = assetRef ? (enabled ? 1 : 0) : 0;
+
       if (!toneAudioEngine.isEnabled()) {
-        return { value: volume };
+        return { ref: outValue };
       }
 
       if (!toneModule) {
         void ensureTone().catch((error) =>
           console.warn('[tone-adapter] Tone.js load failed', error)
         );
-        return { value: volume };
+        return { ref: outValue };
       }
 
       if (!url) {
         disposePlayerInstance(context.nodeId);
-        return { value: volume };
+        return { ref: outValue };
       }
 
       let instance = playerInstances.get(context.nodeId);
@@ -1850,8 +2180,8 @@ export function registerToneClientDefinitions(
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
       if (instance.lastParams.volume !== volume) instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
 
-      const clipStartRaw = Math.max(0, toNumber(clipParams.startSec, 0));
-      const clipEndRaw = toNumber(clipParams.endSec, -1);
+      const clipStartRaw = Math.max(0, toNumber(inputs.startSec, 0));
+      const clipEndRaw = toNumber(inputs.endSec, -1);
       const clipEndCandidate =
         Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStartRaw, clipEndRaw) : -1;
 
@@ -1942,8 +2272,6 @@ export function registerToneClientDefinitions(
 
       if (!instance.loading) applyClipToPlayer();
 
-      const triggered = triggerActive && !instance.lastTrigger;
-
       const stopAndMaybePause = () => {
         if (!instance.started) return;
         const now = toneModule!.now();
@@ -2032,83 +2360,39 @@ export function registerToneClientDefinitions(
         cursorClamped !== null &&
         (instance.lastCursorSec === null || Math.abs(cursorClamped - instance.lastCursorSec) > 0.005);
 
-      if (playGate !== null) {
-        if (!enabled) {
-          stopAndMaybePause();
-          if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
-        } else {
-          if (triggered) {
-            instance.pausedOffsetSec = null;
-            startFromPosition(segmentStart, 'trigger');
-          } else if (clipChanged && instance.started) {
-            // Switching reverse while playing should keep the current position when possible.
-            if (instance.lastClip && instance.lastClip.reverse !== reverse) {
-              stopAndMaybePause();
-              const resume = instance.pausedOffsetSec ?? segmentStart;
-              instance.pausedOffsetSec = null;
-              startFromPosition(resume, 'reverse-change');
-            } else {
-              instance.pausedOffsetSec = null;
-              startFromPosition(segmentStart, 'clip-change');
-            }
-          } else if (cursorChanged) {
-            instance.pausedOffsetSec = null;
-            startFromPosition(cursorClamped ?? segmentStart, 'seek');
-          } else if (!instance.started && !instance.loading) {
-            const resumeOffset = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
-            startFromPosition(resumeOffset, instance.pausedOffsetSec ? 'resume' : cursorClamped ? 'seek-start' : 'start');
-          }
-        }
+      if (!enabled) {
+        stopAndMaybePause();
+        if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
       } else {
-        if (triggered) {
-          instance.pausedOffsetSec = null;
-          startFromPosition(segmentStart, 'trigger');
-        }
-
-        if (clipChanged && instance.started && !instance.loading) {
-          instance.pausedOffsetSec = null;
-          startFromPosition(segmentStart, 'clip-change');
-        }
-
-        if (cursorChanged && enabled && !instance.loading) {
+        if (clipChanged && instance.started) {
+          // Switching reverse while playing should keep the current position when possible.
+          if (instance.lastClip && instance.lastClip.reverse !== reverse) {
+            stopAndMaybePause();
+            const resume = instance.pausedOffsetSec ?? segmentStart;
+            instance.pausedOffsetSec = null;
+            startFromPosition(resume, 'reverse-change');
+          } else {
+            instance.pausedOffsetSec = null;
+            startFromPosition(segmentStart, 'clip-change');
+          }
+        } else if (cursorChanged) {
           instance.pausedOffsetSec = null;
           startFromPosition(cursorClamped ?? segmentStart, 'seek');
-        }
-
-        if (!instance.autostarted && autostart && !instance.loading) {
-          if (!instance.started) {
-            startFromPosition(cursorClamped ?? segmentStart, 'autostart');
-          }
-          instance.autostarted = true;
-        }
-
-        if (enabled && !instance.started && !instance.loading) {
-          startFromPosition(cursorClamped ?? segmentStart, 'enabled');
-        }
-
-        if (!enabled && instance.enabled) {
-          if (instance.started) {
-            try {
-              instance.player.stop();
-            } catch {
-              // ignore
-            }
-            instance.started = false;
-            instance.startedAt = 0;
-            instance.startOffsetSec = 0;
-            instance.startDurationSec = null;
-            instance.pausedOffsetSec = null;
-          }
+        } else if (!instance.started && !instance.loading) {
+          const resumeOffset = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
+          startFromPosition(
+            resumeOffset,
+            instance.pausedOffsetSec ? 'resume' : cursorClamped ? 'seek-start' : 'start'
+          );
         }
       }
 
       instance.enabled = enabled;
-      instance.lastTrigger = triggerActive;
       instance.lastClip = nextClip;
       instance.lastParams = { ...instance.lastParams, ...params, reverse };
       instance.lastCursorSec = cursorClamped;
 
-      return { value: volume };
+      return { ref: outValue };
     },
   });
 
@@ -2121,6 +2405,7 @@ export function registerToneClientDefinitions(
       for (const nodeId of Array.from(effectInstances.keys())) disposeEffectInstance(nodeId);
       for (const nodeId of Array.from(granularInstances.keys())) disposeGranularInstance(nodeId);
       for (const nodeId of Array.from(playerInstances.keys())) disposePlayerInstance(nodeId);
+      for (const nodeId of Array.from(lfoInstances.keys())) disposeToneLfoInstance(nodeId);
       for (const bus of buses.values()) {
         try {
           bus.input.disconnect();
@@ -2138,6 +2423,9 @@ export function registerToneClientDefinitions(
       latestAudioConnections = [];
       latestExplicitNodeIds = new Set();
       latestExplicitEffectIds = new Set();
+      latestToneLfoConnections = [];
+      latestToneLfoDesiredTargets = new Set();
+      latestToneLfoActiveTargets = new Set();
       maybeStopTransport();
     },
     syncActiveNodes: (activeNodeIds: Set<string>, nodes: NodeInstance[], connections: Connection[]) => {
@@ -2154,12 +2442,8 @@ export function registerToneClientDefinitions(
       for (const nodeId of Array.from(playerInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposePlayerInstance(nodeId);
       }
-
-      if (latestAudioConnections.length === 0) {
-        for (const inst of effectInstances.values()) inst.wiredExternally = false;
-        if (toneModule && toneAudioEngine.isEnabled()) reconnectSourcesToBus();
-        for (const bus of buses.keys()) rebuildBusChain(bus);
-        return;
+      for (const nodeId of Array.from(lfoInstances.keys())) {
+        if (!activeNodeIds.has(nodeId)) disposeToneLfoInstance(nodeId);
       }
 
       scheduleGraphWiring();

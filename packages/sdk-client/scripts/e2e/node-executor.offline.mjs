@@ -31,9 +31,9 @@ function loopGraph({ primary }) {
       },
       {
         id: ids.lfo,
-        type: 'lfo',
+        type: 'tone-lfo',
         position: { x: 340, y: 140 },
-        config: { waveform: 'sine' },
+        config: { frequencyHz: 0.8, min: 0.5, max: 3, amplitude: 1, waveform: 'sine', enabled: true },
         inputValues: {},
         outputValues: {},
       },

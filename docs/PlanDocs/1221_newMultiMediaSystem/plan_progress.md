@@ -212,6 +212,44 @@
 - `pnpm -C apps/client run check` ✅
 
 
+## P2.9 — Tone LFO（audio-rate modulation）
+
+### ✅ 已完成：Tone LFO 节点（Audio）+ ToneAdapter 真实调制连线
+
+目标：把“LFO→Tone 参数”的连线从 30Hz 数值写入升级为 Tone 内部 `Tone.LFO.connect(param)` 的连续调制。
+
+实现要点：
+- `packages/node-core/src/definitions.ts`
+  - 新增节点：`tone-lfo`（Audio）
+  - 删除旧 `lfo`（原 Generators）节点，避免与 Tone LFO 混淆
+- `packages/sdk-client/src/tone-adapter.ts`
+  - 注册 `tone-lfo` 的 client 实现（创建/更新/销毁 `Tone.LFO`）
+  - 识别连接：`tone-lfo.value -> tone-*.(param)`
+  - wiring：把连接映射为 Tone 内部 connect（目前支持：
+    - `tone-delay`：`wet/time/feedback`
+    - `tone-resonator`：`wet/delayTime`
+    - `tone-reverb`：`wet`
+    - `tone-pitch`：`wet`
+  - 冲突规避：当某个参数被 Tone LFO 调制时，跳过该参数的 control-rate `rampTo` 写入
+- `packages/sdk-client/src/node-executor.ts`
+  - 将 `tone-lfo` 加入 Tone node keep-alive 列表（否则 deploy 时会被当作“非 Tone 节点”清理）
+- `apps/manager/src/lib/nodes/engine.ts`
+  - loop/patch export whitelist + capability 增加 `tone-lfo`
+- 模板：新增 `docs/PlanDocs/1221_newMultiMediaSystem/templates/10_tone_lfo_delay_wet.json`
+
+使用方式：
+- 在 Node Graph 中添加 `Tone LFO`，把 `value` 连到 `Tone Delay` 的 `wet`（或 `time/feedback` 等支持端口）。
+- 这条连线在 UI 上仍是 number（control），但在 client runtime 会被 ToneAdapter 识别为 LFO modulation，并在 Tone 内部执行连续调制。
+
+### ✅ 验证记录
+
+命令：
+- `pnpm -C packages/node-core run build` ✅
+- `pnpm -C packages/sdk-client run build` ✅
+- `pnpm -C apps/manager run check` ✅
+- `pnpm -C apps/client run check` ✅
+
+
 ## P0.5 — 基础设施修复（为后续 Phase 2/3 铺路）
 
 ### ✅ 已完成：Manager file-picker 改为 Asset Service 上传（禁止 DataURL 入图）
