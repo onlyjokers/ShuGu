@@ -41,13 +41,15 @@ How to import:
   - MIDI → Select → Tone Osc(Waveform) → Audio Patch to Client
   - 演示 select 类型参数（Waveform）现在也是“输入口”，可接线/可被 MIDI 实时调制。
 
-## Media (Manager command path)
+## Media (Graph-driven Patch via Image/Video to Client)
 
 - `04_media_image_show.json`
-  - Load Image From Assets → Play Media(showImage) → Client
+  - Load Image From Assets → Image to Client
+  - 通过 `Image to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `05_media_video_play.json`
-  - Load Video From Assets（Timeline/Loop/Play/Reverse/Seek）→ Play Media(video) → Client
+  - Load Video From Assets（Timeline/Loop/Play/Reverse/Seek）→ Video to Client
+  - 通过 `Video to Client(Deploy) → Client(In)` 指定播放目标。
 
 ## Synth(Update) (Tone single engine)
 

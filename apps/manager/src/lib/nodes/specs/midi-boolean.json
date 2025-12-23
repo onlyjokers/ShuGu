@@ -1,6 +1,6 @@
 {
   "type": "midi-boolean",
-  "label": "Boolean",
+  "label": "Boolean Bind",
   "category": "MIDI",
   "inputs": [
     { "id": "threshold", "label": "Threshold", "type": "number", "defaultValue": 0.5, "min": 0, "max": 1, "step": 0.01 }

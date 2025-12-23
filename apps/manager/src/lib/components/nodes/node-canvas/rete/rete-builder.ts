@@ -89,9 +89,25 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
     const inputControlKeys = new Set<string>();
     node.id = instance.id;
 
+    const cmdAggInputCount = (() => {
+      if (instance.type !== 'cmd-aggregator') return null;
+      const raw = (instance.config as any)?.inCount;
+      const n = typeof raw === 'number' ? raw : Number(raw);
+      return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+    })();
+
     for (const input of def?.inputs ?? []) {
-      const multipleConnections = input.kind === 'sink';
-      const inp = new ClassicPreset.Input(socketFor(input.type), input.label ?? input.id, multipleConnections);
+      if (cmdAggInputCount !== null) {
+        const match = /^in(\d+)$/.exec(String(input.id));
+        if (match) {
+          const idx = Number(match[1]);
+          if (!Number.isFinite(idx) || idx <= 0) continue;
+          if (idx > cmdAggInputCount) continue;
+        }
+      }
+      // Allow users to attempt multiple links; NodeEngine enforces the global rule that each input
+      // port can only be connected once (and shows the error message on violation).
+      const inp = new ClassicPreset.Input(socketFor(input.type), input.label ?? input.id, true);
 
       const hasDefault = input.defaultValue !== undefined;
       const isPrimitive = input.type === 'number' || input.type === 'string' || input.type === 'boolean';
@@ -542,6 +558,8 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
 
   const isCompatible = (sourceType: PortType, targetType: PortType) => {
     if (sourceType === 'audio' || targetType === 'audio') return sourceType === 'audio' && targetType === 'audio';
+    if (sourceType === 'image' || targetType === 'image') return sourceType === 'image' && targetType === 'image';
+    if (sourceType === 'video' || targetType === 'video') return sourceType === 'video' && targetType === 'video';
     return sourceType === 'any' || targetType === 'any' || sourceType === targetType;
   };
 

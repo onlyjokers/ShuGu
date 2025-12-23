@@ -57,6 +57,35 @@
   let nodeId = '';
   $: nodeId = String(data?.id ?? '');
 
+  $: instanceType = String(nodeEngine.getNode(nodeId)?.type ?? '');
+  $: isCmdAggregator = instanceType === 'cmd-aggregator';
+
+  const cmdAggregatorMaxInputs = (): number => {
+    const def = nodeRegistry.get('cmd-aggregator');
+    if (!def) return 0;
+    return def.inputs.reduce((best, port) => {
+      const match = /^in(\d+)$/.exec(String(port.id));
+      if (!match) return best;
+      const idx = Number(match[1]);
+      if (!Number.isFinite(idx) || idx <= 0) return best;
+      return Math.max(best, idx);
+    }, 0);
+  };
+
+  $: cmdAggregatorCurrentInputs = inputs.filter(([key]) => /^in\d+$/.test(String(key))).length;
+  $: cmdAggregatorMax = cmdAggregatorMaxInputs();
+
+  const addCmdAggregatorInput = (event: Event) => {
+    event.stopPropagation();
+    if (!nodeId) return;
+    if (!isCmdAggregator) return;
+    if (cmdAggregatorMax <= 0) return;
+
+    const next = Math.min(cmdAggregatorMax, Math.max(1, cmdAggregatorCurrentInputs) + 1);
+    if (next === cmdAggregatorCurrentInputs) return;
+    nodeEngine.updateNodeConfig(nodeId, { inCount: next });
+  };
+
   let inputConnections: Record<string, ConnectionInfo[]> = {};
   $: if (nodeId) {
     const byInput: Record<string, ConnectionInfo[]> = {};
@@ -362,6 +391,19 @@
     </div>
   {/if}
 
+  {#if isCmdAggregator}
+    <div class="cmd-aggregator-controls">
+      <button
+        class="cmd-aggregator-add"
+        disabled={cmdAggregatorCurrentInputs >= cmdAggregatorMax}
+        on:pointerdown|stopPropagation
+        on:click={addCmdAggregatorInput}
+      >
+        Add In
+      </button>
+    </div>
+  {/if}
+
   <div class="ports">
     {#if inputs.length}
       <div class="inputs">
@@ -517,6 +559,32 @@
     flex-direction: column;
     gap: 4px;
     padding: 8px 0 6px;
+  }
+
+  .cmd-aggregator-controls {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: flex-start;
+    padding: 8px 10px 2px;
+  }
+
+  .cmd-aggregator-add {
+    font: inherit;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .cmd-aggregator-add:hover:enabled {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .cmd-aggregator-add:disabled {
+    opacity: 0.45;
   }
 
   .bypass-wire {

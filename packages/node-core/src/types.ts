@@ -11,6 +11,8 @@ export type PortType =
   | 'string'
   | 'color'
   | 'audio'
+  | 'image'
+  | 'video'
   | 'client'
   | 'command'
   | 'fuzzy'

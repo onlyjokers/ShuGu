@@ -1080,7 +1080,7 @@ if (!nodeRegistry.get('load-image-from-assets')) {
     label: 'Load Image From Assets',
     category: 'Assets',
     inputs: [],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -1109,8 +1109,9 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -1149,6 +1150,8 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       const reverseRaw = (inputs as any)?.reverse;
       const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+      const mutedRaw = (inputs as any)?.muted;
+      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
@@ -1160,7 +1163,7 @@ if (!nodeRegistry.get('load-video-from-assets')) {
 
       return {
         ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
           : '',
       };
     },

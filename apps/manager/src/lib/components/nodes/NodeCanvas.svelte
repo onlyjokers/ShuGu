@@ -24,7 +24,7 @@
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { getSDK, selectClients, state as managerState } from '$lib/stores/manager';
+  import { getSDK, selectClients, sensorData, state as managerState } from '$lib/stores/manager';
   import { displayBridgeState, sendPlugin as sendLocalDisplayPlugin } from '$lib/display/display-bridge';
   import type {
     NodeInstance,
@@ -86,6 +86,8 @@
     string: new ClassicPreset.Socket('string'),
     color: new ClassicPreset.Socket('color'),
     audio: new ClassicPreset.Socket('audio'),
+    image: new ClassicPreset.Socket('image'),
+    video: new ClassicPreset.Socket('video'),
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
     fuzzy: new ClassicPreset.Socket('fuzzy'),
@@ -538,17 +540,57 @@
   };
 
   const resolvePatchTargetClientIds = (): string[] => {
-    const roots = (graphState.nodes ?? []).filter((n) => String(n.type) === 'audio-out');
-    if (roots.length !== 1) return [];
-    const rootId = String(roots[0]?.id ?? '');
-    if (!rootId) return [];
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const roots = (graphState.nodes ?? [])
+      .filter((n) => patchRootTypes.includes(String(n.type) as any))
+      .map((n) => ({ id: String(n.id ?? ''), type: String(n.type ?? '') }))
+      .filter((n) => Boolean(n.id));
+    if (roots.length === 0) return [];
 
     const connected = new Set(clientIdsInOrder());
 
     const connections = graphState.connections ?? [];
 
-    // Patch target routing: `audio-out(cmd) -> client-object(in)`.
-    // Display target routing: `audio-out(cmd) -> display-object(in)`.
+    const activeRoots = roots.filter((root) =>
+      connections.some(
+        (c) => String(c.sourceNodeId) === root.id && String(c.sourcePortId) === 'cmd'
+      )
+    );
+
+    const formatRootList = (items: { id: string; type: string }[]) =>
+      items
+        .map((r) => `${r.type}:${r.id}`)
+        .sort()
+        .join(', ');
+
+    const root = (() => {
+      if (roots.length === 1) return roots[0]!;
+      if (activeRoots.length === 1) return activeRoots[0]!;
+      if (activeRoots.length > 1) {
+        nodeEngine.lastError.set(
+          `Multiple active patch roots found (${formatRootList(activeRoots)}). Disconnect Deploy on all but one root.`
+        );
+        return null;
+      }
+      nodeEngine.lastError.set(
+        `Multiple patch roots found (${formatRootList(roots)}). Connect Deploy on exactly one root (or delete the others).`
+      );
+      return null;
+    })();
+
+    if (!root) return [];
+    const prevError = get(nodeEngine.lastError);
+    if (
+      typeof prevError === 'string' &&
+      (prevError.startsWith('Multiple patch roots found') ||
+        prevError.startsWith('Multiple active patch roots found'))
+    ) {
+      nodeEngine.lastError.set(null);
+    }
+    const rootId = root.id;
+
+    // Patch target routing: `<patch-root>(cmd) -> client-object(in)`.
+    // Display target routing: `<patch-root>(cmd) -> display-object(in)`.
     const deployToClientConns = connections.filter(
       (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
     );
@@ -858,6 +900,19 @@
 
     // Keep live display outputs usable even when the engine is stopped.
     (node.outputValues as any).indexOut = slice.index;
+    (node.outputValues as any).out = {
+      clientId: slice.firstId,
+      sensors: (() => {
+        const latest: any = slice.firstId ? get(sensorData)?.get?.(slice.firstId) : null;
+        if (!latest) return null;
+        return {
+          sensorType: latest.sensorType,
+          payload: latest.payload,
+          serverTimestamp: latest.serverTimestamp,
+          clientTimestamp: latest.clientTimestamp,
+        };
+      })(),
+    };
     nodeEngine.tickTime.set(Date.now());
 
     const reteNode = nodeMap.get(String(nodeId));
@@ -892,10 +947,13 @@
     const node = nodeEngine.getNode(nodeId);
     if (!node || node.type !== 'client-object') return;
 
-    const currentIndexRaw =
-      typeof (node.inputValues as any)?.index === 'number' ? (node.inputValues as any).index : 1;
-    const currentRangeRaw =
-      typeof (node.inputValues as any)?.range === 'number' ? (node.inputValues as any).range : 1;
+    const toFiniteNumber = (value: unknown, fallback: number): number => {
+      const n = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const currentIndexRaw = toFiniteNumber((node.inputValues as any)?.index, 1);
+    const currentRangeRaw = toFiniteNumber((node.inputValues as any)?.range, 1);
     const currentRandomRaw = (node.inputValues as any)?.random;
 
     const desiredRange = typeof next.range === 'number' ? next.range : currentRangeRaw;
@@ -1153,16 +1211,6 @@
       return { nodeId, side, key };
     }
     return null;
-  };
-
-  const replaceSingleInputConnection = (targetNodeId: string, targetPortId: string) => {
-    if (reteBuilder.inputAllowsMultiple(targetNodeId, targetPortId)) return;
-    const state = get(graphStateStore);
-    for (const c of state.connections ?? []) {
-      if (c.targetNodeId === targetNodeId && c.targetPortId === targetPortId) {
-        nodeEngine.removeConnection(c.id);
-      }
-    }
   };
 
   function addNode(type: string, position?: { x: number; y: number }) {
@@ -1606,12 +1654,6 @@
             desiredSide
           );
           if (snapped) {
-            if (desiredSide === 'input') {
-              replaceSingleInputConnection(snapped.nodeId, snapped.key);
-            } else {
-              replaceSingleInputConnection(initialSocket.nodeId, initialSocket.key);
-            }
-
             const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
             const engineConn: EngineConnection =
               initialSocket.side === 'output'
@@ -1657,6 +1699,7 @@
       nodeMap,
       connectionMap,
       nodeRegistry,
+      socketFor: reteBuilder.socketFor,
       buildReteNode: reteBuilder.buildReteNode,
       nodeLabel: reteBuilder.nodeLabel,
       applyMidiMapRangeConstraints: reteBuilder.applyMidiMapRangeConstraints,
@@ -2327,6 +2370,14 @@
 
   :global(.node-canvas-container .socket[title='audio']) {
     background: rgba(14, 165, 233, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='image']) {
+    background: rgba(244, 114, 182, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='video']) {
+    background: rgba(34, 211, 238, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='client']) {

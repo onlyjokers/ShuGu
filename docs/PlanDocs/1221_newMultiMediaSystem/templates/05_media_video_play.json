@@ -1,14 +1,14 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "Load Video From Assets → Play Media(video) → Client",
-  "purpose": "体验 Load Video From Assets 的 Timeline 双游标/Play/Loop/Reverse/Seek（clip hash）+ client 侧 MediaEngine(video) 播放链路（Range/ETag/Cache）",
+  "title": "Patch: Load Video From Assets → Video to Client",
+  "purpose": "体验 Load Video From Assets 的 Timeline 双游标/Play/Loop/Reverse/Seek（clip hash）+ client 侧 MediaEngine(video) 播放链路（Graph-driven Patch）",
   "howTo": [
-    "1) manager Node Graph 点 ▶ Start。",
-    "2) 选择 Client 节点（Clients）目标（或用 Manager 顶部选择的 client）。",
+    "1) 打开 client。",
+    "2) manager Node Graph 点 ▶ Start。",
     "3) 先在 Assets Manager 上传视频，然后在 Load Video From Assets 里选择该视频。",
-    "4) client 会播放视频；可在 Load Video From Assets 里调 Timeline/Loop/Play/Reverse/Seek。",
-    "5) 可在 Play Media 里调 muted/volume（loop 以 Load Video From Assets 为准）。"
+    "4) 通过 `Video to Client(Deploy) → Client(In)` 指定播放目标。",
+    "5) client 会播放视频；可在 Load Video From Assets 里调 Timeline/Loop/Play/Reverse/Seek。"
   ],
   "graph": {
     "nodes": [
@@ -36,34 +36,25 @@
         "outputValues": {}
       },
       {
-        "id": "node-play-media",
-        "type": "play-media",
+        "id": "node-video-out",
+        "type": "video-out",
         "position": { "x": 520, "y": 260 },
-        "config": {
-          "audioUrl": "",
-          "imageUrl": "",
-          "videoUrl": "",
-          "volume": 1,
-          "loop": false,
-          "fadeIn": 0,
-          "muted": true,
-          "imageDuration": 0
-        },
+        "config": {},
         "inputValues": {},
         "outputValues": {}
       }
     ],
     "connections": [
       {
-        "id": "conn-video-url",
+        "id": "conn-video-out",
         "sourceNodeId": "node-load-video",
         "sourcePortId": "ref",
-        "targetNodeId": "node-play-media",
-        "targetPortId": "videoUrl"
+        "targetNodeId": "node-video-out",
+        "targetPortId": "in"
       },
       {
-        "id": "conn-media-cmd",
-        "sourceNodeId": "node-play-media",
+        "id": "conn-deploy",
+        "sourceNodeId": "node-video-out",
         "sourcePortId": "cmd",
         "targetNodeId": "node-client",
         "targetPortId": "in"

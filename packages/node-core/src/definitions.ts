@@ -126,6 +126,7 @@ function selectClientIdsForNode(
 
 export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: ClientObjectDeps): void {
   registry.register(createClientObjectNode(deps));
+  registry.register(createCmdAggregatorNode());
   registry.register(createClientSensorsProcessorNode());
   registry.register(createMathNode());
   registry.register(createLogicAddNode());
@@ -136,6 +137,8 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createLogicForNode());
   registry.register(createLogicSleepNode());
   registry.register(createNumberNode());
+  registry.register(createStringNode());
+  registry.register(createBoolNode());
   registry.register(createNumberStabilizerNode());
   // Tone.js audio nodes (client runtime overrides these definitions).
   registry.register(createToneLFONode());
@@ -152,6 +155,8 @@ export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: Cli
   registry.register(createPlayMediaNode());
   // Patch root sinks (Max/MSP style).
   registry.register(createAudioOutNode());
+  registry.register(createImageOutNode(deps));
+  registry.register(createVideoOutNode(deps));
   registry.register(createFlashlightProcessorNode());
   registry.register(createScreenColorProcessorNode());
   registry.register(createSynthUpdateProcessorNode());
@@ -212,7 +217,7 @@ function createLoadImageFromAssetsNode(): NodeDefinition {
     label: 'Load Image From Assets',
     category: 'Assets',
     inputs: [],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -241,8 +246,9 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
-    outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
+    outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
     configSchema: [
       {
         key: 'assetId',
@@ -276,6 +282,8 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       const reverseRaw = inputs.reverse;
       const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+      const mutedRaw = inputs.muted;
+      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
@@ -287,7 +295,7 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
 
       return {
         ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
           : '',
       };
     },
@@ -298,7 +306,7 @@ function createAudioOutNode(): NodeDefinition {
   return {
     type: 'audio-out',
     label: 'Audio Patch to Client',
-    category: 'Audio',
+    category: 'Media',
     inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
     outputs: [
       // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
@@ -307,6 +315,132 @@ function createAudioOutNode(): NodeDefinition {
     ],
     configSchema: [],
     process: () => ({}),
+  };
+}
+
+function createImageOutNode(deps: ClientObjectDeps): NodeDefinition {
+  const resolveUrl = (raw: unknown): string => {
+    if (typeof raw === 'string') return raw.trim();
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === 'string' && item.trim()) return item.trim();
+        if (item && typeof item === 'object' && typeof (item as any).url === 'string') {
+          const url = String((item as any).url).trim();
+          if (url) return url;
+        }
+      }
+      return '';
+    }
+    if (raw && typeof raw === 'object' && typeof (raw as any).url === 'string') {
+      return String((raw as any).url).trim();
+    }
+    return '';
+  };
+
+  const hide = () => {
+    deps.executeCommand({ action: 'hideImage', payload: {} });
+  };
+
+  return {
+    type: 'image-out',
+    label: 'Image to Client',
+    category: 'Media',
+    inputs: [{ id: 'in', label: 'In', type: 'image', kind: 'sink' }],
+    outputs: [
+      // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+      // This output is not part of the exported client patch subgraph.
+      { id: 'cmd', label: 'Deploy', type: 'command' },
+    ],
+    configSchema: [],
+    process: () => ({}),
+    onSink: (inputs) => {
+      const url = resolveUrl(inputs.in);
+      if (!url) {
+        hide();
+        return;
+      }
+      deps.executeCommand({ action: 'showImage', payload: { url } });
+    },
+    onDisable: () => {
+      hide();
+    },
+  };
+}
+
+function createVideoOutNode(deps: ClientObjectDeps): NodeDefinition {
+  const resolveUrl = (raw: unknown): string => {
+    if (typeof raw === 'string') return raw.trim();
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === 'string' && item.trim()) return item.trim();
+        if (item && typeof item === 'object' && typeof (item as any).url === 'string') {
+          const url = String((item as any).url).trim();
+          if (url) return url;
+        }
+      }
+      return '';
+    }
+    if (raw && typeof raw === 'object' && typeof (raw as any).url === 'string') {
+      return String((raw as any).url).trim();
+    }
+    return '';
+  };
+
+  const parseMutedFromUrl = (url: string): boolean | null => {
+    const trimmed = url.trim();
+    if (!trimmed) return null;
+
+    const index = trimmed.indexOf('#');
+    const paramsRaw = index >= 0 ? trimmed.slice(index + 1) : '';
+    if (!paramsRaw) return null;
+
+    const params = new URLSearchParams(paramsRaw);
+    const value = params.get('muted');
+    if (value === null) return null;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    const n = Number(normalized);
+    if (Number.isFinite(n)) return n >= 0.5;
+    return null;
+  };
+
+  const stop = () => {
+    deps.executeCommand({ action: 'stopMedia', payload: {} });
+  };
+
+  return {
+    type: 'video-out',
+    label: 'Video to Client',
+    category: 'Media',
+    inputs: [{ id: 'in', label: 'In', type: 'video', kind: 'sink' }],
+    outputs: [
+      // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+      // This output is not part of the exported client patch subgraph.
+      { id: 'cmd', label: 'Deploy', type: 'command' },
+    ],
+    configSchema: [],
+    process: () => ({}),
+    onSink: (inputs) => {
+      const url = resolveUrl(inputs.in);
+      if (!url) {
+        stop();
+        return;
+      }
+      const muted = parseMutedFromUrl(url);
+      deps.executeCommand({
+        action: 'playMedia',
+        payload: {
+          url,
+          mediaType: 'video',
+          ...(muted === null ? {} : { muted }),
+        },
+      });
+    },
+    onDisable: () => {
+      stop();
+    },
   };
 }
 
@@ -434,6 +568,39 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
       for (const clientId of targets) {
         for (const cmd of cleanupCommands) send(clientId, cmd);
       }
+    },
+  };
+}
+
+function createCmdAggregatorNode(): NodeDefinition {
+  const maxInputs = 8;
+  const inputs = Array.from({ length: maxInputs }, (_, idx) => {
+    const n = idx + 1;
+    return { id: `in${n}`, label: `In ${n}`, type: 'command' } as const;
+  });
+
+  const flattenCommands = (value: unknown, out: unknown[]) => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      for (const item of value) flattenCommands(item, out);
+      return;
+    }
+    out.push(value);
+  };
+
+  return {
+    type: 'cmd-aggregator',
+    label: 'Cmd Aggregator',
+    category: 'Objects',
+    inputs: [...inputs],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [],
+    process: (nodeInputs) => {
+      const cmds: unknown[] = [];
+      for (const port of inputs) {
+        flattenCommands(nodeInputs[port.id], cmds);
+      }
+      return { cmd: cmds.length > 0 ? cmds : null };
     },
   };
 }
@@ -901,6 +1068,7 @@ function createToneLFONode(): NodeDefinition {
   };
 }
 
+// Value-box style nodes: editable constants that also pass through connected inputs.
 function createNumberNode(): NodeDefinition {
   return {
     type: 'number',
@@ -914,6 +1082,51 @@ function createNumberNode(): NodeDefinition {
       if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return { value: fromInput };
       const fallback = Number(config.value ?? 0);
       return { value: Number.isFinite(fallback) ? fallback : 0 };
+    },
+  };
+}
+
+function createStringNode(): NodeDefinition {
+  return {
+    type: 'string',
+    label: 'String',
+    category: 'Values',
+    inputs: [{ id: 'value', label: 'Value', type: 'string' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'string' }],
+    configSchema: [{ key: 'value', label: 'Value', type: 'string', defaultValue: '' }],
+    process: (inputs, config) => {
+      const fromInput = inputs.value;
+      if (typeof fromInput === 'string') return { value: fromInput };
+      const fallback = config.value;
+      return { value: typeof fallback === 'string' ? fallback : '' };
+    },
+  };
+}
+
+function createBoolNode(): NodeDefinition {
+  const coerce = (value: unknown): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value >= 0.5 : false;
+    if (typeof value === 'string') {
+      const s = value.trim().toLowerCase();
+      if (!s) return false;
+      if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return true;
+      if (s === 'false' || s === '0' || s === 'no' || s === 'n') return false;
+      return true;
+    }
+    return false;
+  };
+
+  return {
+    type: 'bool',
+    label: 'Bool',
+    category: 'Values',
+    inputs: [{ id: 'value', label: 'Value', type: 'boolean' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'boolean' }],
+    configSchema: [{ key: 'value', label: 'Value', type: 'boolean', defaultValue: false }],
+    process: (inputs, config) => {
+      if (inputs.value !== undefined) return { value: coerce(inputs.value) };
+      return { value: coerce(config.value) };
     },
   };
 }

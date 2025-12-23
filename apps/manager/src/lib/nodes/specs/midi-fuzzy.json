@@ -1,10 +1,9 @@
 {
   "type": "midi-fuzzy",
-  "label": "Fuzzy",
+  "label": "Fuzzy Bind",
   "category": "MIDI",
   "inputs": [],
   "outputs": [{ "id": "value", "label": "Value", "type": "fuzzy" }],
   "configSchema": [{ "key": "source", "label": "MIDI", "type": "midi-source", "defaultValue": null }],
   "runtime": { "kind": "midi-fuzzy" }
 }
-

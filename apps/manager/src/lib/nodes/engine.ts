@@ -43,6 +43,10 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'proc-scene-switch') return 'visual';
   if (type === 'audio-out') return 'sound';
   if (type === 'load-audio-from-assets') return 'sound';
+  if (type === 'load-image-from-assets') return 'visual';
+  if (type === 'load-video-from-assets') return 'visual';
+  if (type === 'image-out') return 'visual';
+  if (type === 'video-out') return 'visual';
   return null;
 }
 
@@ -204,15 +208,13 @@ class NodeEngineClass {
   addConnection(connection: Connection): boolean {
     const snapshot = this.runtime.exportGraph();
 
-    // Check for duplicate
-    const exists = snapshot.connections.some(
-      (c) =>
-        c.sourceNodeId === connection.sourceNodeId &&
-        c.sourcePortId === connection.sourcePortId &&
-        c.targetNodeId === connection.targetNodeId &&
-        c.targetPortId === connection.targetPortId
+    const inputAlreadyConnected = snapshot.connections.some(
+      (c) => c.targetNodeId === connection.targetNodeId && c.targetPortId === connection.targetPortId
     );
-    if (exists) return false;
+    if (inputAlreadyConnected) {
+      this.lastError.set('The "in port" is connected up to once');
+      return false;
+    }
 
     // Type guard: ensure port types are compatible
     const sourceNode = snapshot.nodes.find((n) => n.id === connection.sourceNodeId);
@@ -248,6 +250,10 @@ class NodeEngineClass {
     // This matches the plan's intent: audio wires only connect to audio wires.
     const audioMismatch =
       sourceType === 'audio' || targetType === 'audio' ? sourceType !== 'audio' || targetType !== 'audio' : false;
+    const imageMismatch =
+      sourceType === 'image' || targetType === 'image' ? sourceType !== 'image' || targetType !== 'image' : false;
+    const videoMismatch =
+      sourceType === 'video' || targetType === 'video' ? sourceType !== 'video' || targetType !== 'video' : false;
     if (typeMismatch) {
       this.lastError.set(
         `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
@@ -257,6 +263,18 @@ class NodeEngineClass {
     if (audioMismatch) {
       this.lastError.set(
         `Type mismatch: audio connections must be audio -> audio (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
+      );
+      return false;
+    }
+    if (imageMismatch) {
+      this.lastError.set(
+        `Type mismatch: image connections must be image -> image (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
+      );
+      return false;
+    }
+    if (videoMismatch) {
+      this.lastError.set(
+        `Type mismatch: video connections must be video -> video (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
       );
       return false;
     }
@@ -336,15 +354,64 @@ class NodeEngineClass {
   }
 
   loadGraph(state: GraphState): void {
-    const sanitized: GraphState = {
-      nodes: (state.nodes ?? []).map((node) => ({
-        ...node,
-        config: { ...(node.config ?? {}) },
-        inputValues: { ...(node.inputValues ?? {}) },
-        outputValues: {}, // reset runtime outputs
-      })),
-      connections: [...(state.connections ?? [])],
-    };
+    const nodes: GraphState['nodes'] = (state.nodes ?? []).map((node) => ({
+      ...node,
+      config: { ...(node.config ?? {}) },
+      inputValues: { ...(node.inputValues ?? {}) },
+      outputValues: {}, // reset runtime outputs
+    }));
+
+    // Enforce node system rule: every input port accepts at most one connection.
+    // If a loaded graph violates this (older files), keep the first connection deterministically.
+    const connections: GraphState['connections'] = [];
+    const connectedInputs = new Set<string>();
+    for (const c of state.connections ?? []) {
+      const key = `${String(c.targetNodeId)}:${String(c.targetPortId)}`;
+      if (connectedInputs.has(key)) continue;
+      connectedInputs.add(key);
+      connections.push({ ...c });
+    }
+
+    const cmdAggMax = (() => {
+      const def = nodeRegistry.get('cmd-aggregator');
+      if (!def) return 0;
+      return def.inputs.reduce((best, port) => {
+        const match = /^in(\d+)$/.exec(String(port.id));
+        if (!match) return best;
+        const idx = Number(match[1]);
+        if (!Number.isFinite(idx) || idx <= 0) return best;
+        return Math.max(best, idx);
+      }, 0);
+    })();
+
+    if (cmdAggMax > 0) {
+      const maxConnectedInputIndexFor = (nodeId: string): number => {
+        let max = 0;
+        for (const c of connections) {
+          if (String(c.targetNodeId) !== nodeId) continue;
+          const match = /^in(\d+)$/.exec(String(c.targetPortId));
+          if (!match) continue;
+          const idx = Number(match[1]);
+          if (!Number.isFinite(idx) || idx <= 0) continue;
+          max = Math.max(max, idx);
+        }
+        return max;
+      };
+
+      for (const node of nodes) {
+        if (String(node.type) !== 'cmd-aggregator') continue;
+        const raw = (node.config as any)?.inCount;
+        const configured = typeof raw === 'number' ? raw : Number(raw);
+        const configuredCount = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 1;
+        const required = maxConnectedInputIndexFor(String(node.id));
+        const next = Math.min(cmdAggMax, Math.max(configuredCount, required, 1));
+        if (next !== configuredCount) {
+          node.config = { ...(node.config ?? {}), inCount: next };
+        }
+      }
+    }
+
+    const sanitized: GraphState = { nodes, connections };
 
     const prepared = this.applySelectionMapOptions(sanitized);
     this.runtime.loadGraph(prepared);
@@ -550,6 +617,8 @@ class NodeEngineClass {
       'math',
       'tone-lfo',
       'number',
+      'string',
+      'bool',
       'number-stabilizer',
       'proc-flashlight',
       'proc-screen-color',
@@ -615,8 +684,42 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
+    if (roots.length === 0) {
+      throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);
+    }
+
+    const connections = snapshot.connections ?? [];
+    const activeRoots = roots.filter((root) =>
+      connections.some(
+        (c) => String(c.sourceNodeId) === String(root.id) && String(c.sourcePortId) === 'cmd'
+      )
+    );
+
+    const rootType = (() => {
+      if (roots.length === 1) return String(roots[0]?.type ?? '');
+      if (activeRoots.length === 1) return String(activeRoots[0]?.type ?? '');
+      const list = roots
+        .map((n) => `${String(n.type)}:${String(n.id)}`)
+        .sort()
+        .join(', ');
+      if (activeRoots.length > 1) {
+        const activeList = activeRoots
+          .map((n) => `${String(n.type)}:${String(n.id)}`)
+          .sort()
+          .join(', ');
+        throw new Error(
+          `Multiple active patch roots found (${activeList}). Disconnect Deploy on all but one root.`
+        );
+      }
+      throw new Error(
+        `Multiple patch roots found (${list}). Connect Deploy on exactly one root (or delete the others).`
+      );
+    })();
+
     const patch = exportGraphForPatch(snapshot, {
-      rootType: 'audio-out',
+      rootType,
       nodeRegistry,
       isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(String(nodeId)),
     });
@@ -633,9 +736,13 @@ class NodeEngineClass {
       'logic-sleep',
       'tone-lfo',
       'number',
+      'string',
+      'bool',
       'number-stabilizer',
       // Audio sources/effects
       'load-audio-from-assets',
+      'load-image-from-assets',
+      'load-video-from-assets',
       'tone-osc',
       'tone-delay',
       'tone-resonator',
@@ -645,6 +752,8 @@ class NodeEngineClass {
       'play-media',
       // Patch root
       'audio-out',
+      'image-out',
+      'video-out',
     ]);
 
     for (const n of patch.graph.nodes) {
@@ -660,7 +769,7 @@ class NodeEngineClass {
     }
 
     const nodeKey = patch.graph.nodes.map((n) => String(n.id)).sort().join(',');
-    const patchId = `patch:${patch.rootNodeId}:${hashString(nodeKey)}`;
+    const patchId = `patch:${rootType}:${patch.rootNodeId}:${hashString(nodeKey)}`;
 
     return {
       graph: patch.graph,
