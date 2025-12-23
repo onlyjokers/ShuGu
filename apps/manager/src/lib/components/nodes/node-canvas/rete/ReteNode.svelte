@@ -2,6 +2,7 @@
 <script lang="ts">
   import Ref from 'rete-svelte-plugin/svelte/Ref.svelte';
   import type { ClassicScheme, SvelteArea2D } from 'rete-svelte-plugin/svelte/presets/classic/types';
+  import { onDestroy, tick } from 'svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
 
   type NodeExtraData = {
@@ -22,6 +23,8 @@
 
   export let data: ClassicScheme['Node'] & NodeExtraData;
   export let emit: (props: SvelteArea2D<ClassicScheme>) => void;
+
+  let nodeEl: HTMLDivElement | null = null;
 
   $: width = Number.isFinite(data.width) ? `${data.width}px` : '';
   $: height = Number.isFinite(data.height) ? `${data.height}px` : '';
@@ -49,6 +52,7 @@
   const tickTimeStore = nodeEngine.tickTime;
 
   type ConnectionInfo = { sourceNodeId: string; sourcePortId: string };
+  type OutputConnectionInfo = { targetNodeId: string; targetPortId: string };
 
   let nodeId = '';
   $: nodeId = String(data?.id ?? '');
@@ -68,6 +72,23 @@
     inputConnections = byInput;
   } else {
     inputConnections = {};
+  }
+
+  let outputConnections: Record<string, OutputConnectionInfo[]> = {};
+  $: if (nodeId) {
+    const byOutput: Record<string, OutputConnectionInfo[]> = {};
+    for (const c of $graphStateStore.connections ?? []) {
+      if (String(c.sourceNodeId) !== nodeId) continue;
+      const key = String(c.sourcePortId ?? '');
+      if (!key) continue;
+      (byOutput[key] ??= []).push({
+        targetNodeId: String(c.targetNodeId),
+        targetPortId: String(c.targetPortId),
+      });
+    }
+    outputConnections = byOutput;
+  } else {
+    outputConnections = {};
   }
 
   function formatNumber(value: number, maxDecimals = 3): string {
@@ -140,6 +161,132 @@
     return instance.outputValues?.[portId];
   }
 
+  type BypassPorts = { inId: string; outId: string; portType: string };
+
+  function inferBypassPorts(type: string): BypassPorts | null {
+    if (!type) return null;
+    const def = nodeRegistry.get(type);
+    if (!def) return null;
+
+    const inPort = def.inputs.find((p) => String(p.id) === 'in') ?? null;
+    const outPort = def.outputs.find((p) => String(p.id) === 'out') ?? null;
+    if (inPort && outPort && String(inPort.type) === String(outPort.type)) {
+      if (inPort.type === 'command' || inPort.type === 'client') return null;
+      return { inId: 'in', outId: 'out', portType: String(inPort.type) };
+    }
+
+    if (def.inputs.length === 1 && def.outputs.length === 1) {
+      const onlyIn = def.inputs[0];
+      const onlyOut = def.outputs[0];
+      if (String(onlyIn.type) === String(onlyOut.type)) {
+        if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
+        return { inId: String(onlyIn.id), outId: String(onlyOut.id), portType: String(onlyIn.type) };
+      }
+    }
+
+    const sinkInputs = def.inputs.filter((p) => p.kind === 'sink');
+    const sinkOutputs = def.outputs.filter((p) => p.kind === 'sink');
+    if (sinkInputs.length === 1 && sinkOutputs.length === 1) {
+      const onlyIn = sinkInputs[0];
+      const onlyOut = sinkOutputs[0];
+      if (String(onlyIn.type) === String(onlyOut.type)) {
+        if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
+        return { inId: String(onlyIn.id), outId: String(onlyOut.id), portType: String(onlyIn.type) };
+      }
+    }
+
+    return null;
+  }
+
+  let bypassPorts: BypassPorts | null = null;
+  $: bypassPorts = (() => {
+    const instance = nodeEngine.getNode(nodeId);
+    if (!instance) return null;
+    return inferBypassPorts(String(instance.type));
+  })();
+
+  let bypassWirePath: string | null = null;
+  let bypassWireSize: { w: number; h: number } | null = null;
+  let bypassWireRaf: number | null = null;
+  let bypassWireActive = false;
+  $: bypassWireActive =
+    Boolean(isGroupDisabled) &&
+    Boolean(bypassPorts) &&
+    (isActive ||
+      activeInputs.has(bypassPorts?.inId ?? '') ||
+      activeOutputs.has(bypassPorts?.outId ?? ''));
+
+  const cancelBypassWire = () => {
+    if (bypassWireRaf) cancelAnimationFrame(bypassWireRaf);
+    bypassWireRaf = null;
+  };
+
+  const updateBypassWire = async () => {
+    cancelBypassWire();
+    bypassWirePath = null;
+    bypassWireSize = null;
+
+    if (!nodeEl || !bypassPorts || !isGroupDisabled) return;
+    const inId = bypassPorts.inId;
+    const outId = bypassPorts.outId;
+
+    if ((inputConnections[inId]?.length ?? 0) === 0) return;
+    if ((outputConnections[outId]?.length ?? 0) === 0) return;
+    if (portTypeFor('input', inId) !== portTypeFor('output', outId)) return;
+
+    await tick();
+    if (!nodeEl) return;
+
+    const inSocket = nodeEl.querySelector(`.input-socket[data-port-id="${inId}"]`) as HTMLElement | null;
+    const outSocket = nodeEl.querySelector(`.output-socket[data-port-id="${outId}"]`) as HTMLElement | null;
+    if (!inSocket || !outSocket) return;
+
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const inRect = inSocket.getBoundingClientRect();
+    const outRect = outSocket.getBoundingClientRect();
+
+    const w = nodeEl.offsetWidth;
+    const h = nodeEl.offsetHeight;
+    if (w <= 0 || h <= 0) return;
+
+    const scaleX = nodeRect.width > 0 ? nodeRect.width / w : 1;
+    const scaleY = nodeRect.height > 0 ? nodeRect.height / h : 1;
+
+    const x1 = (inRect.left + inRect.width / 2 - nodeRect.left) / scaleX;
+    const y1 = (inRect.top + inRect.height / 2 - nodeRect.top) / scaleY;
+    const x2 = (outRect.left + outRect.width / 2 - nodeRect.left) / scaleX;
+    const y2 = (outRect.top + outRect.height / 2 - nodeRect.top) / scaleY;
+
+    const dx = Math.max(26, Math.abs(x2 - x1) * 0.42);
+    bypassWirePath = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+    bypassWireSize = { w, h };
+  };
+
+  $: {
+    const shouldShow =
+      Boolean(nodeEl) &&
+      Boolean(isGroupDisabled) &&
+      Boolean(bypassPorts) &&
+      (inputConnections[bypassPorts?.inId ?? '']?.length ?? 0) > 0 &&
+      (outputConnections[bypassPorts?.outId ?? '']?.length ?? 0) > 0;
+
+    if (!shouldShow) {
+      cancelBypassWire();
+      bypassWirePath = null;
+      bypassWireSize = null;
+    } else {
+      cancelBypassWire();
+      bypassWireRaf = requestAnimationFrame(() => {
+        bypassWireRaf = null;
+        void updateBypassWire();
+      });
+    }
+  }
+
+  onDestroy(() => {
+    cancelBypassWire();
+  });
+
   type PortValueText = { inputs: Record<string, string | null>; outputs: Record<string, string | null> };
   let portValueText: PortValueText = { inputs: {}, outputs: {} };
 
@@ -176,11 +323,22 @@
 </script>
 
 <div
+  bind:this={nodeEl}
   class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"
 >
+  {#if bypassWirePath && bypassWireSize}
+    <svg
+      class="bypass-wire port-{bypassPorts?.portType ?? 'any'} {bypassWireActive ? 'active' : ''}"
+      viewBox={`0 0 ${bypassWireSize.w} ${bypassWireSize.h}`}
+      aria-hidden="true"
+    >
+      <path class="bypass-wire-path" d={bypassWirePath} />
+    </svg>
+  {/if}
+
   <div class="title" data-testid="title">{data.label}</div>
 
   {#if controls.length}
@@ -218,6 +376,7 @@
             <Ref
               class="input-socket"
               data-testid="input-socket"
+              data-port-id={key}
               init={(element) =>
                 emit({
                   type: 'render',
@@ -301,6 +460,7 @@
             <Ref
               class={`output-socket ${any(output).disabled ? 'socket-disabled' : ''}`}
               data-testid="output-socket"
+              data-port-id={key}
               init={(element) =>
                 emit({
                   type: 'render',
@@ -327,9 +487,12 @@
     cursor: pointer;
     user-select: none;
     line-height: initial;
+    position: relative;
   }
 
   .title {
+    position: relative;
+    z-index: 1;
     padding: 10px 12px;
     font-weight: 700;
     letter-spacing: 0.2px;
@@ -338,6 +501,8 @@
   }
 
   .controls {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -346,10 +511,57 @@
   }
 
   .ports {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 4px;
     padding: 8px 0 6px;
+  }
+
+  .bypass-wire {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .bypass-wire-path {
+    fill: none;
+    stroke-width: 2.25;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke: rgba(148, 163, 184, 0.85);
+    opacity: 0.95;
+  }
+
+  .bypass-wire.port-audio .bypass-wire-path {
+    stroke: rgba(14, 165, 233, 0.92);
+  }
+
+  .bypass-wire.port-number .bypass-wire-path {
+    stroke: rgba(34, 197, 94, 0.9);
+  }
+
+  .bypass-wire.port-boolean .bypass-wire-path {
+    stroke: rgba(245, 158, 11, 0.9);
+  }
+
+  .bypass-wire.port-string .bypass-wire-path {
+    stroke: rgba(59, 130, 246, 0.9);
+  }
+
+  .bypass-wire.port-color .bypass-wire-path {
+    stroke: rgba(236, 72, 153, 0.9);
+  }
+
+  .bypass-wire.active .bypass-wire-path {
+    stroke: rgba(250, 204, 21, 0.95);
+    stroke-width: 3;
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(250, 204, 21, 0.35));
   }
 
   .inputs,

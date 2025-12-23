@@ -14,6 +14,12 @@ export type PatchExportResult = {
   assetRefs: string[];
 };
 
+type PatchExportOptions = {
+  rootType?: string;
+  nodeRegistry?: NodeRegistry;
+  isNodeEnabled?: (nodeId: string) => boolean;
+};
+
 function normalizeAssetRef(raw: string): string | null {
   const s = raw.trim();
   if (!s) return null;
@@ -48,10 +54,11 @@ function collectAssetRefs(value: unknown, out: string[], seen: Set<string>): voi
 
 export function exportGraphForPatch(
   state: GraphState,
-  opts: { rootType?: string; nodeRegistry?: NodeRegistry } = {}
+  opts: PatchExportOptions = {}
 ): PatchExportResult {
   const rootType = opts.rootType ?? 'audio-out';
   const registry = opts.nodeRegistry ?? null;
+  const isNodeEnabled = opts.isNodeEnabled ?? null;
   const nodes = (state.nodes ?? []).slice();
   const connections = (state.connections ?? []).slice();
   const byId = new Map(nodes.map((n) => [String(n.id), n]));
@@ -120,17 +127,124 @@ export function exportGraphForPatch(
 
   const keptNodes = nodes.filter((n) => keep.has(String(n.id)));
   const keptNodeIds = new Set(keptNodes.map((n) => String(n.id)));
-  const keptConnections = connections.filter(
+  let keptConnections = connections.filter(
     (c) => keptNodeIds.has(String(c.sourceNodeId)) && keptNodeIds.has(String(c.targetNodeId))
   );
 
   // Stable ordering for deterministic deploy signatures.
-  keptNodes.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const inferBypassPorts = (type: string): { inId: string; outId: string } | null => {
+    if (!registry) return null;
+    const def = registry.get(type);
+    if (!def) return null;
+
+    const inPort = def.inputs.find((p) => String(p.id) === 'in') ?? null;
+    const outPort = def.outputs.find((p) => String(p.id) === 'out') ?? null;
+    if (inPort && outPort && String(inPort.type) === String(outPort.type)) {
+      if (inPort.type === 'command' || inPort.type === 'client') return null;
+      return { inId: 'in', outId: 'out' };
+    }
+
+    if (def.inputs.length === 1 && def.outputs.length === 1) {
+      const onlyIn = def.inputs[0];
+      const onlyOut = def.outputs[0];
+      if (String(onlyIn.type) === String(onlyOut.type)) {
+        if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
+        return { inId: String(onlyIn.id), outId: String(onlyOut.id) };
+      }
+    }
+
+    const sinkInputs = def.inputs.filter((p) => p.kind === 'sink');
+    const sinkOutputs = def.outputs.filter((p) => p.kind === 'sink');
+    if (sinkInputs.length === 1 && sinkOutputs.length === 1) {
+      const onlyIn = sinkInputs[0];
+      const onlyOut = sinkOutputs[0];
+      if (String(onlyIn.type) === String(onlyOut.type)) {
+        if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
+        return { inId: String(onlyIn.id), outId: String(onlyOut.id) };
+      }
+    }
+
+    return null;
+  };
+
+  // If the manager has disabled nodes (e.g. group gate closed), bypass eligible nodes so the exported
+  // patch graph reflects the pass-through semantics (disabled node becomes a wire).
+  let effectiveNodes = keptNodes;
+  if (registry && isNodeEnabled) {
+    const removed = new Set<string>();
+    const rewired: GraphState['connections'] = [];
+
+    const currentConnections = keptConnections.slice();
+    const currentNodes = new Map(keptNodes.map((n) => [String(n.id), n]));
+
+    const connectionKey = (c: { sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }) =>
+      `${c.sourceNodeId}|${c.sourcePortId}|${c.targetNodeId}|${c.targetPortId}`;
+
+    const dedupe = new Set(currentConnections.map(connectionKey));
+
+    for (const node of keptNodes) {
+      const nodeId = String(node.id);
+      if (!nodeId) continue;
+      if (isNodeEnabled(nodeId)) continue;
+
+      const type = String(node.type);
+      const ports = inferBypassPorts(type);
+      if (!ports) continue;
+
+      const incoming = currentConnections.filter(
+        (c) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === ports.inId
+      );
+      const outgoing = currentConnections.filter(
+        (c) => String(c.sourceNodeId) === nodeId && String(c.sourcePortId) === ports.outId
+      );
+
+      if (incoming.length === 0 || outgoing.length === 0) continue;
+
+      // Only bypass when the wire would stay entirely inside the exported patch subgraph.
+      if (
+        incoming.some((c) => !currentNodes.has(String(c.sourceNodeId))) ||
+        outgoing.some((c) => !currentNodes.has(String(c.targetNodeId)))
+      ) {
+        continue;
+      }
+
+      for (const inc of incoming) {
+        for (const out of outgoing) {
+          const next = {
+            id: `bypass:${nodeId}:${String(inc.id)}->${String(out.id)}`,
+            sourceNodeId: String(inc.sourceNodeId),
+            sourcePortId: String(inc.sourcePortId),
+            targetNodeId: String(out.targetNodeId),
+            targetPortId: String(out.targetPortId),
+          };
+          const key = connectionKey(next);
+          if (dedupe.has(key)) continue;
+          dedupe.add(key);
+          rewired.push(next);
+        }
+      }
+
+      removed.add(nodeId);
+    }
+
+    if (removed.size > 0) {
+      effectiveNodes = keptNodes.filter((n) => !removed.has(String(n.id)));
+      keptConnections = currentConnections
+        .filter(
+          (c) =>
+            !removed.has(String(c.sourceNodeId)) &&
+            !removed.has(String(c.targetNodeId))
+        )
+        .concat(rewired);
+    }
+  }
+
+  effectiveNodes.sort((a, b) => String(a.id).localeCompare(String(b.id)));
   keptConnections.sort((a, b) => String(a.id).localeCompare(String(b.id)));
 
   const assetRefs: string[] = [];
   const seen = new Set<string>();
-  for (const n of keptNodes) {
+  for (const n of effectiveNodes) {
     // Include asset-picker config fields which may store bare assetIds (not prefixed refs).
     if (registry) {
       const def = registry.get(String(n.type));
@@ -152,7 +266,7 @@ export function exportGraphForPatch(
 
   return {
     rootNodeId: String(root.id),
-    graph: { nodes: keptNodes, connections: keptConnections },
+    graph: { nodes: effectiveNodes, connections: keptConnections },
     assetRefs,
   };
 }

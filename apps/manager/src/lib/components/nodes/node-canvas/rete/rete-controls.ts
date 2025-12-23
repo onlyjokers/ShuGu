@@ -149,7 +149,7 @@ export class FilePickerControl extends ClassicPreset.Control {
   }
 }
 
-export type TimeRangeValue = { startSec: number; endSec: number };
+export type TimeRangeValue = { startSec: number; endSec: number; cursorSec?: number };
 
 export class TimeRangeControl extends ClassicPreset.Control {
   controlType = 'time-range' as const;

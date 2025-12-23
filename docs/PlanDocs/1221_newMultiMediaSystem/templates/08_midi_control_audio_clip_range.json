@@ -22,8 +22,8 @@
         "id": "node-load-audio",
         "type": "load-audio-from-assets",
         "position": { "x": 520, "y": 220 },
-        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
-        "inputValues": { "loop": true, "play": true },
+        "config": { "assetId": "", "timeline": { "startSec": 0, "endSec": -1, "cursorSec": -1 } },
+        "inputValues": { "startSec": 0, "endSec": -1, "cursorSec": -1, "loop": true, "play": true, "reverse": false },
         "outputValues": {}
       },
       {
@@ -160,4 +160,3 @@
     ]
   }
 }
-

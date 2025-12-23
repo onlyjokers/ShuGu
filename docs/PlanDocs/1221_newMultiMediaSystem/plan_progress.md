@@ -2,7 +2,7 @@
 
 # 1221_newMultiMediaSystem — 执行进度（Asset Service）
 
-更新时间：2025-12-22
+更新时间：2025-12-23
 
 > 说明：本文件记录“我已经做了什么 / 怎么验证 / 结果是什么 / 下一步做什么”，方便你逐条复查与回归。
 
@@ -149,17 +149,68 @@
 
 ---
 
-## 下一步（紧接着要做）
+## 下一步（当前）
 
-1) **Manager/Client 接入 token**
-   - Manager 上传：`POST /api/assets` 携带 `ASSET_WRITE_TOKEN`
-   - Client 预加载/播放：`GET/HEAD /content` 携带 `ASSET_READ_TOKEN`
-2) **把资源引用真正接进 graph**
-   - file 控件从 DataURL 改为 `asset:<uuid>`（并 push manifest）
-3) **将 HTTP 回归结果补充到本文件**
-   - 你跑完上面的 curl 后，把关键 headers/状态码贴一下，我可以继续把边界情况补齐（例如多 range、超大文件、错误码一致性等）。
+1) **Timeline 播放进度回传（可选）**
+   - 当前 manager 里的 playhead/cursor 作为 seek 参数，不会自动跟随 client 的真实播放进度
+   - 若要“Current/Playhead 自动跑”，需要新增 client->manager 的轻量 telemetry（建议 5~10Hz）
+
+2) **All nodes connectable（未完成）**
+   - 继续补齐所有节点的可接线输入口（把纯 UI 参数都变成 ports），并保持 node-core 单一真相源
+
+3) **HTTP 真实回归（你本机）**
+   - 仍建议按 curl 步骤跑一遍 GET/HEAD/Range/304，把关键 headers/状态码贴回来以便补齐边界情况（多 range、超大文件、错误码一致性等）
 
 ---
+
+## P2.7 — Timeline 片段控制增强（Audio/Video：Reverse + Seek + Clip hash）
+
+### ✅ 已完成：assetRef 保留 `#hash`（用于 clip 参数）
+
+- `packages/multimedia-core/src/asset-url-resolver.ts`
+  - `resolveAssetRefToUrl(...)` 现在会保留并透传 `?query` 与 `#hash`
+  - 用途：`asset:<id>#t=...&loop=...&play=...&rev=...&p=...` 这类 clip hash 可稳定工作（同时不影响资源请求本体）
+
+### ✅ 已完成：Tone.Player 支持 `rev/p`（倒放 + playhead seek）
+
+- `packages/sdk-client/src/tone-adapter.ts`
+  - `parseToneClipParams` 扩展：解析 `rev`（reverse）与 `p`（cursor seek）
+  - `tone-player`：
+    - `rev=1`：倒放片段（loop/非 loop 均可）
+    - `p=<sec>`：seek 到指定播放位置（用于 manager timeline playhead / MIDI scrub）
+    - reverse 切换时：尽量保持当前位置不突兀跳回片段起点
+
+### ✅ 已完成：Load Video From Assets 的“精细片段控制”落到 client
+
+- `packages/multimedia-core/src/media-engine.ts`
+  - videoState 扩展：`startSec/endSec/cursorSec/reverse` + `playing`
+- `apps/client/src/lib/stores/client.ts`
+  - `playMedia(video)` 解析 URL clip hash（`#t/loop/play/rev/p`）并传给 MediaEngine
+- `apps/client/src/lib/components/VideoPlayer.svelte`
+  - 裁切播放区间（start/end）、loop 片段、play/pause、seek（cursor）、reverse（手动步进）
+- `apps/client/src/lib/components/VisualCanvas.svelte`
+  - 只要 `videoState.url` 存在就挂载 VideoPlayer（确保 pause 时也能保持 preload/状态）
+
+### ✅ 已完成：模板同步更新（无需兼容旧图）
+
+更新文件：
+- `docs/PlanDocs/1221_newMultiMediaSystem/templates/02_patch_asset_player_delay_audio_out.json`
+- `docs/PlanDocs/1221_newMultiMediaSystem/templates/03_load_audio_from_assets_timeline.json`
+- `docs/PlanDocs/1221_newMultiMediaSystem/templates/05_media_video_play.json`
+- `docs/PlanDocs/1221_newMultiMediaSystem/templates/08_midi_control_audio_clip_range.json`
+
+关键变更：
+- `load-audio-from-assets` / `load-video-from-assets`：
+  - `config.range` → `config.timeline`
+  - 补齐 `startSec/endSec/cursorSec/loop/play/reverse` 的 `inputValues`
+
+### ✅ 验证记录
+
+命令：
+- `pnpm -C packages/multimedia-core run build` ✅
+- `pnpm -C packages/sdk-client run build` ✅
+- `pnpm -C apps/client run check` ✅
+
 
 ## P0.5 — 基础设施修复（为后续 Phase 2/3 铺路）
 

@@ -253,16 +253,7 @@ Manager 当前是：
 
 验收：
 
-
-路线 A（推荐）：
 - 复用现有 Svelte node UI 组件与样式，达到“外观不变”的要求更容易
-
-路线 B（备选）：
-
-- 在 Svelte 组件中 `onMount` 创建 React root（client-only），React Flow 在其中运行  
-- 样式通过共享 CSS/变量保持一致
-
-本计划默认路线 A；如果你坚持 React Flow 字面实现，在开始 Step 2.2.2 前确认切换到路线 B。
 
 必须覆盖的交互：
 
@@ -341,8 +332,12 @@ Manager 当前是：
 
 当某个 node compute 被 gate 关闭：
 
-- 它的 `outputValues` 必须清空（等价于“停=无输出”），避免下游继续拿到旧值造成“还在动”的错觉。
-  - 这与当前 `isNodeEnabled=false` 时 `node.outputValues = {}` 的行为一致（稳定、直观）
+- 默认：它的 `outputValues` 必须清空（等价于“停=无输出”），避免下游继续拿到旧值造成“还在动”的错觉。
+- [x] Disabled Bypass（Same-type In/Out）：当节点被 Deactivate（group gate 关闭）且满足：
+  - 存在一对 input/output 端口类型一致（优先 `in/out`；否则单进单出；否则单个 sink in/out）
+  - 且 In/Out 都连线（否则不 bypass）
+  - 则该节点等价于一根导线：`Out = In`（multi-conn 以 array 透传）
+  - `command/client` 类型不参与 bypass（避免副作用绕过 gate）
 
 当下游端口没有输入（因为上游停）：
 
@@ -387,6 +382,8 @@ UI 文案/状态：
 
 - remote 执行的 nodes：manager 不再显示 live values（避免误导）
 - local 执行：保持现状
+- [x] group-disabled + bypass-able nodes：当 In/Out 都连线且类型一致时，节点内部显示一根线（In→Out）表示直通
+- [x] MIDI highlight 穿透：当节点处于 bypass 直通态时，连线/端口高亮会从 In 透传到 Out，并点亮内部直通线
 
 #### [x] Step 3.5.3 LoopFramesOverlay（部署后语义更清晰）
 
@@ -398,16 +395,17 @@ UI 文案/状态：
 
 ---
 
-## [ ] Step 4 — Loop/Client 数据流收敛（避免重复与误导）
+## [x] Step 4 — Loop/Client 数据流收敛（避免重复与误导）
 
-### [ ] Step 4.1 部署后 manager 不再 compute loop nodes
+### [x] Step 4.1 部署后 manager 不再 compute loop nodes
 
 实现要点：
 
-- `nodeEngine` 层引入 `computeDisabledNodeIds`（由 deploymentMode 计算得出）
-- loop deployed 时将其 nodeIds 加入 computeDisabled（不仅仅是 sinkDisabled）
+- `nodeEngine` 维护本地执行的计算 gate：`offloadedNodeIds(loop)` / `offloadedPatchNodeIds(patch)`
+- loop/patch remote 执行时：manager 对该子图 **compute + sink 均停**（`isComputeEnabled=false`），避免重复执行与误导
+- UI：remote 执行的 nodes 不展示 live values（只展示状态/高亮）
 
-### [ ] Step 4.2 client 回传只保留最小状态（必须保留）
+### [x] Step 4.2 client 回传只保留最小状态（必须保留）
 
 保留 node-executor 的 status events：
 
@@ -416,7 +414,7 @@ UI 文案/状态：
 
 不新增每 tick 数据回传（性能/网络无意义）。
 
-### [ ] Step 4.3 override 语义与 gate 对齐
+### [x] Step 4.3 override 语义与 gate 对齐
 
 - 当 loop/patch remote 执行：override 仍可发（参数传递）
 - 当 group gate 关闭：必须清理 remote overrides（通过 remove 或显式清空）

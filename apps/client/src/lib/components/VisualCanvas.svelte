@@ -415,12 +415,17 @@
 
 <div class="visual-container" bind:this={container}>
   <!-- Video Player (z-index: 1, below ASCII) -->
-  {#if $videoState.url && $videoState.playing}
+  {#if $videoState.url}
     <VideoPlayer
       url={$videoState.url}
+      playing={$videoState.playing}
       muted={$videoState.muted}
       loop={$videoState.loop}
       volume={$videoState.volume}
+      startSec={$videoState.startSec}
+      endSec={$videoState.endSec}
+      cursorSec={$videoState.cursorSec}
+      reverse={$videoState.reverse}
     />
   {/if}
 

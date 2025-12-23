@@ -42,7 +42,20 @@ export function parseAssetIdFromRef(raw: string): string | null {
 }
 
 export function resolveAssetRefToUrl(raw: string, opts: ResolveAssetRefOptions): string {
-  const normalized = normalizeAssetRef(raw);
+  const trimmed = raw.trim();
+  if (!trimmed) return raw;
+
+  // Preserve `?query` + `#hash` so callers can embed lightweight clip params like:
+  // `asset:<id>#t=0,1&loop=1&play=1&rev=0&p=0.5`
+  const hashIndex = trimmed.indexOf('#');
+  const hash = hashIndex >= 0 ? trimmed.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+
+  const queryIndex = withoutHash.indexOf('?');
+  const search = queryIndex >= 0 ? withoutHash.slice(queryIndex) : '';
+  const baseRef = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+
+  const normalized = normalizeAssetRef(baseRef);
   if (!normalized) return raw;
 
   const id = normalized.slice('asset:'.length).trim();
@@ -59,7 +72,16 @@ export function resolveAssetRefToUrl(raw: string, opts: ResolveAssetRefOptions):
   if (!base) return raw;
 
   const url = new URL(`/api/assets/${encodeURIComponent(id)}/content`, base);
+  if (search) {
+    try {
+      const existing = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+      existing.forEach((value, key) => url.searchParams.append(key, value));
+    } catch {
+      // ignore invalid search params
+    }
+  }
   const token = typeof opts.readToken === 'string' && opts.readToken.trim() ? opts.readToken.trim() : null;
   if (token) url.searchParams.set('token', token);
+  if (hash) url.hash = hash.startsWith('#') ? hash : `#${hash}`;
   return url.toString();
 }

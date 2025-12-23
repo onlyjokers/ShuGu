@@ -787,14 +787,20 @@ UI 层（NodeCanvas）：
 > 目标：在 Node Graph 里像 Max/MSP 一样“节点化操纵音频播放片段”，Manager 改参数，Client 实时反映。
 
 - [x] node-core：`load-audio-from-assets`
-  - 增加 Timeline 配置（`time-range`：双游标 + 精确输入）
-  - 增加可接线输入：`startSec/endSec`（number）、`loop/play`（boolean）
-  - 输出 `assetRef` 扩展为：`asset:<id>#t=start,end&loop=0|1&play=0|1`
-- [x] manager：新增 `time-range` 控件渲染（双游标 slider + Start/End 数值输入）
-- [x] sdk-client：Tone.Player 支持解析 `#t/loop/play`，并实现：
+  - 增加 Timeline 配置（`time-range`：双游标 + playhead）
+  - 增加可接线输入：`startSec/endSec/cursorSec`（number）、`loop/play/reverse`（boolean）
+  - 输出 `assetRef` 扩展为：`asset:<id>#t=start,end&loop=0|1&play=0|1&rev=0|1&p=<cursor?>`
+- [x] manager：`time-range` 控件（UI helper）
+  - 双游标 + 可拖动 playhead（3 个 range input）
+  - Duration/Start/End/Current 仅展示（数值控制走输入口，避免重复 UI）
+  - 背景音频频谱预览（manager-only，用于更直觉地裁切片段）
+  - 输入口联动：当 Start/End/cursor 由 MIDI/连线更新时，slider 会跟着更新
+- [x] sdk-client：Tone.Player 支持解析 `#t/loop/play/rev/p`，并实现：
   - 片段播放（只播放 start/end 区间）
   - Loop（循环 start/end 区间）
   - Play=false 暂停、Play=true 恢复（不因参数变化触发重新加载）
+  - Reverse（倒放）
+  - Playhead Seek（`p=` 作为一次性 seek；用于拖动 playhead / MIDI scrub）
 - [x] templates：更新/新增可直接导入验证的模板（Timeline + MIDI 控制）
 
 验收：
@@ -802,6 +808,23 @@ UI 层（NodeCanvas）：
 - 导入 `08_midi_control_audio_clip_range.json`：绑定 MIDI 后可实时控制 Start/End（manager-only → override bridge）
 
 ---
+
+### Phase 2.7 - Load Video From Assets：Timeline/Loop/Play/Reverse/Seek（片段播放）
+
+> 目标：Load Video 节点拥有与音频一致的“精细片段控制”（timeline/loop/play/reverse/seek），并在 client 端实时生效。
+
+- [x] node-core：`load-video-from-assets`
+  - Timeline（`time-range`）+ 输入口：`startSec/endSec/cursorSec/loop/play/reverse`
+  - 输出 `assetRef` 同样使用 clip hash：`#t/loop/play/rev/p`
+- [x] manager：复用 `time-range` 控件（同音频）
+- [x] client：`playMedia(video)` 执行路径支持 clip hash
+  - 解析 `#t/loop/play/rev/p`
+  - MediaEngine 扩展 videoState：包含 start/end/cursor/reverse + playing
+  - VideoPlayer：裁切播放区间、clip loop、play/pause、reverse（手动步进）、playhead seek
+- [x] templates：更新视频模板以覆盖 timeline/loop/play/reverse/seek
+
+验收：
+- 导入 `05_media_video_play.json`：选择视频资产，调 Timeline/Loop/Play/Reverse/Seek，client 视频实时响应（不重新下载）
 
 ### Phase 3 - Client 集成：MultimediaCore（登录即预加载 + 缓存/校验 + readiness 上报）
 
@@ -814,6 +837,7 @@ UI 层（NodeCanvas）：
 2) AssetUrlResolver（跨音频/图片/视频统一）
 - [x] 支持 `asset:<id>` + `shugu://asset/<id>` + 直链 URL
 - [x] 输出统一为 `https://{server}/api/assets/<id>/content`（或未来 302 / pre-signed URL）
+- [x] 保留 URL `?query/#hash`（用于 clip hash / 未来扩展）
 
 3) Manifest 驱动的“登录即预加载”（不依赖 deploy）
 - [x] client 启动时立即加载并使用 `lastManifest`（IndexedDB/localStorage）开始 preload（只写 console 进度，不进 UI）

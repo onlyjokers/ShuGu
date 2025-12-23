@@ -894,10 +894,12 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
     label: 'Load Audio From Assets',
     category: 'Assets',
     inputs: [
-      { id: 'startSec', label: 'Start (s)', type: 'number' },
-      { id: 'endSec', label: 'End (s)', type: 'number' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
     ],
     outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
     configSchema: [
@@ -909,46 +911,49 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
         defaultValue: '',
       },
       {
-        key: 'range',
+        key: 'timeline',
         label: 'Timeline',
         type: 'time-range',
-        defaultValue: { startSec: 0, endSec: -1 },
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
         min: 0,
         step: 0.01,
       },
     ],
     process: (inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
-      const rangeRaw = (config as any)?.range;
-      const range = typeof rangeRaw === 'object' && rangeRaw ? rangeRaw : {};
-      const startFallback =
-        typeof (range as any).startSec === 'number' && Number.isFinite((range as any).startSec)
-          ? Number((range as any).startSec)
-          : 0;
-      const endFallback =
-        typeof (range as any).endSec === 'number' && Number.isFinite((range as any).endSec)
-          ? Number((range as any).endSec)
-          : -1;
-
       const startSec =
         typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
           ? Number((inputs as any).startSec)
-          : startFallback;
+          : 0;
       const endSec =
         typeof (inputs as any)?.endSec === 'number' && Number.isFinite((inputs as any).endSec)
           ? Number((inputs as any).endSec)
-          : endFallback;
+          : -1;
+      const cursorSec =
+        typeof (inputs as any)?.cursorSec === 'number' && Number.isFinite((inputs as any).cursorSec)
+          ? Number((inputs as any).cursorSec)
+          : -1;
 
       const loopRaw = (inputs as any)?.loop;
       const playRaw = (inputs as any)?.play;
       const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      const reverseRaw = (inputs as any)?.reverse;
+      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
       const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
 
-      return { ref: assetId ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}` : '' };
+      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+      const positionParam =
+        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+
+      return {
+        ref: assetId
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+          : '',
+      };
     },
   });
 }
@@ -981,7 +986,14 @@ if (!nodeRegistry.get('load-video-from-assets')) {
     type: 'load-video-from-assets',
     label: 'Load Video From Assets',
     category: 'Assets',
-    inputs: [],
+    inputs: [
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+    ],
     outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
     configSchema: [
       {
@@ -991,10 +1003,50 @@ if (!nodeRegistry.get('load-video-from-assets')) {
         assetKind: 'video',
         defaultValue: '',
       },
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
     ],
-    process: (_inputs, config) => {
+    process: (inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
-      return { ref: assetId ? `asset:${assetId}` : '' };
+      const startSec =
+        typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
+          ? Number((inputs as any).startSec)
+          : 0;
+      const endSec =
+        typeof (inputs as any)?.endSec === 'number' && Number.isFinite((inputs as any).endSec)
+          ? Number((inputs as any).endSec)
+          : -1;
+      const cursorSec =
+        typeof (inputs as any)?.cursorSec === 'number' && Number.isFinite((inputs as any).cursorSec)
+          ? Number((inputs as any).cursorSec)
+          : -1;
+
+      const loopRaw = (inputs as any)?.loop;
+      const playRaw = (inputs as any)?.play;
+      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      const reverseRaw = (inputs as any)?.reverse;
+      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+
+      const startClamped = Math.max(0, startSec);
+      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+
+      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+      const positionParam =
+        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+
+      return {
+        ref: assetId
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+          : '',
+      };
     },
   });
 }

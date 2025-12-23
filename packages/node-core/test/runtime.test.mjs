@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { NodeRegistry, NodeRuntime } from '../dist/index.js';
+import { NodeRegistry, NodeRuntime } from '../dist-node-core/index.js';
 
 function nodeInstance(id, type, overrides = {}) {
   return {
@@ -205,6 +205,45 @@ test('compile allows sink edges in feedback loops', () => {
   runtime.compileNow();
   const order = runtime.executionOrder.map((n) => n.id);
   assert.deepEqual(order, ['b', 'a']);
+});
+
+test('disabled nodes with matching in/out act as a wire', () => {
+  const registry = new NodeRegistry();
+  registry.register({
+    type: 'const',
+    label: 'Const',
+    category: 'Test',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [],
+    process: () => ({ out: 1 }),
+  });
+  registry.register({
+    type: 'pass',
+    label: 'Pass',
+    category: 'Test',
+    inputs: [{ id: 'in', label: 'In', type: 'number' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'number' }],
+    configSchema: [],
+    process: (inputs) => ({ out: inputs.in }),
+  });
+
+  const runtime = new NodeRuntime(registry, {
+    isNodeEnabled: (nodeId) => nodeId !== 'b',
+  });
+
+  runtime.loadGraph({
+    nodes: [nodeInstance('a', 'const'), nodeInstance('b', 'pass'), nodeInstance('c', 'pass')],
+    connections: [
+      { id: 'ab', sourceNodeId: 'a', sourcePortId: 'out', targetNodeId: 'b', targetPortId: 'in' },
+      { id: 'bc', sourceNodeId: 'b', sourcePortId: 'out', targetNodeId: 'c', targetPortId: 'in' },
+    ],
+  });
+  runtime.compileNow();
+
+  runtime.tick();
+  assert.equal(runtime.getNode('b').outputValues.out, 1);
+  assert.equal(runtime.getNode('c').outputValues.out, 1);
 });
 
 test('input override TTL expires and restores base values', (t) => {

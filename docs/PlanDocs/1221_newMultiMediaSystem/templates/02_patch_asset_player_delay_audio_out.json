@@ -2,7 +2,7 @@
   "kind": "node-graph",
   "version": 1,
   "title": "Patch: Load Audio From Assets → Tone Player → Tone Delay → Audio Patch to Client",
-  "purpose": "体验 asset:<id> 引用 + Tone.Player 播放 + Delay 效果 + Patch Deploy（不走大文件 msg）",
+  "purpose": "体验 asset:<id> 引用 + Tone.Player 片段播放（Timeline/Loop/Play/Reverse/Seek）+ Delay 效果 + Patch Deploy（不走大文件 msg）",
   "notes": [
     "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
     "Manager 需要配置 `shugu-server-url` + `shugu-asset-write-token`（用于列出 assets）。"
@@ -20,8 +20,15 @@
         "id": "node-load-audio",
         "type": "load-audio-from-assets",
         "position": { "x": 120, "y": 180 },
-        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
-        "inputValues": { "loop": false, "play": true },
+        "config": { "assetId": "", "timeline": { "startSec": 0, "endSec": -1, "cursorSec": -1 } },
+        "inputValues": {
+          "startSec": 0,
+          "endSec": -1,
+          "cursorSec": -1,
+          "loop": false,
+          "play": true,
+          "reverse": false
+        },
         "outputValues": {}
       },
       {

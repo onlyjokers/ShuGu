@@ -381,11 +381,33 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
 
         const control: any = new TimeRangeControl({
           label: field.label,
-          initial: { startSec, endSec },
+          initial: { startSec, endSec, cursorSec: typeof raw?.cursorSec === 'number' ? raw.cursorSec : -1 } as any,
           min: field.min,
           max: field.max,
           step: field.step,
           change: (value) => {
+            // Special: asset timeline controls are UI helpers which update input ports (so they are connectable/modulatable).
+            if (instance.type === 'load-audio-from-assets' || instance.type === 'load-video-from-assets') {
+              const nextStart = typeof (value as any)?.startSec === 'number' ? (value as any).startSec : 0;
+              const nextEnd = typeof (value as any)?.endSec === 'number' ? (value as any).endSec : -1;
+              const nextCursor = (value as any)?.cursorSec;
+
+              nodeEngine.updateNodeInputValue(instance.id, 'startSec', nextStart);
+              sendNodeOverride(instance.id, 'input', 'startSec', nextStart);
+
+              nodeEngine.updateNodeInputValue(instance.id, 'endSec', nextEnd);
+              sendNodeOverride(instance.id, 'input', 'endSec', nextEnd);
+
+              if (typeof nextCursor === 'number' && Number.isFinite(nextCursor)) {
+                nodeEngine.updateNodeInputValue(instance.id, 'cursorSec', nextCursor);
+                sendNodeOverride(instance.id, 'input', 'cursorSec', nextCursor);
+              }
+
+              // Keep config in sync for persistence/debugging (not used by runtime).
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              return;
+            }
+
             nodeEngine.updateNodeConfig(instance.id, { [key]: value });
             sendNodeOverride(instance.id, 'config', key, value);
           },

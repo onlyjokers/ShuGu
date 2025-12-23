@@ -21,7 +21,7 @@ How to import:
 
 - `03_load_audio_from_assets_timeline.json`
   - Load Audio From Assets（Timeline/Loop/Play）→ Tone Player → Audio Patch to Client
-  - Shows the new clip range Timeline (2 cursors) + Loop + Play(Pause) controls.
+  - Shows the new clip Timeline (2 cursors + playhead) + Loop + Play(Pause) + Reverse + Seek controls.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `07_patch_midi_map_delay_time.json`
@@ -39,7 +39,7 @@ How to import:
   - Load Image From Assets → Play Media(showImage) → Client
 
 - `05_media_video_play.json`
-  - Load Video From Assets → Play Media(video) → Client
+  - Load Video From Assets（Timeline/Loop/Play/Reverse/Seek）→ Play Media(video) → Client
 
 ## Synth(Update) (Tone single engine)
 

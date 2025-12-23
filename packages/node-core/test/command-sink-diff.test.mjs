@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { NodeRegistry, NodeRuntime } from '../dist/index.js';
+import { NodeRegistry, NodeRuntime } from '../dist-node-core/index.js';
 
 function nodeInstance(id, type, overrides = {}) {
   return {

@@ -145,7 +145,10 @@ class NodeEngineClass {
     const node = this.runtime.getNode(nodeId);
     if (!node) return;
     node.inputValues[portId] = value;
-    // Avoid syncing graph state on every knob turn; graphState holds live references anyway.
+    // UI invalidation: graphState holds live references, but Svelte won't react to deep mutations
+    // unless some store updates. Use tickTime as a lightweight "pulse" so controls that read
+    // live node state can refresh without syncing the whole graph.
+    this.tickTime.set(Date.now());
   }
 
   updateNodePosition(nodeId: string, position: { x: number; y: number }): void {
@@ -613,7 +616,11 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
-    const patch = exportGraphForPatch(snapshot, { rootType: 'audio-out', nodeRegistry });
+    const patch = exportGraphForPatch(snapshot, {
+      rootType: 'audio-out',
+      nodeRegistry,
+      isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(String(nodeId)),
+    });
 
     const allowedNodeTypes = new Set([
       // Pure + scheduling

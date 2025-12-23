@@ -85,10 +85,12 @@ function createLoadAudioFromAssetsNode() {
         label: 'Load Audio From Assets',
         category: 'Assets',
         inputs: [
-            { id: 'startSec', label: 'Start (s)', type: 'number' },
-            { id: 'endSec', label: 'End (s)', type: 'number' },
+            { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+            { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+            { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+            { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
         ],
         outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
         configSchema: [
@@ -100,33 +102,37 @@ function createLoadAudioFromAssetsNode() {
                 defaultValue: '',
             },
             {
-                key: 'range',
+                key: 'timeline',
                 label: 'Timeline',
                 type: 'time-range',
-                defaultValue: { startSec: 0, endSec: -1 },
+                defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
                 min: 0,
                 step: 0.01,
             },
         ],
         process: (inputs, config) => {
             const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-            const rangeRaw = config.range;
-            const range = typeof rangeRaw === 'object' && rangeRaw ? rangeRaw : {};
-            const startFallback = typeof range.startSec === 'number' && Number.isFinite(range.startSec) ? range.startSec : 0;
-            const endFallback = typeof range.endSec === 'number' && Number.isFinite(range.endSec) ? range.endSec : -1;
             const startSecRaw = inputs.startSec;
             const endSecRaw = inputs.endSec;
-            const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : startFallback;
-            const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : endFallback;
+            const cursorSecRaw = inputs.cursorSec;
+            const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
+            const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
+            const cursorSec = typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
             const loopRaw = inputs.loop;
             const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
             const playRaw = inputs.play;
             const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+            const reverseRaw = inputs.reverse;
+            const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
             const startClamped = Math.max(0, startSec);
             const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
             const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+            const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+            const positionParam = cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
             return {
-                ref: assetId ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}` : '',
+                ref: assetId
+                    ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+                    : '',
             };
         },
     };
@@ -158,7 +164,14 @@ function createLoadVideoFromAssetsNode() {
         type: 'load-video-from-assets',
         label: 'Load Video From Assets',
         category: 'Assets',
-        inputs: [],
+        inputs: [
+            { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+            { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+            { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+            { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+            { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+            { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+        ],
         outputs: [{ id: 'ref', label: 'assetRef', type: 'string' }],
         configSchema: [
             {
@@ -168,10 +181,39 @@ function createLoadVideoFromAssetsNode() {
                 assetKind: 'video',
                 defaultValue: '',
             },
+            {
+                key: 'timeline',
+                label: 'Timeline',
+                type: 'time-range',
+                defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+                min: 0,
+                step: 0.01,
+            },
         ],
-        process: (_inputs, config) => {
+        process: (inputs, config) => {
             const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-            return { ref: assetId ? `asset:${assetId}` : '' };
+            const startSecRaw = inputs.startSec;
+            const endSecRaw = inputs.endSec;
+            const cursorSecRaw = inputs.cursorSec;
+            const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
+            const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
+            const cursorSec = typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
+            const loopRaw = inputs.loop;
+            const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+            const playRaw = inputs.play;
+            const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+            const reverseRaw = inputs.reverse;
+            const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+            const startClamped = Math.max(0, startSec);
+            const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+            const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+            const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+            const positionParam = cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+            return {
+                ref: assetId
+                    ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}${positionParam}`
+                    : '',
+            };
         },
     };
 }
@@ -385,6 +427,7 @@ function createMathNode() {
         inputs: [
             { id: 'a', label: 'A', type: 'number', defaultValue: 0 },
             { id: 'b', label: 'B', type: 'number', defaultValue: 0 },
+            { id: 'operation', label: 'Operation', type: 'string' },
         ],
         outputs: [{ id: 'result', label: 'Result', type: 'number' }],
         configSchema: [
@@ -408,7 +451,12 @@ function createMathNode() {
         process: (inputs, config) => {
             const a = inputs.a ?? 0;
             const b = inputs.b ?? 0;
-            const op = String(config.operation ?? '+');
+            const op = (() => {
+                const fromInput = inputs.operation;
+                if (typeof fromInput === 'string' && fromInput.trim())
+                    return fromInput.trim();
+                return String(config.operation ?? '+');
+            })();
             let result;
             switch (op) {
                 case '+':
@@ -647,6 +695,7 @@ function createLFONode() {
             { id: 'frequency', label: 'Freq (Hz)', type: 'number', defaultValue: 1 },
             { id: 'amplitude', label: 'Amplitude', type: 'number', defaultValue: 1 },
             { id: 'offset', label: 'Offset', type: 'number', defaultValue: 0 },
+            { id: 'waveform', label: 'Waveform', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Value', type: 'number' }],
         configSchema: [
@@ -667,7 +716,12 @@ function createLFONode() {
             const frequency = inputs.frequency ?? 1;
             const amplitude = inputs.amplitude ?? 1;
             const offset = inputs.offset ?? 0;
-            const waveform = String(config.waveform ?? 'sine');
+            const waveform = (() => {
+                const fromInput = inputs.waveform;
+                if (typeof fromInput === 'string' && fromInput.trim())
+                    return fromInput.trim();
+                return String(config.waveform ?? 'sine');
+            })();
             const phase = (context.time / 1000) * frequency * 2 * Math.PI;
             let normalized;
             switch (waveform) {
@@ -696,10 +750,16 @@ function createNumberNode() {
         type: 'number',
         label: 'Number',
         category: 'Values',
-        inputs: [],
+        inputs: [{ id: 'value', label: 'Value', type: 'number' }],
         outputs: [{ id: 'value', label: 'Value', type: 'number' }],
         configSchema: [{ key: 'value', label: 'Value', type: 'number', defaultValue: 0 }],
-        process: (_inputs, config) => ({ value: config.value ?? 0 }),
+        process: (inputs, config) => {
+            const fromInput = inputs.value;
+            if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                return { value: fromInput };
+            const fallback = Number(config.value ?? 0);
+            return { value: Number.isFinite(fallback) ? fallback : 0 };
+        },
     };
 }
 const stabilizerState = new Map();
@@ -708,7 +768,10 @@ function createNumberStabilizerNode() {
         type: 'number-stabilizer',
         label: 'Number Stabilizer',
         category: 'Logic',
-        inputs: [{ id: 'in', label: 'In', type: 'number', defaultValue: 0 }],
+        inputs: [
+            { id: 'in', label: 'In', type: 'number', defaultValue: 0 },
+            { id: 'smoothing', label: 'Smoothing', type: 'number' },
+        ],
         outputs: [{ id: 'out', label: 'Out', type: 'number' }],
         configSchema: [
             {
@@ -723,7 +786,10 @@ function createNumberStabilizerNode() {
         ],
         process: (inputs, config, context) => {
             const raw = inputs.in;
-            const smoothingRaw = Number(config.smoothing ?? 0.2);
+            const smoothingFromInput = inputs.smoothing;
+            const smoothingRaw = typeof smoothingFromInput === 'number'
+                ? smoothingFromInput
+                : Number(config.smoothing ?? 0.2);
             const smoothingFinite = Number.isFinite(smoothingRaw) ? smoothingRaw : 0.2;
             // Backward-compat: if smoothing <= 1, treat it as normalized smoothing (0..1),
             // otherwise interpret it as an explicit duration in ms.
@@ -763,6 +829,10 @@ function createToneOscNode() {
         inputs: [
             { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
             { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
+            { id: 'waveform', label: 'Waveform', type: 'string' },
+            { id: 'bus', label: 'Bus', type: 'string' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
+            { id: 'loop', label: 'Loop (pattern)', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -799,7 +869,8 @@ function createToneOscNode() {
         ],
         process: (inputs, config) => {
             const ampInput = Number(inputs.amplitude ?? 0);
-            const enabled = Boolean(config.enabled ?? false);
+            const enabledRaw = inputs.enabled;
+            const enabled = typeof enabledRaw === 'number' ? enabledRaw >= 0.5 : enabledRaw ?? config.enabled ?? false;
             const value = enabled ? ampInput : 0;
             return { value };
         },
@@ -815,6 +886,9 @@ function createToneDelayNode() {
             { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
             { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+            { id: 'bus', label: 'Bus', type: 'string' },
+            { id: 'order', label: 'Order', type: 'number' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -839,6 +913,9 @@ function createToneResonatorNode() {
             { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
             { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
+            { id: 'bus', label: 'Bus', type: 'string' },
+            { id: 'order', label: 'Order', type: 'number' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -865,6 +942,9 @@ function createTonePitchNode() {
             { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
             { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+            { id: 'bus', label: 'Bus', type: 'string' },
+            { id: 'order', label: 'Order', type: 'number' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -890,6 +970,9 @@ function createToneReverbNode() {
             { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
             { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+            { id: 'bus', label: 'Bus', type: 'string' },
+            { id: 'order', label: 'Order', type: 'number' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -909,12 +992,16 @@ function createToneGranularNode() {
         label: 'Tone Granular',
         category: 'Audio',
         inputs: [
+            { id: 'url', label: 'URL', type: 'string' },
             { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
+            { id: 'loop', label: 'Loop', type: 'boolean' },
             { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { id: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
             { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
             { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
+            { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -955,6 +1042,11 @@ function createPlayMediaNode() {
             { id: 'imageUrl', label: 'Image', type: 'string' },
             { id: 'videoUrl', label: 'Video', type: 'string' },
             { id: 'trigger', label: 'Trigger', type: 'number' },
+            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+            { id: 'fadeIn', label: 'Fade In (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
+            { id: 'muted', label: 'Video Muted', type: 'boolean', defaultValue: true },
+            { id: 'imageDuration', label: 'Image Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 100 },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
@@ -981,13 +1073,13 @@ function createPlayMediaNode() {
             const imageUrl = resolveUrl(inputs, config, 'imageUrl');
             const videoUrl = resolveUrl(inputs, config, 'videoUrl');
             const audioUrl = resolveUrl(inputs, config, 'audioUrl');
-            const volumeRaw = Number(config.volume ?? 1);
+            const volumeRaw = typeof inputs.volume === 'number' ? inputs.volume : Number(config.volume ?? 1);
             const volume = Number.isFinite(volumeRaw) ? Math.max(0, Math.min(1, volumeRaw)) : 1;
-            const loop = Boolean(config.loop ?? false);
-            const fadeInRaw = Number(config.fadeIn ?? 0);
+            const loop = typeof inputs.loop === 'boolean' ? inputs.loop : Boolean(config.loop ?? false);
+            const fadeInRaw = typeof inputs.fadeIn === 'number' ? inputs.fadeIn : Number(config.fadeIn ?? 0);
             const fadeIn = Number.isFinite(fadeInRaw) ? Math.max(0, fadeInRaw) : 0;
-            const muted = Boolean(config.muted ?? true);
-            const imageDurationRaw = Number(config.imageDuration ?? 0);
+            const muted = typeof inputs.muted === 'boolean' ? inputs.muted : Boolean(config.muted ?? true);
+            const imageDurationRaw = typeof inputs.imageDuration === 'number' ? inputs.imageDuration : Number(config.imageDuration ?? 0);
             const imageDuration = Number.isFinite(imageDurationRaw) && imageDurationRaw > 0 ? imageDurationRaw : undefined;
             let cmd = null;
             if (imageUrl) {
@@ -1058,9 +1150,13 @@ function createTonePlayerNode() {
         inputs: [
             { id: 'url', label: 'URL', type: 'string' },
             { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0 },
+            { id: 'enabled', label: 'Enabled', type: 'boolean' },
+            { id: 'loop', label: 'Loop', type: 'boolean' },
+            { id: 'autostart', label: 'Autostart', type: 'boolean' },
             { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1 },
+            { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -1299,6 +1395,7 @@ function createSceneSwitchProcessorNode() {
         category: 'Processors',
         inputs: [
             { id: 'index', label: 'Index', type: 'number' },
+            { id: 'sceneId', label: 'Scene', type: 'string' },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
@@ -1314,11 +1411,16 @@ function createSceneSwitchProcessorNode() {
             },
         ],
         process: (inputs, config) => {
-            const sceneId = typeof inputs.index === 'number'
-                ? inputs.index >= 0.5
-                    ? 'mel-scene'
-                    : 'box-scene'
-                : String(config.sceneId ?? 'box-scene');
+            const sceneId = (() => {
+                const fromInput = inputs.sceneId;
+                if (typeof fromInput === 'string' && fromInput.trim())
+                    return fromInput.trim();
+                const fromIndex = inputs.index;
+                if (typeof fromIndex === 'number' && Number.isFinite(fromIndex)) {
+                    return fromIndex >= 0.5 ? 'mel-scene' : 'box-scene';
+                }
+                return String(config.sceneId ?? 'box-scene');
+            })();
             return { cmd: { action: 'visualSceneSwitch', payload: { sceneId } } };
         },
     };

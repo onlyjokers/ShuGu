@@ -198,6 +198,67 @@ export class NodeRuntime {
             }
         }
     }
+    inferDisabledBypassPorts(def) {
+        const inputs = Array.isArray(def.inputs) ? def.inputs : [];
+        const outputs = Array.isArray(def.outputs) ? def.outputs : [];
+        const inPort = inputs.find((p) => p.id === 'in') ?? null;
+        const outPort = outputs.find((p) => p.id === 'out') ?? null;
+        if (inPort && outPort && inPort.type === outPort.type) {
+            if (inPort.type === 'command' || inPort.type === 'client')
+                return null;
+            return { inId: 'in', outId: 'out' };
+        }
+        if (inputs.length === 1 && outputs.length === 1) {
+            const onlyIn = inputs[0];
+            const onlyOut = outputs[0];
+            if (onlyIn?.id && onlyOut?.id && onlyIn.type === onlyOut.type) {
+                if (onlyIn.type === 'command' || onlyIn.type === 'client')
+                    return null;
+                return { inId: onlyIn.id, outId: onlyOut.id };
+            }
+        }
+        const sinkInputs = inputs.filter((p) => p.kind === 'sink');
+        const sinkOutputs = outputs.filter((p) => p.kind === 'sink');
+        if (sinkInputs.length === 1 && sinkOutputs.length === 1) {
+            const onlyIn = sinkInputs[0];
+            const onlyOut = sinkOutputs[0];
+            if (onlyIn?.id && onlyOut?.id && onlyIn.type === onlyOut.type) {
+                if (onlyIn.type === 'command' || onlyIn.type === 'client')
+                    return null;
+                return { inId: onlyIn.id, outId: onlyOut.id };
+            }
+        }
+        return null;
+    }
+    computeDisabledBypassOutputs(node) {
+        const def = this.registry.get(node.type);
+        if (!def)
+            return null;
+        const ports = this.inferDisabledBypassPorts(def);
+        if (!ports)
+            return null;
+        const incoming = this.connections.filter((c) => c.targetNodeId === node.id && c.targetPortId === ports.inId);
+        if (incoming.length === 0)
+            return null;
+        const outgoing = this.connections.filter((c) => c.sourceNodeId === node.id && c.sourcePortId === ports.outId);
+        // Only treat it as a pass-through "wire" when both sides are connected.
+        if (outgoing.length === 0)
+            return null;
+        let value = undefined;
+        for (const conn of incoming) {
+            const sourceNode = this.nodes.get(conn.sourceNodeId);
+            if (!sourceNode)
+                continue;
+            const next = sourceNode.outputValues?.[conn.sourcePortId];
+            if (value === undefined)
+                value = next;
+            else if (Array.isArray(value))
+                value.push(next);
+            else
+                value = [value, next];
+        }
+        return { [ports.outId]: value };
+    }
     applyOverride(nodeId, kind, key, value, ttlMs) {
         if (!nodeId || !key)
             return;
@@ -470,7 +531,7 @@ export class NodeRuntime {
                     }
                 }
                 this.lastEnabledStateByNode.set(node.id, false);
-                node.outputValues = {};
+                node.outputValues = this.computeDisabledBypassOutputs(node) ?? {};
                 continue;
             }
             this.lastEnabledStateByNode.set(node.id, true);

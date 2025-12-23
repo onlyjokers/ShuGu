@@ -99,6 +99,81 @@ const storedAudioEnabled =
 // Tone.js audio enablement state (requires user gesture to flip to true).
 export const audioEnabled = writable<boolean>(storedAudioEnabled);
 
+type MediaClipParams = {
+  baseUrl: string;
+  startSec: number;
+  endSec: number;
+  loop: boolean | null;
+  play: boolean | null;
+  reverse: boolean | null;
+  cursorSec: number | null;
+};
+
+function parseMediaClipParams(raw: string): MediaClipParams {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { baseUrl: '', startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+  }
+
+  const hashIndex = trimmed.indexOf('#');
+  if (hashIndex < 0) {
+    return { baseUrl: trimmed, startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+  }
+
+  const baseUrl = trimmed.slice(0, hashIndex).trim();
+  const hash = trimmed.slice(hashIndex + 1);
+  const params = new URLSearchParams(hash);
+
+  const toNumber = (value: string | null, fallback: number): number => {
+    if (value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const toBoolean = (value: string | null, fallback: boolean): boolean => {
+    if (value == null) return fallback;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+    const n = Number(normalized);
+    if (Number.isFinite(n)) return n >= 0.5;
+    return fallback;
+  };
+
+  const tRaw = params.get('t');
+  let startSec = 0;
+  let endSec = -1;
+  if (tRaw !== null) {
+    const parts = tRaw.split(',');
+    const startCandidate = parts[0]?.trim() ?? '';
+    const endCandidate = parts[1]?.trim() ?? '';
+    startSec = toNumber(startCandidate || null, 0);
+    if (parts.length > 1) {
+      endSec = endCandidate ? toNumber(endCandidate, -1) : -1;
+    }
+  }
+
+  const loopRaw = params.get('loop');
+  const playRaw = params.get('play');
+  const reverseRaw = params.get('rev');
+  const cursorRaw = params.get('p');
+
+  const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
+  const cursorSec =
+    cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0 ? cursorParsed : null;
+
+  return {
+    baseUrl,
+    startSec: Number.isFinite(startSec) ? startSec : 0,
+    endSec: Number.isFinite(endSec) ? endSec : -1,
+    loop: loopRaw === null ? null : toBoolean(loopRaw, false),
+    play: playRaw === null ? null : toBoolean(playRaw, true),
+    reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
+    cursorSec,
+  };
+}
+
 // Video playback state
 export const videoState = writable<{
   url: string | null;
@@ -106,12 +181,20 @@ export const videoState = writable<{
   muted: boolean;
   loop: boolean;
   volume: number;
+  startSec: number;
+  endSec: number;
+  cursorSec: number;
+  reverse: boolean;
 }>({
   url: null,
   playing: false,
   muted: true,
   loop: false,
   volume: 1,
+  startSec: 0,
+  endSec: -1,
+  cursorSec: -1,
+  reverse: false,
 });
 
 // Image display state
@@ -481,21 +564,35 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'playMedia': {
         const mediaPayload = payload as PlayMediaPayload;
+        const clip =
+          typeof mediaPayload.url === 'string' ? parseMediaClipParams(mediaPayload.url) : null;
+        const baseUrl = clip ? clip.baseUrl : mediaPayload.url;
         const resolvedUrl =
-          typeof mediaPayload.url === 'string'
-            ? multimediaCore?.resolveAssetRef(mediaPayload.url) ?? mediaPayload.url
-            : mediaPayload.url;
+          typeof baseUrl === 'string'
+            ? multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl
+            : baseUrl;
         // Check if it's a video by extension or explicit type
+        const resolvedUrlString = typeof resolvedUrl === 'string' ? resolvedUrl : String(resolvedUrl ?? '');
         const isVideo =
-          mediaPayload.mediaType === 'video' ||
-          (typeof resolvedUrl === 'string' && /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrl));
+          mediaPayload.mediaType === 'video' || /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
 
         if (isVideo) {
+          const loop = clip?.loop ?? mediaPayload.loop ?? false;
+          const playing = clip?.play ?? Boolean(resolvedUrlString);
+          const startSec = clip ? Math.max(0, clip.startSec) : 0;
+          const endSec = clip ? clip.endSec : -1;
+          const cursorSec = clip?.cursorSec ?? -1;
+          const reverse = clip?.reverse ?? false;
           multimediaCore?.media.playVideo({
-            url: String(resolvedUrl ?? ''),
+            url: resolvedUrlString,
             muted: mediaPayload.muted ?? true,
-            loop: mediaPayload.loop ?? false,
+            loop,
             volume: mediaPayload.volume ?? 1,
+            playing,
+            startSec,
+            endSec,
+            cursorSec,
+            reverse,
           });
         } else {
           // Audio path: prefer ToneSoundPlayer when enabled; fallback to legacy SoundPlayer otherwise.

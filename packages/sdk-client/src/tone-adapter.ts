@@ -106,7 +106,8 @@ type TonePlayerInstance = {
   lastTrigger: boolean;
   loading: boolean;
   lastUrl: string | null;
-  lastClip: { startSec: number; endSec: number; loop: boolean } | null;
+  lastClip: { startSec: number; endSec: number; loop: boolean; reverse: boolean } | null;
+  lastCursorSec: number | null;
   lastParams: Record<string, number | string | boolean | null>;
 };
 
@@ -189,17 +190,35 @@ type ToneClipParams = {
   endSec: number;
   loop: boolean | null;
   play: boolean | null;
+  reverse: boolean | null;
+  cursorSec: number | null;
 };
 
 function parseToneClipParams(raw: string): ToneClipParams {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { baseUrl: '', startSec: 0, endSec: -1, loop: null, play: null };
+    return {
+      baseUrl: '',
+      startSec: 0,
+      endSec: -1,
+      loop: null,
+      play: null,
+      reverse: null,
+      cursorSec: null,
+    };
   }
 
   const hashIndex = trimmed.indexOf('#');
   if (hashIndex < 0) {
-    return { baseUrl: trimmed, startSec: 0, endSec: -1, loop: null, play: null };
+    return {
+      baseUrl: trimmed,
+      startSec: 0,
+      endSec: -1,
+      loop: null,
+      play: null,
+      reverse: null,
+      cursorSec: null,
+    };
   }
 
   const baseUrl = trimmed.slice(0, hashIndex).trim();
@@ -221,6 +240,8 @@ function parseToneClipParams(raw: string): ToneClipParams {
 
   const loopRaw = params.get('loop');
   const playRaw = params.get('play');
+  const reverseRaw = params.get('rev');
+  const cursorRaw = params.get('p');
 
   return {
     baseUrl,
@@ -228,6 +249,8 @@ function parseToneClipParams(raw: string): ToneClipParams {
     endSec: Number.isFinite(endSec) ? endSec : -1,
     loop: loopRaw === null ? null : toBoolean(loopRaw, false),
     play: playRaw === null ? null : toBoolean(playRaw, true),
+    reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
+    cursorSec: cursorRaw === null ? null : toNumber(cursorRaw, -1),
   };
 }
 
@@ -1127,6 +1150,7 @@ function createPlayerInstance(
     loading: true,
     lastUrl: url,
     lastClip: null,
+    lastCursorSec: null,
     lastParams: { ...params },
   };
 
@@ -1664,6 +1688,12 @@ export function registerToneClientDefinitions(
       const volume = toNumber(inputs.volume ?? config.volume, 1);
       const loop = clipParams.loop ?? toBoolean(config.loop, false);
       const playGate = clipParams.play;
+      const reverse = clipParams.reverse ?? false;
+      const cursorRequestedRaw = clipParams.cursorSec;
+      const cursorRequested =
+        typeof cursorRequestedRaw === 'number' && Number.isFinite(cursorRequestedRaw) && cursorRequestedRaw >= 0
+          ? cursorRequestedRaw
+          : null;
       const enabledConfig = toBoolean(config.enabled, false);
       const enabled = playGate ?? enabledConfig;
       const autostart = playGate !== null ? false : toBoolean(config.autostart, false);
@@ -1708,6 +1738,7 @@ export function registerToneClientDefinitions(
         instance.startDurationSec = null;
         instance.pausedOffsetSec = null;
         instance.lastClip = null;
+        instance.lastCursorSec = null;
         try {
           instance.player.stop();
         } catch {
@@ -1742,15 +1773,10 @@ export function registerToneClientDefinitions(
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
       if (instance.lastParams.volume !== volume) instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
 
-      const clipStart = Math.max(0, toNumber(clipParams.startSec, 0));
+      const clipStartRaw = Math.max(0, toNumber(clipParams.startSec, 0));
       const clipEndRaw = toNumber(clipParams.endSec, -1);
-      const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
-      const nextClip = { startSec: clipStart, endSec: clipEnd, loop };
-      const clipChanged =
-        !instance.lastClip ||
-        instance.lastClip.startSec !== nextClip.startSec ||
-        instance.lastClip.endSec !== nextClip.endSec ||
-        instance.lastClip.loop !== nextClip.loop;
+      const clipEndCandidate =
+        Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStartRaw, clipEndRaw) : -1;
 
       const bufferDuration = (() => {
         try {
@@ -1761,16 +1787,68 @@ export function registerToneClientDefinitions(
         }
       })();
 
-      const resolvedClipEnd = clipEnd >= 0 ? clipEnd : (bufferDuration ?? null);
+      const clipStart = bufferDuration !== null ? clamp(clipStartRaw, 0, bufferDuration) : clipStartRaw;
+      const clipEnd =
+        clipEndCandidate >= 0
+          ? bufferDuration !== null
+            ? clamp(clipEndCandidate, clipStart, bufferDuration)
+            : Math.max(clipStart, clipEndCandidate)
+          : -1;
+
+      const resolvedClipEnd =
+        clipEnd >= 0 ? clipEnd : bufferDuration !== null ? bufferDuration : null;
       const resolvedClipDuration =
         resolvedClipEnd !== null ? Math.max(0, resolvedClipEnd - clipStart) : null;
 
+      const nextClip = { startSec: clipStart, endSec: clipEnd, loop, reverse };
+      const clipChanged =
+        !instance.lastClip ||
+        instance.lastClip.startSec !== nextClip.startSec ||
+        instance.lastClip.endSec !== nextClip.endSec ||
+        instance.lastClip.loop !== nextClip.loop ||
+        instance.lastClip.reverse !== nextClip.reverse;
+
+      const cursorClamped = (() => {
+        if (cursorRequested === null) return null;
+        const base = Math.max(clipStart, cursorRequested);
+        if (resolvedClipEnd !== null) return Math.min(resolvedClipEnd, base);
+        return base;
+      })();
+
+      const canApplyReverse = !reverse || bufferDuration !== null;
+      const canApplyLoopEnd = resolvedClipEnd !== null;
+      const canStartNow = !instance.loading && canApplyReverse && (!loop || canApplyLoopEnd);
+
       const applyClipToPlayer = () => {
+        try {
+          if (instance.lastParams.reverse !== reverse) instance.player.reverse = reverse;
+        } catch {
+          // ignore
+        }
         try {
           instance.player.loop = loop;
         } catch {
           // ignore
         }
+
+        if (reverse) {
+          if (bufferDuration === null) return;
+          const endForMap = resolvedClipEnd ?? bufferDuration;
+          const loopStart = clamp(bufferDuration - endForMap, 0, bufferDuration);
+          const loopEnd = clamp(bufferDuration - clipStart, loopStart, bufferDuration);
+          try {
+            instance.player.loopStart = loopStart;
+          } catch {
+            // ignore
+          }
+          try {
+            instance.player.loopEnd = loopEnd;
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
         try {
           instance.player.loopStart = clipStart;
         } catch {
@@ -1793,12 +1871,20 @@ export function registerToneClientDefinitions(
         if (!instance.started) return;
         const now = toneModule!.now();
         const elapsed = instance.startedAt > 0 ? Math.max(0, now - instance.startedAt) : 0;
-        const rawOffset = instance.startOffsetSec + elapsed * playbackRate;
-        let pausedOffset = rawOffset;
-        if (loop && resolvedClipDuration && resolvedClipDuration > 0) {
-          const rel = rawOffset - clipStart;
-          const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
-          pausedOffset = clipStart + wrapped;
+        const activeReverse = instance.lastClip?.reverse ?? reverse;
+        const direction = activeReverse ? -1 : 1;
+        const rawPos = instance.startOffsetSec + direction * elapsed * playbackRate;
+        let pausedOffset = rawPos;
+        if (loop && resolvedClipDuration && resolvedClipDuration > 0 && resolvedClipEnd !== null) {
+          if (activeReverse) {
+            const rel = resolvedClipEnd - rawPos;
+            const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
+            pausedOffset = resolvedClipEnd - wrapped;
+          } else {
+            const rel = rawPos - clipStart;
+            const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
+            pausedOffset = clipStart + wrapped;
+          }
         } else if (resolvedClipEnd !== null) {
           pausedOffset = clamp(pausedOffset, clipStart, resolvedClipEnd);
         } else {
@@ -1817,12 +1903,34 @@ export function registerToneClientDefinitions(
         instance.startDurationSec = null;
       };
 
-      const startFromOffset = (offset: number, reason: string) => {
-        if (instance.loading) return;
+      const segmentStart = reverse ? (resolvedClipEnd ?? clipStart) : clipStart;
+
+      const startFromPosition = (pos: number, reason: string) => {
+        if (!canStartNow) return;
         applyClipToPlayer();
-        const nextOffset = Math.max(0, offset);
+        const nextPos =
+          resolvedClipEnd !== null ? clamp(Math.max(0, pos), clipStart, resolvedClipEnd) : Math.max(clipStart, pos);
         const dur =
-          !loop && resolvedClipEnd !== null ? Math.max(0, resolvedClipEnd - nextOffset) : null;
+          !loop && resolvedClipEnd !== null
+            ? reverse
+              ? Math.max(0, nextPos - clipStart)
+              : Math.max(0, resolvedClipEnd - nextPos)
+            : null;
+        if (dur !== null && dur <= 0) {
+          try {
+            instance.player.stop();
+          } catch {
+            // ignore
+          }
+          instance.started = false;
+          instance.startedAt = 0;
+          instance.startOffsetSec = 0;
+          instance.startDurationSec = null;
+          instance.pausedOffsetSec = nextPos;
+          return;
+        }
+
+        const offset = reverse ? bufferDuration! - nextPos : nextPos;
 
         try {
           if (instance.started) instance.player.stop();
@@ -1831,11 +1939,11 @@ export function registerToneClientDefinitions(
         }
 
         try {
-          if (dur !== null) instance.player.start(undefined, nextOffset, dur);
-          else instance.player.start(undefined, nextOffset);
+          if (dur !== null) instance.player.start(undefined, offset, dur);
+          else instance.player.start(undefined, offset);
           instance.started = true;
           instance.startedAt = toneModule!.now();
-          instance.startOffsetSec = nextOffset;
+          instance.startOffsetSec = nextPos;
           instance.startDurationSec = dur;
           instance.pausedOffsetSec = null;
         } catch (err) {
@@ -1843,43 +1951,62 @@ export function registerToneClientDefinitions(
         }
       };
 
+      const cursorChanged =
+        cursorClamped !== null &&
+        (instance.lastCursorSec === null || Math.abs(cursorClamped - instance.lastCursorSec) > 0.005);
+
       if (playGate !== null) {
         if (!enabled) {
           stopAndMaybePause();
+          if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
         } else {
           if (triggered) {
             instance.pausedOffsetSec = null;
-            startFromOffset(clipStart, 'trigger');
+            startFromPosition(segmentStart, 'trigger');
           } else if (clipChanged && instance.started) {
+            // Switching reverse while playing should keep the current position when possible.
+            if (instance.lastClip && instance.lastClip.reverse !== reverse) {
+              stopAndMaybePause();
+              const resume = instance.pausedOffsetSec ?? segmentStart;
+              instance.pausedOffsetSec = null;
+              startFromPosition(resume, 'reverse-change');
+            } else {
+              instance.pausedOffsetSec = null;
+              startFromPosition(segmentStart, 'clip-change');
+            }
+          } else if (cursorChanged) {
             instance.pausedOffsetSec = null;
-            startFromOffset(clipStart, 'clip-change');
+            startFromPosition(cursorClamped ?? segmentStart, 'seek');
           } else if (!instance.started && !instance.loading) {
-            const resumeOffset = instance.pausedOffsetSec ?? clipStart;
-            const clamped =
-              resolvedClipEnd !== null ? clamp(resumeOffset, clipStart, resolvedClipEnd) : Math.max(clipStart, resumeOffset);
-            startFromOffset(clamped, instance.pausedOffsetSec ? 'resume' : 'start');
+            const resumeOffset = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
+            startFromPosition(resumeOffset, instance.pausedOffsetSec ? 'resume' : cursorClamped ? 'seek-start' : 'start');
           }
         }
       } else {
         if (triggered) {
           instance.pausedOffsetSec = null;
-          startFromOffset(clipStart, 'trigger');
+          startFromPosition(segmentStart, 'trigger');
         }
 
         if (clipChanged && instance.started && !instance.loading) {
           instance.pausedOffsetSec = null;
-          startFromOffset(clipStart, 'clip-change');
+          startFromPosition(segmentStart, 'clip-change');
+        }
+
+        if (cursorChanged && enabled && !instance.loading) {
+          instance.pausedOffsetSec = null;
+          startFromPosition(cursorClamped ?? segmentStart, 'seek');
         }
 
         if (!instance.autostarted && autostart && !instance.loading) {
           if (!instance.started) {
-            startFromOffset(clipStart, 'autostart');
+            startFromPosition(cursorClamped ?? segmentStart, 'autostart');
           }
           instance.autostarted = true;
         }
 
         if (enabled && !instance.started && !instance.loading) {
-          startFromOffset(clipStart, 'enabled');
+          startFromPosition(cursorClamped ?? segmentStart, 'enabled');
         }
 
         if (!enabled && instance.enabled) {
@@ -1901,7 +2028,8 @@ export function registerToneClientDefinitions(
       instance.enabled = enabled;
       instance.lastTrigger = triggerActive;
       instance.lastClip = nextClip;
-      instance.lastParams = { ...instance.lastParams, ...params };
+      instance.lastParams = { ...instance.lastParams, ...params, reverse };
+      instance.lastCursorSec = cursorClamped;
 
       return { value: volume };
     },

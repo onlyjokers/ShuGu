@@ -1,5 +1,6 @@
 <!-- Purpose: Render Rete controls (inputs/selects/MIDI learn) for the node canvas. -->
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { ClassicPreset } from 'rete';
   import { clientReadiness, sensorData, state as managerState } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
@@ -7,6 +8,7 @@
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
   import { midiNodeBridge, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
+  import { getAudioSpectrogramDataUrl, getMediaDurationSec } from '$lib/features/assets/media-timeline-preview';
 
   export let data: any;
   $: isInline = Boolean((data as any)?.inline);
@@ -20,6 +22,7 @@
       ? ((data as any).step ?? 'any')
       : undefined;
   const graphStateStore = nodeEngine.graphState;
+  const tickTimeStore = nodeEngine.tickTime;
   const midiLearnModeStore = midiNodeBridge.learnMode;
   const midiLastMessageStore = midiService.lastMessage;
   const midiSelectedInputStore = midiService.selectedInputId;
@@ -233,7 +236,13 @@
   }
 
   async function uploadFileToAssetService(file: File): Promise<{ assetId: string } | null> {
-    const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
+    const serverUrl = (() => {
+      try {
+        return localStorage.getItem('shugu-server-url') ?? '';
+      } catch {
+        return '';
+      }
+    })();
     const uploadUrl = buildAssetUploadUrl(serverUrl);
     if (!uploadUrl) {
       fileUploadError = 'Invalid server URL (missing shugu-server-url)';
@@ -341,82 +350,294 @@
   }
 
   let timeRangeNodeId = '';
-  let timeRangeConfigKey = '';
+  let timeRangeNodeType = '';
   let timeRangeStartSec = 0;
   let timeRangeEndSec = -1; // -1 means "to end"
+  let timeRangeCursorSec = -1; // -1 means "unset"
   let timeRangeMin = 0;
   let timeRangeMax = 10;
   let timeRangeStep = 0.01;
-  let timeRangeAssetDurationSec: number | null = null;
+  let timeRangeDurationSec: number | null = null;
+  let timeRangeBackdropUrl: string | null = null;
   let timeRangeSliderStart = 0;
   let timeRangeSliderEnd = 0;
+  let timeRangeSliderCursor = 0;
   let timeRangeStartPct = 0;
   let timeRangeEndPct = 100;
+  let timeRangeCursorPct = 0;
+  let timeRangeStartFrac = 0;
+  let timeRangeEndFrac = 1;
+  let timeRangeCursorFrac = 0;
+  let timeRangeEffectiveEndSec: number | null = null;
 
-  $: if (data?.controlType === 'time-range') {
-    timeRangeNodeId = String(data?.nodeId ?? '');
-    timeRangeConfigKey = String(data?.configKey ?? '');
+  const secondsFormatter = new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    useGrouping: false,
+  });
 
-    const raw = (data as any).value ?? {};
-    const start = typeof raw?.startSec === 'number' && Number.isFinite(raw.startSec) ? raw.startSec : 0;
-    const end = typeof raw?.endSec === 'number' && Number.isFinite(raw.endSec) ? raw.endSec : -1;
-    timeRangeStartSec = start;
-    timeRangeEndSec = end >= 0 ? Math.max(start, end) : -1;
+  const formatSeconds = (value: number | null | undefined): string => {
+    if (value === null || value === undefined) return '—';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '—';
+    const rounded = Math.round(num * 100) / 100;
+    return secondsFormatter.format(rounded);
+  };
 
-    timeRangeMin = isFiniteNumber((data as any).min) ? Number((data as any).min) : 0;
-    timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
+  const buildAssetContentUrl = (serverUrl: string, assetId: string): string | null => {
+    const trimmed = serverUrl.trim();
+    const id = assetId.trim();
+    if (!trimmed || !id) return null;
+    try {
+      const base = trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+      return new URL(`api/assets/${encodeURIComponent(id)}/content`, base).toString();
+    } catch {
+      return null;
+    }
+  };
 
-    const node = timeRangeNodeId
-      ? ($graphStateStore.nodes ?? []).find((n: any) => String(n.id) === timeRangeNodeId)
-      : null;
-    const assetId = typeof node?.config?.assetId === 'string' ? String(node.config.assetId) : '';
-    const asset = assetId ? ($assetsStore?.assets ?? []).find((a: any) => String(a?.id ?? '') === assetId) : null;
-    const durMs = asset?.durationMs;
-    timeRangeAssetDurationSec =
-      typeof durMs === 'number' && Number.isFinite(durMs) && durMs > 0 ? durMs / 1000 : null;
+  const resolveConnectedNumber = (nodeId: string, portId: string): number | null => {
+    const conn = ($graphStateStore.connections ?? []).find(
+      (c: any) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === portId
+    );
+    if (!conn) return null;
+    const src = nodeEngine.getNode(String(conn.sourceNodeId));
+    const raw = src?.outputValues?.[String(conn.sourcePortId)];
+    const num = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(num) ? num : null;
+  };
 
-    const maxFromAsset = timeRangeAssetDurationSec;
+  const readLocalNumber = (node: any, key: string): number | null => {
+    const raw = node?.inputValues?.[key];
+    const num = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const resolveConnectedBoolean = (nodeId: string, portId: string): boolean | null => {
+    const conn = ($graphStateStore.connections ?? []).find(
+      (c: any) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === portId
+    );
+    if (!conn) return null;
+    const src = nodeEngine.getNode(String(conn.sourceNodeId));
+    const raw = src?.outputValues?.[String(conn.sourcePortId)];
+    if (typeof raw === 'boolean') return raw;
+    const num = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(num) ? num >= 0.5 : null;
+  };
+
+  const computeEffectiveRange = (nodeId: string): { startSec: number; endSec: number; cursorSec: number } => {
+    const node = nodeEngine.getNode(nodeId);
+    const startRaw =
+      resolveConnectedNumber(nodeId, 'startSec') ?? readLocalNumber(node, 'startSec') ?? 0;
+    const endRaw = resolveConnectedNumber(nodeId, 'endSec') ?? readLocalNumber(node, 'endSec') ?? -1;
+    const cursorRaw =
+      resolveConnectedNumber(nodeId, 'cursorSec') ?? readLocalNumber(node, 'cursorSec') ?? -1;
+
+    const startSec = Math.max(0, startRaw);
+    const endSec = endRaw >= 0 ? Math.max(startSec, endRaw) : -1;
+    const cursorSec = cursorRaw >= 0 ? Math.max(0, cursorRaw) : -1;
+    return { startSec, endSec, cursorSec };
+  };
+
+  let timeRangeIsPlaying = false;
+  let timeRangeLoopEnabled = false;
+  let timeRangeReverseEnabled = false;
+  let timeRangePlaybackRaf: number | null = null;
+  let timeRangePlaybackCursorSec = 0;
+  let timeRangePlaybackLastMs = 0;
+
+  const syncTimeRangeUi = (values: { startSec: number; endSec: number; cursorSec: number }) => {
+    timeRangeStartSec = values.startSec;
+    timeRangeEndSec = values.endSec;
+    timeRangeCursorSec = values.cursorSec;
+
+    const maxFromAsset = timeRangeDurationSec;
     const maxFromField = isFiniteNumber((data as any).max) ? Number((data as any).max) : null;
-    const maxFallback = Math.max(10, timeRangeStartSec, timeRangeEndSec > 0 ? timeRangeEndSec : 0);
+    const maxFallback = Math.max(
+      10,
+      timeRangeStartSec,
+      timeRangeEndSec > 0 ? timeRangeEndSec : 0,
+      timeRangeCursorSec > 0 ? timeRangeCursorSec : 0
+    );
     timeRangeMax = Math.max(timeRangeMin + timeRangeStep, maxFromAsset ?? maxFromField ?? maxFallback);
 
     const clamp = (v: number) => Math.max(timeRangeMin, Math.min(timeRangeMax, v));
     timeRangeSliderStart = clamp(timeRangeStartSec);
+    timeRangeEffectiveEndSec = timeRangeEndSec < 0 ? (timeRangeDurationSec ?? null) : timeRangeEndSec;
     timeRangeSliderEnd = timeRangeEndSec < 0 ? timeRangeMax : clamp(timeRangeEndSec);
     if (timeRangeSliderEnd < timeRangeSliderStart) timeRangeSliderEnd = timeRangeSliderStart;
 
+    const cursorFallback = timeRangeCursorSec >= 0 ? timeRangeCursorSec : timeRangeStartSec;
+    const nextCursor = clamp(cursorFallback);
+    if (!timeRangeIsPlaying) {
+      timeRangeSliderCursor = nextCursor;
+      timeRangePlaybackCursorSec = nextCursor;
+    }
+    if (timeRangeSliderCursor < timeRangeSliderStart) timeRangeSliderCursor = timeRangeSliderStart;
+    if (timeRangeSliderCursor > timeRangeSliderEnd) timeRangeSliderCursor = timeRangeSliderEnd;
+
     const span = timeRangeMax - timeRangeMin;
-    timeRangeStartPct = span > 0 ? ((timeRangeSliderStart - timeRangeMin) / span) * 100 : 0;
-    timeRangeEndPct = span > 0 ? ((timeRangeSliderEnd - timeRangeMin) / span) * 100 : 100;
+    timeRangeStartFrac = span > 0 ? (timeRangeSliderStart - timeRangeMin) / span : 0;
+    timeRangeEndFrac = span > 0 ? (timeRangeSliderEnd - timeRangeMin) / span : 1;
+    timeRangeCursorFrac = span > 0 ? (timeRangeSliderCursor - timeRangeMin) / span : 0;
+
+    timeRangeStartPct = timeRangeStartFrac * 100;
+    timeRangeEndPct = timeRangeEndFrac * 100;
+    timeRangeCursorPct = timeRangeCursorFrac * 100;
+  };
+
+  function stopTimeRangePlayback(): void {
+    if (timeRangePlaybackRaf !== null) {
+      cancelAnimationFrame(timeRangePlaybackRaf);
+      timeRangePlaybackRaf = null;
+    }
+    timeRangePlaybackLastMs = 0;
   }
 
-  const setTimeRange = (startSec: number, endSec: number) => {
+  function startTimeRangePlayback(): void {
+    stopTimeRangePlayback();
+    timeRangePlaybackCursorSec =
+      timeRangeCursorSec >= 0 ? timeRangeCursorSec : timeRangeStartSec;
+    timeRangePlaybackLastMs = performance.now();
+
+    const frame = (nowMs: number) => {
+      const dt = Math.max(0, nowMs - timeRangePlaybackLastMs);
+      timeRangePlaybackLastMs = nowMs;
+
+      const start = timeRangeStartSec;
+      const endRaw =
+        timeRangeEndSec < 0
+          ? timeRangeEffectiveEndSec ?? timeRangeMax
+          : timeRangeEndSec;
+      const end = Math.max(start, endRaw);
+      const span = Math.max(0.0001, end - start);
+
+      const dir = timeRangeReverseEnabled ? -1 : 1;
+      timeRangePlaybackCursorSec += (dir * dt) / 1000;
+
+      if (!timeRangeLoopEnabled) {
+        timeRangePlaybackCursorSec = Math.max(start, Math.min(end, timeRangePlaybackCursorSec));
+      } else {
+        while (timeRangePlaybackCursorSec > end) timeRangePlaybackCursorSec -= span;
+        while (timeRangePlaybackCursorSec < start) timeRangePlaybackCursorSec += span;
+      }
+
+      // UI-only playhead: do not write back to node inputs (avoid spamming overrides).
+      timeRangeSliderCursor = Math.max(timeRangeSliderStart, Math.min(timeRangeSliderEnd, timeRangePlaybackCursorSec));
+      const fullSpan = timeRangeMax - timeRangeMin;
+      timeRangeCursorFrac = fullSpan > 0 ? (timeRangeSliderCursor - timeRangeMin) / fullSpan : 0;
+      timeRangeCursorPct = timeRangeCursorFrac * 100;
+
+      if (timeRangeIsPlaying) {
+        timeRangePlaybackRaf = requestAnimationFrame(frame);
+      } else {
+        stopTimeRangePlayback();
+      }
+    };
+
+    timeRangePlaybackRaf = requestAnimationFrame(frame);
+  }
+
+  onDestroy(() => {
+    stopTimeRangePlayback();
+  });
+
+  let lastTimelineAssetId = '';
+  let lastTimelineUrl = '';
+
+  $: if (data?.controlType === 'time-range') {
+    // Read tickTime so this block re-runs when node state changes (input edits, runtime ticks, etc.).
+    // (We don't use the value; it's purely an invalidation dependency.)
+    const _tick = $tickTimeStore;
+    void _tick;
+
+    timeRangeNodeId = String(data?.nodeId ?? '');
+    timeRangeNodeType = String(data?.nodeType ?? '');
+
+    const { startSec, endSec, cursorSec } = computeEffectiveRange(timeRangeNodeId);
+
+    timeRangeMin = isFiniteNumber((data as any).min) ? Number((data as any).min) : 0;
+    timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
+
+    const runtimeNode = timeRangeNodeId ? nodeEngine.getNode(timeRangeNodeId) : null;
+    const assetId = typeof (runtimeNode as any)?.config?.assetId === 'string' ? String((runtimeNode as any).config.assetId) : '';
+
+    // Refresh duration/backdrop when the asset changes.
+    if (assetId !== lastTimelineAssetId) {
+      lastTimelineAssetId = assetId;
+      timeRangeDurationSec = null;
+      timeRangeBackdropUrl = null;
+      lastTimelineUrl = '';
+    }
+
+    const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
+    const contentUrl = assetId ? buildAssetContentUrl(serverUrl, assetId) : null;
+
+    if (contentUrl && contentUrl !== lastTimelineUrl) {
+      lastTimelineUrl = contentUrl;
+      void (async () => {
+        const kind: any = timeRangeNodeType === 'load-video-from-assets' ? 'video' : 'audio';
+        const duration = await getMediaDurationSec(contentUrl, kind);
+        if (duration !== null && contentUrl === lastTimelineUrl) {
+          timeRangeDurationSec = duration;
+        }
+        if (kind === 'audio') {
+          const bg = await getAudioSpectrogramDataUrl(contentUrl, { width: 360, height: 84, fftSize: 1024 });
+          if (bg && contentUrl === lastTimelineUrl) timeRangeBackdropUrl = bg;
+        }
+      })();
+    }
+
+    // UI playhead: detect play/loop/reverse from node inputs (or connected overrides).
+    // This is intentionally UI-only and does not require client feedback.
+    const playRaw =
+      resolveConnectedBoolean(timeRangeNodeId, 'play') ??
+      (() => {
+        const raw = (runtimeNode as any)?.inputValues?.play;
+        if (typeof raw === 'boolean') return raw;
+        const num = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(num) ? num >= 0.5 : false;
+      })();
+    const loopRaw =
+      resolveConnectedBoolean(timeRangeNodeId, 'loop') ??
+      (() => {
+        const raw = (runtimeNode as any)?.inputValues?.loop;
+        if (typeof raw === 'boolean') return raw;
+        const num = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(num) ? num >= 0.5 : false;
+      })();
+    const reverseRaw =
+      resolveConnectedBoolean(timeRangeNodeId, 'reverse') ??
+      (() => {
+        const raw = (runtimeNode as any)?.inputValues?.reverse;
+        if (typeof raw === 'boolean') return raw;
+        const num = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(num) ? num >= 0.5 : false;
+      })();
+
+    timeRangeIsPlaying = Boolean(playRaw);
+    timeRangeLoopEnabled = Boolean(loopRaw);
+    timeRangeReverseEnabled = Boolean(reverseRaw);
+
+    syncTimeRangeUi({ startSec, endSec, cursorSec });
+  }
+
+  $: if (data?.controlType === 'time-range') {
+    if (timeRangeIsPlaying) {
+      if (timeRangePlaybackRaf === null) startTimeRangePlayback();
+    } else {
+      stopTimeRangePlayback();
+    }
+  } else {
+    stopTimeRangePlayback();
+  }
+
+  const setTimeRange = (startSec: number, endSec: number, cursorSec: number) => {
     if (data?.readonly) return;
     const start = Math.max(timeRangeMin, startSec);
     const end = endSec >= 0 ? Math.max(start, endSec) : -1;
-    (data as any)?.setValue?.({ startSec: start, endSec: end });
-  };
-
-  const handleTimeRangeStartInput = (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const n = Number(target.value);
-    if (!Number.isFinite(n)) return;
-    const nextStart = Math.max(timeRangeMin, n);
-    const nextEnd = timeRangeEndSec >= 0 ? Math.max(nextStart, timeRangeEndSec) : -1;
-    setTimeRange(nextStart, nextEnd);
-  };
-
-  const handleTimeRangeEndInput = (event: Event) => {
-    const target = event.target as HTMLInputElement;
-    const raw = target.value.trim();
-    if (raw === '') {
-      setTimeRange(timeRangeStartSec, -1);
-      return;
-    }
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return;
-    const nextEnd = Math.max(timeRangeStartSec, Math.max(timeRangeMin, n));
-    setTimeRange(timeRangeStartSec, nextEnd);
+    const cursor = cursorSec >= 0 ? Math.max(start, cursorSec) : -1;
+    (data as any)?.setValue?.({ startSec: start, endSec: end, cursorSec: cursor });
   };
 
   const handleTimeRangeStartSlider = (event: Event) => {
@@ -425,7 +646,10 @@
     if (!Number.isFinite(n)) return;
     const nextStart = Math.max(timeRangeMin, n);
     const nextEnd = timeRangeEndSec >= 0 ? Math.max(nextStart, timeRangeEndSec) : -1;
-    setTimeRange(nextStart, nextEnd);
+    const nextCursor =
+      timeRangeCursorSec >= 0 ? Math.max(nextStart, Math.min(timeRangeSliderEnd, timeRangeSliderCursor)) : -1;
+    syncTimeRangeUi({ startSec: nextStart, endSec: nextEnd, cursorSec: nextCursor });
+    setTimeRange(nextStart, nextEnd, nextCursor);
   };
 
   const handleTimeRangeEndSlider = (event: Event) => {
@@ -434,7 +658,25 @@
     if (!Number.isFinite(n)) return;
     const nearEnd = Math.abs(n - timeRangeMax) <= timeRangeStep * 0.5;
     const nextEnd = nearEnd ? -1 : Math.max(timeRangeStartSec, Math.max(timeRangeMin, n));
-    setTimeRange(timeRangeStartSec, nextEnd);
+    const nextCursor =
+      timeRangeCursorSec >= 0
+        ? Math.min(nextEnd >= 0 ? nextEnd : timeRangeMax, Math.max(timeRangeStartSec, timeRangeSliderCursor))
+        : -1;
+    syncTimeRangeUi({ startSec: timeRangeStartSec, endSec: nextEnd, cursorSec: nextCursor });
+    setTimeRange(timeRangeStartSec, nextEnd, nextCursor);
+  };
+
+  const handleTimeRangeCursorSlider = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    const n = Number(target.value);
+    if (!Number.isFinite(n)) return;
+    const next = Math.max(timeRangeStartSec, Math.min(timeRangeSliderEnd, n));
+    timeRangePlaybackCursorSec = next;
+    timeRangeSliderCursor = next;
+    const span = timeRangeMax - timeRangeMin;
+    timeRangeCursorFrac = span > 0 ? (timeRangeSliderCursor - timeRangeMin) / span : 0;
+    timeRangeCursorPct = timeRangeCursorFrac * 100;
+    setTimeRange(timeRangeStartSec, timeRangeEndSec, next);
   };
 </script>
 
@@ -496,46 +738,54 @@
     {/if}
 
     <div class="time-range-row">
-      <label class="time-range-field" on:pointerdown|stopPropagation>
-        <span>Start</span>
-        <input
-          class="time-range-input"
-          type="number"
-          step={timeRangeStep}
-          min={timeRangeMin}
-          value={timeRangeStartSec}
-          disabled={data.readonly}
-          on:input={handleTimeRangeStartInput}
-        />
-      </label>
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">Duration</div>
+        <div class="time-range-v">
+          {#if timeRangeDurationSec !== null}
+            {formatSeconds(timeRangeDurationSec)}s
+          {:else}
+            —
+          {/if}
+        </div>
+      </div>
 
-      <label class="time-range-field" on:pointerdown|stopPropagation>
-        <span>End</span>
-        <input
-          class="time-range-input"
-          type="number"
-          step={timeRangeStep}
-          min={timeRangeMin}
-          value={timeRangeEndSec < 0 ? '' : timeRangeEndSec}
-          placeholder="(end)"
-          disabled={data.readonly}
-          on:input={handleTimeRangeEndInput}
-        />
-      </label>
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">Start</div>
+        <div class="time-range-v">{formatSeconds(timeRangeStartSec)}s</div>
+      </div>
 
-      <div class="time-range-meta" aria-hidden="true">
-        {#if timeRangeAssetDurationSec !== null}
-          <span>{timeRangeAssetDurationSec.toFixed(2)}s</span>
-        {:else}
-          <span>{timeRangeMax.toFixed(2)}s</span>
-        {/if}
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">End</div>
+        <div class="time-range-v">
+          {#if timeRangeEffectiveEndSec !== null}
+            {formatSeconds(timeRangeEffectiveEndSec)}s
+          {:else if timeRangeEndSec < 0}
+            (end)
+          {:else}
+            {formatSeconds(timeRangeEndSec)}s
+          {/if}
+        </div>
+      </div>
+
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">Current</div>
+        <div class="time-range-v">{formatSeconds(timeRangeSliderCursor)}s</div>
       </div>
     </div>
 
-    <div class="time-range-slider" on:pointerdown|stopPropagation>
+    <div
+      class="time-range-slider"
+      on:pointerdown|stopPropagation
+      style="background-image: {timeRangeBackdropUrl ? `url("${timeRangeBackdropUrl}")` : 'none'};"
+    >
       <div
         class="time-range-highlight"
-        style="left: {timeRangeStartPct}%; width: {Math.max(0, timeRangeEndPct - timeRangeStartPct)}%;"
+        style="left: calc(10px + (100% - 20px) * {timeRangeStartFrac}); width: calc((100% - 20px) * {Math.max(0, timeRangeEndFrac - timeRangeStartFrac)});"
+      />
+      <div
+        class="time-range-cursor"
+        style="left: calc(10px + (100% - 20px) * {timeRangeCursorFrac});"
+        aria-hidden="true"
       />
       <input
         class="time-range-slider-input start"
@@ -556,6 +806,16 @@
         value={timeRangeSliderEnd}
         disabled={data.readonly}
         on:input={handleTimeRangeEndSlider}
+      />
+      <input
+        class="time-range-slider-input cursor"
+        type="range"
+        min={timeRangeMin}
+        max={timeRangeMax}
+        step={timeRangeStep}
+        value={timeRangeSliderCursor}
+        disabled={data.readonly}
+        on:input={handleTimeRangeCursorSlider}
       />
     </div>
   </div>
@@ -617,15 +877,23 @@
     {/if}
   </div>
 {:else if data?.controlType === 'asset-picker'}
-  {#if hasLabel}
-    <div class="control-label">{data.label}</div>
-  {/if}
-  <select class="select" on:change={changeSelect} value={data.value} disabled={data.readonly}>
-    <option value="">(select asset)</option>
-    {#each buildAssetOptions(data.assetKind) as opt (opt.value)}
-      <option value={opt.value}>{opt.label}</option>
-    {/each}
-  </select>
+  <div class="control-field {isInline ? 'inline' : ''}">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+    <select
+      class="control-input {isInline ? 'inline' : ''}"
+      value={data.value}
+      disabled={data.readonly}
+      on:pointerdown|stopPropagation
+      on:change={changeSelect}
+    >
+      <option value="">(select asset)</option>
+      {#each buildAssetOptions(data.assetKind) as opt (opt.value)}
+        <option value={opt.value}>{opt.label}</option>
+      {/each}
+    </select>
+  </div>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
 {:else if data?.controlType === 'midi-learn'}
@@ -698,6 +966,11 @@
     color: rgba(255, 255, 255, 0.92);
     outline: none;
     font-size: 12px;
+  }
+
+  select.control-input {
+    appearance: auto;
+    -webkit-appearance: menulist;
   }
 
   .control-input.inline {
@@ -807,58 +1080,50 @@
 
   .time-range-row {
     display: grid;
-    grid-template-columns: 1fr 1fr auto;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px;
     align-items: end;
   }
 
-  .time-range-field {
+  .time-range-kv {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(2, 6, 23, 0.25);
+    border-radius: 10px;
+    padding: 6px 10px;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.7);
+    min-width: 0;
   }
 
-  .time-range-input {
-    width: 100%;
-    box-sizing: border-box;
-    border-radius: 10px;
-    padding: 6px 10px;
-    background: rgba(2, 6, 23, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.92);
-    outline: none;
-    font-size: 12px;
-  }
-
-  .time-range-input:focus {
-    border-color: rgba(99, 102, 241, 0.7);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
-  }
-
-  .time-range-input:disabled {
-    background: rgba(2, 6, 23, 0.22);
-    border-color: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.58);
-  }
-
-  .time-range-meta {
-    font-size: 11px;
+  .time-range-k {
+    font-size: 10px;
+    letter-spacing: 0.2px;
     color: rgba(255, 255, 255, 0.55);
-    padding-bottom: 6px;
+  }
+
+  .time-range-v {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 650;
+    color: rgba(255, 255, 255, 0.9);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .time-range-slider {
     position: relative;
-    height: 28px;
+    height: 84px;
     padding: 0 2px;
     border-radius: 10px;
-    background: rgba(2, 6, 23, 0.35);
+    background-color: rgba(2, 6, 23, 0.35);
     border: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
     align-items: center;
+    overflow: hidden;
+    background-size: cover;
+    background-position: center;
   }
 
   .time-range-highlight {
@@ -866,8 +1131,17 @@
     height: 6px;
     border-radius: 999px;
     background: rgba(14, 165, 233, 0.7);
-    top: 50%;
-    transform: translateY(-50%);
+    bottom: 10px;
+    pointer-events: none;
+  }
+
+  .time-range-cursor {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
     pointer-events: none;
   }
 
@@ -875,10 +1149,10 @@
     -webkit-appearance: none;
     appearance: none;
     position: absolute;
-    left: 8px;
-    right: 8px;
-    width: calc(100% - 16px);
-    height: 28px;
+    left: 10px;
+    right: 10px;
+    width: calc(100% - 20px);
+    height: 84px;
     background: transparent;
     pointer-events: none;
   }
@@ -887,8 +1161,8 @@
     -webkit-appearance: none;
     appearance: none;
     pointer-events: auto;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.92);
     border: 2px solid rgba(14, 165, 233, 0.95);
@@ -897,8 +1171,8 @@
 
   .time-range-slider-input::-moz-range-thumb {
     pointer-events: auto;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.92);
     border: 2px solid rgba(14, 165, 233, 0.95);
@@ -915,6 +1189,22 @@
     height: 6px;
     background: rgba(255, 255, 255, 0.12);
     border-radius: 999px;
+  }
+
+  .time-range-slider-input.cursor::-webkit-slider-thumb {
+    width: 10px;
+    height: 18px;
+    border-radius: 6px;
+    border-color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .time-range-slider-input.cursor::-moz-range-thumb {
+    width: 10px;
+    height: 18px;
+    border-radius: 6px;
+    border-color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.9);
   }
 
   .client-picker {

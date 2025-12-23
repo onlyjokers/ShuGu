@@ -64,6 +64,8 @@ export declare class NodeRuntime {
     stop(): void;
     clear(): void;
     private runDisableHooks;
+    private inferDisabledBypassPorts;
+    private computeDisabledBypassOutputs;
     applyOverride(nodeId: string, kind: 'input' | 'config', key: string, value: unknown, ttlMs?: number): void;
     removeOverride(nodeId: string, kind: 'input' | 'config', key: string): void;
     clearOverrides(): void;

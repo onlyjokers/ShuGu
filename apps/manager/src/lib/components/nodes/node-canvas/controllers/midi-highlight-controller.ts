@@ -7,6 +7,7 @@ import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
 import { midiNodeBridge, midiSourceMatchesEvent } from '$lib/features/midi/midi-node-bridge';
 import type { GraphViewAdapter } from '../adapters';
 import { computeMidiHighlightState } from './midi-highlight';
+import { nodeRegistry } from '$lib/nodes';
 
 export type MidiHighlightController = {
   start: () => void;
@@ -119,6 +120,7 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
           sourceNodeTypes: midiSourceNodeTypes,
           traversalStopNodeTypes: midiTraversalStopNodeTypes,
           midiSourceMatchesEvent: midiSourceMatchesEvent as any,
+          nodeRegistry,
         });
 
         if (result) {

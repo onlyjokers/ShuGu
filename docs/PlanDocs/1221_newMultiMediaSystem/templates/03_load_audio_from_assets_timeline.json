@@ -2,7 +2,7 @@
   "kind": "node-graph",
   "version": 1,
   "title": "Load Audio From Assets (Timeline/Loop/Play) → Tone Player → Audio Patch to Client",
-  "purpose": "体验 Load Audio From Assets 的 Timeline 双游标 + Loop + Play(Pause) 控制，并让 Tone.Player 仅播放片段（不重新加载音频）",
+  "purpose": "体验 Load Audio From Assets 的 Timeline（双游标 + playhead）+ Loop + Play(Pause) + Reverse + Seek，并让 Tone.Player 仅播放片段（不重新加载音频）",
   "notes": [
     "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
     "Manager 需要配置 `shugu-server-url` + `shugu-asset-write-token`（用于列出 assets）。",
@@ -12,8 +12,8 @@
     "1) client 点 Start（启用 ToneAudioEngine）。",
     "2) manager Node Graph 点 ▶ Start。",
     "3) 在 Load Audio From Assets 里选择一个已上传的音频资产。",
-    "4) 拖动 Timeline 双游标选择片段，或输入 Start/End（秒）。",
-    "5) Loop：循环片段；Play：false 暂停，true 恢复。",
+    "4) 拖动 Timeline 双游标选择片段；拖动 playhead 可 seek。",
+    "5) Loop：循环片段；Play：false 暂停，true 恢复；Reverse：倒放。",
     "6) 在图里用 Client 节点选定目标，并把 Audio Patch to Client(Deploy) 连到 Client(In)。"
   ],
   "graph": {
@@ -22,8 +22,15 @@
         "id": "node-load-audio",
         "type": "load-audio-from-assets",
         "position": { "x": 120, "y": 180 },
-        "config": { "assetId": "", "range": { "startSec": 0, "endSec": -1 } },
-        "inputValues": { "loop": false, "play": true },
+        "config": { "assetId": "", "timeline": { "startSec": 0, "endSec": -1, "cursorSec": -1 } },
+        "inputValues": {
+          "startSec": 0,
+          "endSec": -1,
+          "cursorSec": -1,
+          "loop": false,
+          "play": true,
+          "reverse": false
+        },
         "outputValues": {}
       },
       {
