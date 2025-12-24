@@ -14,7 +14,10 @@ Purpose: Display video overlay (full-screen) for the Display app.
   export let endSec = -1; // -1 means "to end"
   export let cursorSec = -1; // -1 means "unset"
   export let reverse = false;
+  // Optional node graph source id (e.g. load-video-from-assets nodeId) for UI telemetry.
+  export let sourceNodeId: string | null = null;
   export let onEnded: (() => void) | undefined = undefined;
+  export let onStarted: ((nodeId: string) => void) | undefined = undefined;
 
   let videoElement: HTMLVideoElement;
   let visible = false;
@@ -25,6 +28,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
   let lastCursorApplied: number | null = null;
   let rafId: number | null = null;
   let rafLastTs = 0;
+  let startedReportKey = '';
 
   const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
@@ -121,6 +125,20 @@ Purpose: Display video overlay (full-screen) for the Display app.
     rafId = requestAnimationFrame(tick);
   }
 
+  function maybeReportStarted(): void {
+    const nodeId = typeof sourceNodeId === 'string' ? sourceNodeId.trim() : '';
+    if (!nodeId) return;
+    if (!playing || !url) return;
+    const key = `${nodeId}|${url}`;
+    if (startedReportKey === key) return;
+    startedReportKey = key;
+    onStarted?.(nodeId);
+  }
+
+  function handlePlaying(): void {
+    maybeReportStarted();
+  }
+
   export function stop() {
     if (videoElement) {
       videoElement.pause();
@@ -146,6 +164,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
     loaded = false;
     durationSec = null;
     lastCursorApplied = null;
+    startedReportKey = '';
     visible = Boolean(playing);
     stopRaf();
   }
@@ -184,6 +203,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
         videoElement.play().catch(() => undefined);
       }
       startRaf();
+      if (reverse) maybeReportStarted();
     } else {
       try {
         videoElement.pause();
@@ -192,6 +212,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
       }
       visible = false;
       stopRaf();
+      startedReportKey = '';
     }
   }
 </script>
@@ -206,6 +227,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
       {muted}
       crossorigin="anonymous"
       playsinline
+      on:playing={handlePlaying}
       on:loadedmetadata={handleLoadedMetadata}
     />
   </div>
@@ -239,4 +261,3 @@ Purpose: Display video overlay (full-screen) for the Display app.
     background: #000;
   }
 </style>
-

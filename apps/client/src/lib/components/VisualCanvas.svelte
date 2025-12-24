@@ -47,6 +47,26 @@
   // Device orientation data
   let orientationData = { alpha: 0, beta: 0, gamma: 0, screen: 0 };
 
+  function reportVideoStarted(nodeId: string): void {
+    const sdk = getSDK();
+    if (!sdk) return;
+    if (!nodeId) return;
+    try {
+      sdk.sendSensorData(
+        'custom',
+        {
+          kind: 'node-media',
+          event: 'started',
+          nodeId,
+          nodeType: 'load-video-from-assets',
+        } as any,
+        { trackLatest: false }
+      );
+    } catch {
+      // ignore
+    }
+  }
+
   onMount(() => {
     // Create scene manager
     sceneManager = new DefaultSceneManager(container);
@@ -426,6 +446,8 @@
       endSec={$videoState.endSec}
       cursorSec={$videoState.cursorSec}
       reverse={$videoState.reverse}
+      sourceNodeId={$videoState.sourceNodeId}
+      onStarted={reportVideoStarted}
     />
   {/if}
 

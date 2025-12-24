@@ -103,7 +103,10 @@ function selectClientIdsForNode(
   const availableKey = clients.join('|');
   const prev = clientSelectionStateByNodeId.get(nodeId);
   const needRebuild =
-    !prev || prev.availableKey !== availableKey || prev.random !== random || prev.stableRandomOrder.length !== total;
+    !prev ||
+    prev.availableKey !== availableKey ||
+    prev.random !== random ||
+    prev.stableRandomOrder.length !== total;
 
   const state: ClientSelectionState = needRebuild
     ? {
@@ -124,7 +127,10 @@ function selectClientIdsForNode(
   return { index, selectedIds: selected };
 }
 
-export function registerDefaultNodeDefinitions(registry: NodeRegistry, deps: ClientObjectDeps): void {
+export function registerDefaultNodeDefinitions(
+  registry: NodeRegistry,
+  deps: ClientObjectDeps
+): void {
   registry.register(createClientObjectNode(deps));
   registry.register(createCmdAggregatorNode());
   registry.register(createClientSensorsProcessorNode());
@@ -171,7 +177,14 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
       { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
@@ -179,7 +192,10 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
+    outputs: [
+      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
     configSchema: [
       {
         key: 'assetId',
@@ -206,7 +222,7 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
       // Return a simple gate value so downstream nodes can reflect play/pause state.
-      return { ref: assetId && play ? 1 : 0 };
+      return { ref: assetId && play ? 1 : 0, ended: false };
     },
   };
 }
@@ -226,13 +242,38 @@ function createLoadImageFromAssetsNode(): NodeDefinition {
         assetKind: 'image',
         defaultValue: '',
       },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
     ],
     process: (_inputs, config) => {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-      return { ref: assetId ? `asset:${assetId}` : '' };
+      const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
+      return { ref: assetId ? `asset:${assetId}${fitHash}` : '' };
     },
   };
 }
+
+// Tracks playback progress for `load-video-from-assets` to emit a one-tick `ended` pulse.
+type LoadVideoTimelineState = {
+  signature: string;
+  lastPlay: boolean;
+  accumulatedMs: number;
+  ended: boolean;
+  endedPulsePending: boolean;
+};
+
+const loadVideoTimelineState = new Map<string, LoadVideoTimelineState>();
 
 function createLoadVideoFromAssetsNode(): NodeDefinition {
   return {
@@ -242,13 +283,23 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
       { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
-    outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
+    outputs: [
+      { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
     configSchema: [
       {
         key: 'assetId',
@@ -265,13 +316,27 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
         min: 0,
         step: 0.01,
       },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
     ],
-    process: (inputs, config) => {
+    process: (inputs, config, context) => {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
+      const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
       const startSecRaw = inputs.startSec;
       const endSecRaw = inputs.endSec;
       const cursorSecRaw = inputs.cursorSec;
-      const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
+      const startSec =
+        typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
       const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
       const cursorSec =
         typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
@@ -290,14 +355,99 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
       const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
 
       const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
-      const positionParam =
-        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+      const cursorForPlayback =
+        cursorClamped >= 0
+          ? endClamped >= 0
+            ? Math.min(endClamped, cursorClamped)
+            : cursorClamped
+          : null;
+      const positionParam = cursorForPlayback !== null ? `&p=${cursorForPlayback}` : '';
+      const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+      const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
 
-      return {
-        ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
-          : '',
+      const refBase = assetId
+        ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`
+        : '';
+
+      const refWithFit = fitParam ? `${refBase}${fitParam}` : refBase;
+
+      if (!assetId) {
+        loadVideoTimelineState.delete(context.nodeId);
+        return { ref: '', ended: false };
+      }
+
+      const qSec = (value: number): number => Math.round(value * 100) / 100;
+      const signature = [
+        assetId,
+        qSec(startClamped),
+        qSec(endClamped),
+        qSec(cursorForPlayback ?? -1),
+        loop ? 1 : 0,
+        reverse ? 1 : 0,
+      ].join('|');
+
+      const prevState = loadVideoTimelineState.get(context.nodeId);
+      const state: LoadVideoTimelineState = prevState ?? {
+        signature: '',
+        lastPlay: false,
+        accumulatedMs: 0,
+        ended: false,
+        endedPulsePending: false,
       };
+
+      const settingsChanged = signature !== state.signature;
+      if (settingsChanged) {
+        state.signature = signature;
+        state.accumulatedMs = 0;
+        state.ended = false;
+        state.endedPulsePending = false;
+      }
+
+      const playActive = play;
+      const playRising = playActive && !state.lastPlay;
+
+      if (state.ended && playRising) {
+        state.accumulatedMs = 0;
+        state.ended = false;
+        state.endedPulsePending = false;
+      }
+
+      let durationSec: number | null = null;
+      if (!loop) {
+        if (reverse) {
+          const startPos = cursorForPlayback ?? (endClamped >= 0 ? endClamped : startClamped);
+          durationSec = Math.max(0, startPos - startClamped);
+        } else if (endClamped >= 0) {
+          const startPos = cursorForPlayback ?? startClamped;
+          durationSec = Math.max(0, endClamped - startPos);
+        }
+      }
+
+      const dtMs =
+        typeof context.deltaTime === 'number' && Number.isFinite(context.deltaTime)
+          ? Math.max(0, context.deltaTime)
+          : 0;
+
+      if (!loop && durationSec !== null && playActive && !state.ended) {
+        if (durationSec <= 0) {
+          state.ended = true;
+          state.endedPulsePending = true;
+        } else if (state.lastPlay) {
+          state.accumulatedMs += dtMs;
+          if (state.accumulatedMs >= durationSec * 1000) {
+            state.accumulatedMs = durationSec * 1000;
+            state.ended = true;
+            state.endedPulsePending = true;
+          }
+        }
+      }
+
+      const endedPulse = state.endedPulsePending;
+      state.endedPulsePending = false;
+      state.lastPlay = playActive;
+      loadVideoTimelineState.set(context.nodeId, state);
+
+      return { ref: refWithFit, ended: endedPulse };
     },
   };
 }
@@ -475,8 +625,8 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
         selection.selectedIds[0] ?? fallbackSelected[0] ?? deps.getClientId() ?? configured;
 
       const latest = primaryClientId
-        ? deps.getSensorForClientId?.(primaryClientId) ?? deps.getLatestSensor?.() ?? null
-        : deps.getLatestSensor?.() ?? null;
+        ? (deps.getSensorForClientId?.(primaryClientId) ?? deps.getLatestSensor?.() ?? null)
+        : (deps.getLatestSensor?.() ?? null);
       const sensors: ClientSensorMessage | null = latest
         ? {
             sensorType: latest.sensorType,
@@ -867,7 +1017,9 @@ function createLogicIfNode(): NodeDefinition {
       const conditionRaw = inputs.condition;
 
       const inputValue =
-        typeof inputRaw === 'number' && Number.isFinite(inputRaw) ? inputRaw : Number(inputRaw ?? 0);
+        typeof inputRaw === 'number' && Number.isFinite(inputRaw)
+          ? inputRaw
+          : Number(inputRaw ?? 0);
       const conditionValue =
         typeof conditionRaw === 'number' && Number.isFinite(conditionRaw)
           ? conditionRaw
@@ -907,7 +1059,9 @@ function createLogicForNode(): NodeDefinition {
       const endRaw = inputs.end;
 
       const startValue =
-        typeof startRaw === 'number' && Number.isFinite(startRaw) ? startRaw : Number(startRaw ?? 1);
+        typeof startRaw === 'number' && Number.isFinite(startRaw)
+          ? startRaw
+          : Number(startRaw ?? 1);
       const endValue =
         typeof endRaw === 'number' && Number.isFinite(endRaw) ? endRaw : Number(endRaw ?? 1);
 
@@ -958,11 +1112,10 @@ function createLogicSleepNode(): NodeDefinition {
       const parsed = typeof rawDelay === 'number' ? rawDelay : Number(rawDelay ?? 0);
       const delayMs = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 
-      const state =
-        logicSleepState.get(context.nodeId) ?? {
-          queue: [],
-          lastOutput: undefined,
-        };
+      const state = logicSleepState.get(context.nodeId) ?? {
+        queue: [],
+        lastOutput: undefined,
+      };
 
       state.queue.push({ time: context.time, value: inputs.input });
 
@@ -991,19 +1144,49 @@ function createToneLFONode(): NodeDefinition {
     label: 'Tone LFO',
     category: 'Audio',
     inputs: [
-      { id: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      {
+        id: 'frequencyHz',
+        label: 'Freq (Hz)',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        step: 0.01,
+      },
       { id: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
       { id: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
-      { id: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        id: 'amplitude',
+        label: 'Depth',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
       { id: 'waveform', label: 'Waveform', type: 'string' },
       { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     outputs: [{ id: 'value', label: 'Value', type: 'number' }],
     configSchema: [
-      { key: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      {
+        key: 'frequencyHz',
+        label: 'Freq (Hz)',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        step: 0.01,
+      },
       { key: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
       { key: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
-      { key: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        key: 'amplitude',
+        label: 'Depth',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
       {
         key: 'waveform',
         label: 'Waveform',
@@ -1021,7 +1204,9 @@ function createToneLFONode(): NodeDefinition {
       const min = typeof inputs.min === 'number' ? (inputs.min as number) : Number(config.min ?? 0);
       const max = typeof inputs.max === 'number' ? (inputs.max as number) : Number(config.max ?? 1);
       const amplitudeRaw =
-        typeof inputs.amplitude === 'number' ? (inputs.amplitude as number) : Number(config.amplitude ?? 1);
+        typeof inputs.amplitude === 'number'
+          ? (inputs.amplitude as number)
+          : Number(config.amplitude ?? 1);
       const amplitude = Number.isFinite(amplitudeRaw) ? Math.max(0, Math.min(1, amplitudeRaw)) : 1;
 
       const enabledRaw = inputs.enabled;
@@ -1052,7 +1237,7 @@ function createToneLFONode(): NodeDefinition {
           normalized = Math.sin(phase) >= 0 ? 1 : 0;
           break;
         case 'triangle':
-          normalized = Math.abs(((context.time / 1000) * freq * 2) % 2 - 1);
+          normalized = Math.abs((((context.time / 1000) * freq * 2) % 2) - 1);
           break;
         case 'sawtooth':
           normalized = ((context.time / 1000) * freq) % 1;
@@ -1173,10 +1358,11 @@ function createNumberStabilizerNode(): NodeDefinition {
       // Backward-compat: if smoothing <= 1, treat it as normalized smoothing (0..1),
       // otherwise interpret it as an explicit duration in ms.
       const durationMs =
-        smoothingFinite <= 1 ? 50 + Math.max(0, Math.min(1, smoothingFinite)) * 950 : Math.max(0, smoothingFinite);
+        smoothingFinite <= 1
+          ? 50 + Math.max(0, Math.min(1, smoothingFinite)) * 950
+          : Math.max(0, smoothingFinite);
 
-      const inputValue =
-        typeof raw === 'number' && Number.isFinite(raw) ? (raw as number) : 0;
+      const inputValue = typeof raw === 'number' && Number.isFinite(raw) ? (raw as number) : 0;
 
       const prev = stabilizerState.get(context.nodeId);
       if (!prev) {
@@ -1256,7 +1442,10 @@ function createToneOscNode(): NodeDefinition {
     process: (inputs, config) => {
       const ampInput = Number(inputs.amplitude ?? 0);
       const enabledRaw = inputs.enabled;
-      const enabled = typeof enabledRaw === 'number' ? enabledRaw >= 0.5 : enabledRaw ?? config.enabled ?? false;
+      const enabled =
+        typeof enabledRaw === 'number'
+          ? enabledRaw >= 0.5
+          : (enabledRaw ?? config.enabled ?? false);
       const value = enabled ? ampInput : 0;
       return { value };
     },
@@ -1407,7 +1596,10 @@ function createToneGranularNode(): NodeDefinition {
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
     ],
     process: (inputs, config) => {
-      const volume = typeof inputs.volume === 'number' ? (inputs.volume as number) : Number(config.volume ?? 0.6);
+      const volume =
+        typeof inputs.volume === 'number'
+          ? (inputs.volume as number)
+          : Number(config.volume ?? 0.6);
       return { value: volume };
     },
   };
@@ -1417,7 +1609,11 @@ const playMediaTriggerState = new Map<string, boolean>();
 const playMediaCommandCache = new Map<string, { signature: string; cmd: NodeCommand | null }>();
 
 function createPlayMediaNode(): NodeDefinition {
-  const resolveUrl = (inputs: Record<string, unknown>, config: Record<string, unknown>, key: string): string => {
+  const resolveUrl = (
+    inputs: Record<string, unknown>,
+    config: Record<string, unknown>,
+    key: string
+  ): string => {
     const fromInput = inputs[key];
     if (typeof fromInput === 'string' && fromInput.trim()) return fromInput.trim();
     const fromConfig = config[key];
@@ -1434,22 +1630,52 @@ function createPlayMediaNode(): NodeDefinition {
       { id: 'imageUrl', label: 'Image', type: 'string' },
       { id: 'videoUrl', label: 'Video', type: 'string' },
       { id: 'trigger', label: 'Trigger', type: 'number' },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        id: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'fadeIn', label: 'Fade In (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
       { id: 'muted', label: 'Video Muted', type: 'boolean', defaultValue: true },
-      { id: 'imageDuration', label: 'Image Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 100 },
+      {
+        id: 'imageDuration',
+        label: 'Image Duration (ms)',
+        type: 'number',
+        defaultValue: 0,
+        min: 0,
+        step: 100,
+      },
     ],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [
       { key: 'audioUrl', label: 'Audio URL', type: 'string', defaultValue: '' },
       { key: 'imageUrl', label: 'Image URL', type: 'string', defaultValue: '' },
       { key: 'videoUrl', label: 'Video URL', type: 'string', defaultValue: '' },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        key: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { key: 'fadeIn', label: 'Fade In (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
       { key: 'muted', label: 'Video Muted', type: 'boolean', defaultValue: true },
-      { key: 'imageDuration', label: 'Image Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 100 },
+      {
+        key: 'imageDuration',
+        label: 'Image Duration (ms)',
+        type: 'number',
+        defaultValue: 0,
+        min: 0,
+        step: 100,
+      },
     ],
     process: (inputs, config, context) => {
       const triggerRaw = inputs.trigger;
@@ -1468,14 +1694,19 @@ function createPlayMediaNode(): NodeDefinition {
       const videoUrl = resolveUrl(inputs, config, 'videoUrl');
       const audioUrl = resolveUrl(inputs, config, 'audioUrl');
 
-      const volumeRaw = typeof inputs.volume === 'number' ? inputs.volume : Number(config.volume ?? 1);
+      const volumeRaw =
+        typeof inputs.volume === 'number' ? inputs.volume : Number(config.volume ?? 1);
       const volume = Number.isFinite(volumeRaw) ? Math.max(0, Math.min(1, volumeRaw)) : 1;
       const loop = typeof inputs.loop === 'boolean' ? inputs.loop : Boolean(config.loop ?? false);
-      const fadeInRaw = typeof inputs.fadeIn === 'number' ? inputs.fadeIn : Number(config.fadeIn ?? 0);
+      const fadeInRaw =
+        typeof inputs.fadeIn === 'number' ? inputs.fadeIn : Number(config.fadeIn ?? 0);
       const fadeIn = Number.isFinite(fadeInRaw) ? Math.max(0, fadeInRaw) : 0;
-      const muted = typeof inputs.muted === 'boolean' ? inputs.muted : Boolean(config.muted ?? true);
+      const muted =
+        typeof inputs.muted === 'boolean' ? inputs.muted : Boolean(config.muted ?? true);
       const imageDurationRaw =
-        typeof inputs.imageDuration === 'number' ? inputs.imageDuration : Number(config.imageDuration ?? 0);
+        typeof inputs.imageDuration === 'number'
+          ? inputs.imageDuration
+          : Number(config.imageDuration ?? 0);
       const imageDuration =
         Number.isFinite(imageDurationRaw) && imageDurationRaw > 0 ? imageDurationRaw : undefined;
 
@@ -1654,9 +1885,13 @@ function createScreenColorProcessorNode(): NodeDefinition {
           ? String(inputs.secondary)
           : String(config.secondary ?? '#ffffff');
       const maxOpacity =
-        typeof inputs.maxOpacity === 'number' ? (inputs.maxOpacity as number) : Number(config.maxOpacity ?? 1);
+        typeof inputs.maxOpacity === 'number'
+          ? (inputs.maxOpacity as number)
+          : Number(config.maxOpacity ?? 1);
       const minOpacity =
-        typeof inputs.minOpacity === 'number' ? (inputs.minOpacity as number) : Number(config.minOpacity ?? 0);
+        typeof inputs.minOpacity === 'number'
+          ? (inputs.minOpacity as number)
+          : Number(config.minOpacity ?? 0);
       const fallbackWaveform = String(config.waveform ?? 'sine');
       const waveform = (() => {
         const v = inputs.waveform;
@@ -1731,11 +1966,17 @@ function createSynthUpdateProcessorNode(): NodeDefinition {
     ],
     process: (inputs, config) => {
       const frequency =
-        typeof inputs.frequency === 'number' ? (inputs.frequency as number) : Number(config.frequency ?? 180);
+        typeof inputs.frequency === 'number'
+          ? (inputs.frequency as number)
+          : Number(config.frequency ?? 180);
       const volume =
-        typeof inputs.volume === 'number' ? (inputs.volume as number) : Number(config.volume ?? 0.7);
+        typeof inputs.volume === 'number'
+          ? (inputs.volume as number)
+          : Number(config.volume ?? 0.7);
       const depthRaw =
-        typeof inputs.modDepth === 'number' ? (inputs.modDepth as number) : Number(config.modDepth ?? 0);
+        typeof inputs.modDepth === 'number'
+          ? (inputs.modDepth as number)
+          : Number(config.modDepth ?? 0);
       const depth = Math.max(0, Math.min(1, depthRaw));
       const modFrequency =
         typeof inputs.modFrequency === 'number'
@@ -1785,6 +2026,8 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
     inputs: [
       { id: 'index', label: 'Index', type: 'number' },
       { id: 'sceneId', label: 'Scene', type: 'string' },
+      { id: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
+      { id: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
     ],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [
@@ -1798,6 +2041,8 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
           { value: 'mel-scene', label: 'Mel Spectrogram' },
         ],
       },
+      { key: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
+      { key: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
     ],
     process: (inputs, config) => {
       const sceneId = (() => {
@@ -1809,7 +2054,33 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
         }
         return String(config.sceneId ?? 'box-scene');
       })();
-      return { cmd: { action: 'visualSceneSwitch', payload: { sceneId } } };
+
+      // Mirror the console "Scene & Effects" controls (ASCII overlay + resolution).
+      const asciiEnabled = (() => {
+        const fromInput = inputs.asciiEnabled;
+        if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return fromInput >= 0.5;
+        if (typeof fromInput === 'boolean') return fromInput;
+        const fromConfig = (config as any).asciiEnabled;
+        if (typeof fromConfig === 'number' && Number.isFinite(fromConfig)) return fromConfig >= 0.5;
+        if (typeof fromConfig === 'boolean') return fromConfig;
+        return true;
+      })();
+
+      const asciiResolution = (() => {
+        const fromInput = inputs.asciiResolution;
+        const fromConfig = (config as any).asciiResolution;
+        const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 11);
+        const clamped = Number.isFinite(raw) ? Math.max(6, Math.min(24, raw)) : 11;
+        return Math.round(clamped);
+      })();
+
+      return {
+        cmd: [
+          { action: 'visualSceneSwitch', payload: { sceneId } },
+          { action: 'asciiMode', payload: { enabled: asciiEnabled } },
+          { action: 'asciiResolution', payload: { cellSize: asciiResolution } },
+        ],
+      };
     },
   };
 }

@@ -304,11 +304,31 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
           })
         );
       } else if (field.type === 'boolean') {
+        const initial = (() => {
+          const coerceBoolean = (value: unknown): boolean | null => {
+            if (typeof value === 'boolean') return value;
+            if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+            if (typeof value === 'string') {
+              const s = value.trim().toLowerCase();
+              if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+              if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+            }
+            return null;
+          };
+
+          const fromCurrent = coerceBoolean(current);
+          if (fromCurrent !== null) return fromCurrent;
+
+          const fallback = coerceBoolean(field.defaultValue);
+          if (fallback !== null) return fallback;
+          return false;
+        })();
+
         node.addControl(
           key,
           new BooleanControl({
             label: field.label,
-            initial: Boolean(current),
+            initial,
             change: (value) => {
               nodeEngine.updateNodeConfig(instance.id, { [key]: value });
               sendNodeOverride(instance.id, 'config', key, value);

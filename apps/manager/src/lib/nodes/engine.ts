@@ -66,6 +66,8 @@ class NodeEngineClass {
   private offloadedPatchNodeIds = new Set<string>();
   private deployedLoopIds = new Set<string>();
   private disabledNodeIds = new Set<string>();
+  // Track UI-only playheads for time-range controls (e.g. asset playback) so patch retargets can resume mid-play.
+  private timeRangePlayheadSecByNodeId = new Map<string, number>();
 
   // Stores for UI observation
   public graphState: Writable<GraphState> = writable({ nodes: [], connections: [] });
@@ -96,6 +98,27 @@ class NodeEngineClass {
 
     this.syncGraphState();
     this.updateLocalLoops();
+  }
+
+  // ========== UI Playheads ==========
+
+  setTimeRangePlayheadSec(nodeId: string, cursorSec: number | null | undefined): void {
+    const id = String(nodeId ?? '');
+    if (!id) return;
+    if (cursorSec === null || cursorSec === undefined) {
+      this.timeRangePlayheadSecByNodeId.delete(id);
+      return;
+    }
+    const next = typeof cursorSec === 'number' ? cursorSec : Number(cursorSec);
+    if (!Number.isFinite(next) || next < 0) return;
+    this.timeRangePlayheadSecByNodeId.set(id, next);
+  }
+
+  getTimeRangePlayheadSec(nodeId: string): number | null {
+    const id = String(nodeId ?? '');
+    if (!id) return null;
+    const value = this.timeRangePlayheadSecByNodeId.get(id);
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 
   // ========== Graph Manipulation ==========
@@ -192,7 +215,9 @@ class NodeEngineClass {
     const nextNodes = nodes.map((node) => {
       const nextOptions = nextOptionsByNodeId.get(String(node.id));
       if (!nextOptions) return node;
-      const raw = Array.isArray((node.config as any)?.options) ? ((node.config as any).options as unknown[]) : [];
+      const raw = Array.isArray((node.config as any)?.options)
+        ? ((node.config as any).options as unknown[])
+        : [];
       const currentOptions = raw.map((value) => String(value)).filter((value) => value !== '');
       if (optionsEqual(currentOptions, nextOptions)) return node;
       changed = true;
@@ -209,7 +234,8 @@ class NodeEngineClass {
     const snapshot = this.runtime.exportGraph();
 
     const inputAlreadyConnected = snapshot.connections.some(
-      (c) => c.targetNodeId === connection.targetNodeId && c.targetPortId === connection.targetPortId
+      (c) =>
+        c.targetNodeId === connection.targetNodeId && c.targetPortId === connection.targetPortId
     );
     if (inputAlreadyConnected) {
       this.lastError.set('The "in port" is connected up to once');
@@ -249,11 +275,17 @@ class NodeEngineClass {
     // Audio ports are never compatible with "any" to prevent accidental numeric/string links.
     // This matches the plan's intent: audio wires only connect to audio wires.
     const audioMismatch =
-      sourceType === 'audio' || targetType === 'audio' ? sourceType !== 'audio' || targetType !== 'audio' : false;
+      sourceType === 'audio' || targetType === 'audio'
+        ? sourceType !== 'audio' || targetType !== 'audio'
+        : false;
     const imageMismatch =
-      sourceType === 'image' || targetType === 'image' ? sourceType !== 'image' || targetType !== 'image' : false;
+      sourceType === 'image' || targetType === 'image'
+        ? sourceType !== 'image' || targetType !== 'image'
+        : false;
     const videoMismatch =
-      sourceType === 'video' || targetType === 'video' ? sourceType !== 'video' || targetType !== 'video' : false;
+      sourceType === 'video' || targetType === 'video'
+        ? sourceType !== 'video' || targetType !== 'video'
+        : false;
     if (typeMismatch) {
       this.lastError.set(
         `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
@@ -402,7 +434,9 @@ class NodeEngineClass {
         if (String(node.type) !== 'cmd-aggregator') continue;
         const raw = (node.config as any)?.inCount;
         const configured = typeof raw === 'number' ? raw : Number(raw);
-        const configuredCount = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 1;
+        const configuredCount = Number.isFinite(configured)
+          ? Math.max(1, Math.floor(configured))
+          : 1;
         const required = maxConnectedInputIndexFor(String(node.id));
         const next = Math.min(cmdAggMax, Math.max(configuredCount, required, 1));
         if (next !== configuredCount) {
@@ -768,7 +802,10 @@ class NodeEngineClass {
       if (cap) caps.add(cap);
     }
 
-    const nodeKey = patch.graph.nodes.map((n) => String(n.id)).sort().join(',');
+    const nodeKey = patch.graph.nodes
+      .map((n) => String(n.id))
+      .sort()
+      .join(',');
     const patchId = `patch:${rootType}:${patch.rootNodeId}:${hashString(nodeKey)}`;
 
     return {

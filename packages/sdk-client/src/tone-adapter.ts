@@ -106,6 +106,11 @@ type TonePlayerInstance = {
   autostarted: boolean;
   lastTrigger: boolean;
   loading: boolean;
+  ended: boolean;
+  // One-tick pulse consumed by the node graph when playback naturally stops (reaches End).
+  endedPulsePending: boolean;
+  // Set before calling `player.stop()` so `onstop` can distinguish manual stops from natural ends.
+  manualStopPending: boolean;
   lastUrl: string | null;
   lastClip: { startSec: number; endSec: number; loop: boolean; reverse: boolean } | null;
   lastCursorSec: number | null;
@@ -282,7 +287,9 @@ function updateAudioGraphSnapshot(
     isToneLfoConnection(conn, latestGraphNodesById)
   );
   latestToneLfoDesiredTargets = new Set(
-    latestToneLfoConnections.map((conn) => toneLfoTargetKey(String(conn.targetNodeId), String(conn.targetPortId)))
+    latestToneLfoConnections.map((conn) =>
+      toneLfoTargetKey(String(conn.targetNodeId), String(conn.targetPortId))
+    )
   );
 
   latestExplicitNodeIds = new Set();
@@ -658,7 +665,10 @@ function maybeStopTransport(): void {
   }
 }
 
-function parseLoopPattern(raw: unknown, defaults: { frequency: number; amplitude: number }): ParsedLoop | null {
+function parseLoopPattern(
+  raw: unknown,
+  defaults: { frequency: number; amplitude: number }
+): ParsedLoop | null {
   if (raw == null) return null;
 
   let value: unknown = raw;
@@ -889,7 +899,14 @@ function createToneLfoInstance(
 
 function updateToneLfoInstance(
   instance: ToneLfoInstance,
-  params: { frequencyHz: number; min: number; max: number; amplitude: number; waveform: string; enabled: boolean }
+  params: {
+    frequencyHz: number;
+    min: number;
+    max: number;
+    amplitude: number;
+    waveform: string;
+    enabled: boolean;
+  }
 ): void {
   const min = Math.min(params.min, params.max);
   const max = Math.max(params.min, params.max);
@@ -1076,7 +1093,12 @@ function createPitchEffect(
   };
 }
 
-function createResonatorEffect(delayTime: number, resonance: number, dampening: number, wet: number): EffectWrapper {
+function createResonatorEffect(
+  delayTime: number,
+  resonance: number,
+  dampening: number,
+  wet: number
+): EffectWrapper {
   const input = new toneModule!.Gain({ gain: 1 });
   const comb = new toneModule!.LowpassCombFilter({ delayTime, resonance, dampening });
   const crossfade = new toneModule!.CrossFade({ fade: wet });
@@ -1115,10 +1137,21 @@ function createEffectInstance(
       wrapper = createReverbEffect(params.decay, params.preDelay, params.wet);
       break;
     case 'tone-pitch':
-      wrapper = createPitchEffect(params.pitch, params.windowSize, params.delayTime, params.feedback, params.wet);
+      wrapper = createPitchEffect(
+        params.pitch,
+        params.windowSize,
+        params.delayTime,
+        params.feedback,
+        params.wet
+      );
       break;
     case 'tone-resonator':
-      wrapper = createResonatorEffect(params.delayTime, params.resonance, params.dampening, params.wet);
+      wrapper = createResonatorEffect(
+        params.delayTime,
+        params.resonance,
+        params.dampening,
+        params.wet
+      );
       break;
   }
 
@@ -1183,7 +1216,10 @@ function updateEffectInstance(
       if (instance.lastParams.time !== time && !isToneLfoTargetActive(instance.nodeId, 'time')) {
         effect.delayTime.rampTo(time, DEFAULT_RAMP_SECONDS);
       }
-      if (instance.lastParams.feedback !== feedback && !isToneLfoTargetActive(instance.nodeId, 'feedback')) {
+      if (
+        instance.lastParams.feedback !== feedback &&
+        !isToneLfoTargetActive(instance.nodeId, 'feedback')
+      ) {
         effect.feedback.rampTo(feedback, DEFAULT_RAMP_SECONDS);
       }
       if (
@@ -1202,8 +1238,10 @@ function updateEffectInstance(
       const wet = nextParams.wet;
       if (instance.lastParams.decay !== decay) effect.decay = decay;
       if (instance.lastParams.preDelay !== preDelay) effect.preDelay = preDelay;
-      if (!instance.pendingGenerate &&
-        (instance.lastParams.decay !== decay || instance.lastParams.preDelay !== preDelay)) {
+      if (
+        !instance.pendingGenerate &&
+        (instance.lastParams.decay !== decay || instance.lastParams.preDelay !== preDelay)
+      ) {
         instance.pendingGenerate = true;
         void effect
           .generate()
@@ -1249,7 +1287,10 @@ function updateEffectInstance(
       const resonance = nextParams.resonance;
       const dampening = nextParams.dampening;
       const wet = nextParams.wet;
-      if (instance.lastParams.delayTime !== delayTime && !isToneLfoTargetActive(instance.nodeId, 'delayTime')) {
+      if (
+        instance.lastParams.delayTime !== delayTime &&
+        !isToneLfoTargetActive(instance.nodeId, 'delayTime')
+      ) {
         comb.delayTime.rampTo(delayTime, DEFAULT_RAMP_SECONDS);
       }
       if (instance.lastParams.resonance !== resonance) comb.resonance = resonance;
@@ -1357,10 +1398,45 @@ function createPlayerInstance(
     autostarted: false,
     lastTrigger: false,
     loading: true,
+    ended: false,
+    endedPulsePending: false,
+    manualStopPending: false,
     lastUrl: url,
     lastClip: null,
     lastCursorSec: null,
     lastParams: { ...params },
+  };
+
+  player.onstop = () => {
+    const inst = playerInstances.get(nodeId);
+    if (!inst) return;
+    if (inst.manualStopPending) {
+      inst.manualStopPending = false;
+      return;
+    }
+    if (inst.ended) return;
+    if (inst.lastParams.loop) return;
+    if (!inst.enabled) return;
+
+    inst.ended = true;
+    inst.endedPulsePending = true;
+    inst.started = false;
+    inst.startedAt = 0;
+
+    const reverse = Boolean(inst.lastParams.reverse ?? false);
+    if (
+      typeof inst.startDurationSec === 'number' &&
+      Number.isFinite(inst.startDurationSec) &&
+      inst.startDurationSec >= 0
+    ) {
+      const endPos = reverse
+        ? inst.startOffsetSec - inst.startDurationSec
+        : inst.startOffsetSec + inst.startDurationSec;
+      inst.pausedOffsetSec = Number.isFinite(endPos) ? Math.max(0, endPos) : inst.pausedOffsetSec;
+    }
+
+    inst.startOffsetSec = 0;
+    inst.startDurationSec = null;
   };
 
   playerInstances.set(nodeId, instance);
@@ -1450,9 +1526,10 @@ function disposePlayerInstance(nodeId: string): void {
   const inst = playerInstances.get(nodeId);
   if (!inst) return;
   try {
+    inst.manualStopPending = true;
     inst.player?.stop();
   } catch {
-    // ignore
+    inst.manualStopPending = false;
   }
   try {
     inst.player?.dispose();
@@ -1639,10 +1716,25 @@ export function registerToneClientDefinitions(
     ],
     outputs: [{ id: 'value', label: 'Value', type: 'number' }],
     configSchema: [
-      { key: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1, min: 0, step: 0.01 },
+      {
+        key: 'frequencyHz',
+        label: 'Freq (Hz)',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        step: 0.01,
+      },
       { key: 'min', label: 'Min', type: 'number', defaultValue: 0, step: 0.01 },
       { key: 'max', label: 'Max', type: 'number', defaultValue: 1, step: 0.01 },
-      { key: 'amplitude', label: 'Depth', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      {
+        key: 'amplitude',
+        label: 'Depth',
+        type: 'number',
+        defaultValue: 1,
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
       {
         key: 'waveform',
         label: 'Waveform',
@@ -1688,7 +1780,7 @@ export function registerToneClientDefinitions(
           normalized = Math.sin(phase) >= 0 ? 1 : 0;
           break;
         case 'triangle':
-          normalized = Math.abs(((context.time / 1000) * frequencyHz * 2) % 2 - 1);
+          normalized = Math.abs((((context.time / 1000) * frequencyHz * 2) % 2) - 1);
           break;
         case 'sawtooth':
           normalized = ((context.time / 1000) * frequencyHz) % 1;
@@ -1711,7 +1803,9 @@ export function registerToneClientDefinitions(
         return { value };
       }
 
-      const hasTargets = latestToneLfoConnections.some((conn) => conn.sourceNodeId === context.nodeId);
+      const hasTargets = latestToneLfoConnections.some(
+        (conn) => conn.sourceNodeId === context.nodeId
+      );
       if (!hasTargets) {
         if (lfoInstances.has(context.nodeId)) disposeToneLfoInstance(context.nodeId);
         return { value };
@@ -1720,7 +1814,13 @@ export function registerToneClientDefinitions(
       const params = { frequencyHz, min, max, amplitude: depth, waveform, enabled: true };
       const instance = lfoInstances.get(context.nodeId);
       if (!instance) {
-        createToneLfoInstance(context.nodeId, { frequencyHz, min, max, amplitude: depth, waveform });
+        createToneLfoInstance(context.nodeId, {
+          frequencyHz,
+          min,
+          max,
+          amplitude: depth,
+          waveform,
+        });
       } else {
         updateToneLfoInstance(instance, params);
       }
@@ -1759,9 +1859,7 @@ export function registerToneClientDefinitions(
     if (!toneAudioEngine.isEnabled()) return { out: inputValue };
 
     if (!toneModule) {
-      void ensureTone().catch((error) =>
-        console.warn('[tone-adapter] Tone.js load failed', error)
-      );
+      void ensureTone().catch((error) => console.warn('[tone-adapter] Tone.js load failed', error));
       return { out: inputValue };
     }
 
@@ -1798,13 +1896,12 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) =>
-      effectProcess(
-        'tone-delay',
-        inputs,
-        config,
-        context,
-        { time: 0.25, feedback: 0.35, wet: 0.3, order: 10 }
-      ),
+      effectProcess('tone-delay', inputs, config, context, {
+        time: 0.25,
+        feedback: 0.35,
+        wet: 0.3,
+        order: 10,
+      }),
   });
 
   registry.register({
@@ -1832,13 +1929,13 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) =>
-      effectProcess(
-        'tone-resonator',
-        inputs,
-        config,
-        context,
-        { delayTime: 0.08, resonance: 0.6, dampening: 3000, wet: 0.4, order: 20 }
-      ),
+      effectProcess('tone-resonator', inputs, config, context, {
+        delayTime: 0.08,
+        resonance: 0.6,
+        dampening: 3000,
+        wet: 0.4,
+        order: 20,
+      }),
   });
 
   registry.register({
@@ -1868,13 +1965,14 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) =>
-      effectProcess(
-        'tone-pitch',
-        inputs,
-        config,
-        context,
-        { pitch: 0, windowSize: 0.1, delayTime: 0, feedback: 0, wet: 0.3, order: 30 }
-      ),
+      effectProcess('tone-pitch', inputs, config, context, {
+        pitch: 0,
+        windowSize: 0.1,
+        delayTime: 0,
+        feedback: 0,
+        wet: 0.3,
+        order: 30,
+      }),
   });
 
   registry.register({
@@ -1900,13 +1998,12 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) =>
-      effectProcess(
-        'tone-reverb',
-        inputs,
-        config,
-        context,
-        { decay: 1.6, preDelay: 0.01, wet: 0.3, order: 40 }
-      ),
+      effectProcess('tone-reverb', inputs, config, context, {
+        decay: 1.6,
+        preDelay: 0.01,
+        wet: 0.3,
+        order: 40,
+      }),
   });
 
   registry.register({
@@ -2008,12 +2105,14 @@ export function registerToneClientDefinitions(
         scheduleGraphWiring();
       }
 
-      if (instance.lastParams.playbackRate !== playbackRate) instance.player.playbackRate = playbackRate;
+      if (instance.lastParams.playbackRate !== playbackRate)
+        instance.player.playbackRate = playbackRate;
       if (instance.lastParams.detune !== detune) instance.player.detune = detune;
       if (instance.lastParams.grainSize !== grainSize) instance.player.grainSize = grainSize;
       if (instance.lastParams.overlap !== overlap) instance.player.overlap = overlap;
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
-      if (instance.lastParams.volume !== volume) instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
+      if (instance.lastParams.volume !== volume)
+        instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
 
       if (instance.enabled !== enabled) {
         instance.enabled = enabled;
@@ -2046,7 +2145,14 @@ export function registerToneClientDefinitions(
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
       { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
@@ -2054,7 +2160,10 @@ export function registerToneClientDefinitions(
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
+    outputs: [
+      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
     configSchema: [
       {
         key: 'assetId',
@@ -2095,7 +2204,9 @@ export function registerToneClientDefinitions(
 
       const cursorRequestedRaw = toNumber(inputs.cursorSec, -1);
       const cursorRequested =
-        typeof cursorRequestedRaw === 'number' && Number.isFinite(cursorRequestedRaw) && cursorRequestedRaw >= 0
+        typeof cursorRequestedRaw === 'number' &&
+        Number.isFinite(cursorRequestedRaw) &&
+        cursorRequestedRaw >= 0
           ? cursorRequestedRaw
           : null;
       const busName = (() => {
@@ -2105,21 +2216,22 @@ export function registerToneClientDefinitions(
       })();
 
       const outValue = assetRef ? (enabled ? 1 : 0) : 0;
+      let endedPulse = false;
 
       if (!toneAudioEngine.isEnabled()) {
-        return { ref: outValue };
+        return { ref: outValue, ended: false };
       }
 
       if (!toneModule) {
         void ensureTone().catch((error) =>
           console.warn('[tone-adapter] Tone.js load failed', error)
         );
-        return { ref: outValue };
+        return { ref: outValue, ended: false };
       }
 
       if (!url) {
         disposePlayerInstance(context.nodeId);
-        return { ref: outValue };
+        return { ref: outValue, ended: false };
       }
 
       let instance = playerInstances.get(context.nodeId);
@@ -2135,7 +2247,13 @@ export function registerToneClientDefinitions(
         instance = createPlayerInstance(context.nodeId, url, busName, params);
       }
 
+      if (instance.endedPulsePending) {
+        endedPulse = true;
+        instance.endedPulsePending = false;
+      }
+
       if (instance.lastUrl !== url && url) {
+        const wasStarted = instance.started;
         instance.lastUrl = url;
         instance.loading = true;
         instance.autostarted = false;
@@ -2146,10 +2264,14 @@ export function registerToneClientDefinitions(
         instance.pausedOffsetSec = null;
         instance.lastClip = null;
         instance.lastCursorSec = null;
+        instance.ended = false;
+        instance.endedPulsePending = false;
+        instance.manualStopPending = false;
         try {
+          if (wasStarted) instance.manualStopPending = true;
           instance.player.stop();
         } catch {
-          // ignore
+          instance.manualStopPending = false;
         }
         void instance.player
           .load(url)
@@ -2175,10 +2297,12 @@ export function registerToneClientDefinitions(
         scheduleGraphWiring();
       }
 
-      if (instance.lastParams.playbackRate !== playbackRate) instance.player.playbackRate = playbackRate;
+      if (instance.lastParams.playbackRate !== playbackRate)
+        instance.player.playbackRate = playbackRate;
       if (instance.lastParams.detune !== detune) instance.player.detune = detune;
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
-      if (instance.lastParams.volume !== volume) instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
+      if (instance.lastParams.volume !== volume)
+        instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
 
       const clipStartRaw = Math.max(0, toNumber(inputs.startSec, 0));
       const clipEndRaw = toNumber(inputs.endSec, -1);
@@ -2194,7 +2318,8 @@ export function registerToneClientDefinitions(
         }
       })();
 
-      const clipStart = bufferDuration !== null ? clamp(clipStartRaw, 0, bufferDuration) : clipStartRaw;
+      const clipStart =
+        bufferDuration !== null ? clamp(clipStartRaw, 0, bufferDuration) : clipStartRaw;
       const clipEnd =
         clipEndCandidate >= 0
           ? bufferDuration !== null
@@ -2214,6 +2339,8 @@ export function registerToneClientDefinitions(
         instance.lastClip.endSec !== nextClip.endSec ||
         instance.lastClip.loop !== nextClip.loop ||
         instance.lastClip.reverse !== nextClip.reverse;
+
+      if (clipChanged) instance.ended = false;
 
       const cursorClamped = (() => {
         if (cursorRequested === null) return null;
@@ -2283,11 +2410,13 @@ export function registerToneClientDefinitions(
         if (loop && resolvedClipDuration && resolvedClipDuration > 0 && resolvedClipEnd !== null) {
           if (activeReverse) {
             const rel = resolvedClipEnd - rawPos;
-            const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
+            const wrapped =
+              ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
             pausedOffset = resolvedClipEnd - wrapped;
           } else {
             const rel = rawPos - clipStart;
-            const wrapped = ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
+            const wrapped =
+              ((rel % resolvedClipDuration) + resolvedClipDuration) % resolvedClipDuration;
             pausedOffset = clipStart + wrapped;
           }
         } else if (resolvedClipEnd !== null) {
@@ -2298,9 +2427,10 @@ export function registerToneClientDefinitions(
 
         instance.pausedOffsetSec = pausedOffset;
         try {
+          instance.manualStopPending = true;
           instance.player.stop();
         } catch {
-          // ignore
+          instance.manualStopPending = false;
         }
         instance.started = false;
         instance.startedAt = 0;
@@ -2312,9 +2442,14 @@ export function registerToneClientDefinitions(
 
       const startFromPosition = (pos: number, reason: string) => {
         if (!canStartNow) return;
+        const wasStarted = instance.started;
+        instance.ended = false;
+        instance.endedPulsePending = false;
         applyClipToPlayer();
         const nextPos =
-          resolvedClipEnd !== null ? clamp(Math.max(0, pos), clipStart, resolvedClipEnd) : Math.max(clipStart, pos);
+          resolvedClipEnd !== null
+            ? clamp(Math.max(0, pos), clipStart, resolvedClipEnd)
+            : Math.max(clipStart, pos);
         const dur =
           !loop && resolvedClipEnd !== null
             ? reverse
@@ -2323,9 +2458,11 @@ export function registerToneClientDefinitions(
             : null;
         if (dur !== null && dur <= 0) {
           try {
+            instance.manualStopPending = false;
+            if (instance.started) instance.manualStopPending = true;
             instance.player.stop();
           } catch {
-            // ignore
+            instance.manualStopPending = false;
           }
           instance.started = false;
           instance.startedAt = 0;
@@ -2338,9 +2475,12 @@ export function registerToneClientDefinitions(
         const offset = reverse ? bufferDuration! - nextPos : nextPos;
 
         try {
-          if (instance.started) instance.player.stop();
+          if (instance.started) {
+            instance.manualStopPending = true;
+            instance.player.stop();
+          }
         } catch {
-          // ignore
+          instance.manualStopPending = false;
         }
 
         try {
@@ -2351,6 +2491,23 @@ export function registerToneClientDefinitions(
           instance.startOffsetSec = nextPos;
           instance.startDurationSec = dur;
           instance.pausedOffsetSec = null;
+
+          if (!wasStarted && deps.sdk) {
+            try {
+              deps.sdk.sendSensorData(
+                'custom',
+                {
+                  kind: 'node-media',
+                  event: 'started',
+                  nodeId: context.nodeId,
+                  nodeType: 'load-audio-from-assets',
+                } as any,
+                { trackLatest: false }
+              );
+            } catch {
+              // ignore
+            }
+          }
         } catch (err) {
           console.warn('[tone-adapter] player start failed', { reason }, err);
         }
@@ -2358,10 +2515,13 @@ export function registerToneClientDefinitions(
 
       const cursorChanged =
         cursorClamped !== null &&
-        (instance.lastCursorSec === null || Math.abs(cursorClamped - instance.lastCursorSec) > 0.005);
+        (instance.lastCursorSec === null ||
+          Math.abs(cursorClamped - instance.lastCursorSec) > 0.005);
 
       if (!enabled) {
         stopAndMaybePause();
+        instance.ended = false;
+        instance.endedPulsePending = false;
         if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
       } else {
         if (clipChanged && instance.started) {
@@ -2379,6 +2539,13 @@ export function registerToneClientDefinitions(
           instance.pausedOffsetSec = null;
           startFromPosition(cursorClamped ?? segmentStart, 'seek');
         } else if (!instance.started && !instance.loading) {
+          if (instance.ended) {
+            instance.lastClip = nextClip;
+            instance.lastParams = { ...instance.lastParams, ...params, reverse };
+            instance.lastCursorSec = cursorClamped;
+            instance.enabled = enabled;
+            return { ref: outValue, ended: endedPulse };
+          }
           const resumeOffset = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
           startFromPosition(
             resumeOffset,
@@ -2392,7 +2559,7 @@ export function registerToneClientDefinitions(
       instance.lastParams = { ...instance.lastParams, ...params, reverse };
       instance.lastCursorSec = cursorClamped;
 
-      return { ref: outValue };
+      return { ref: outValue, ended: endedPulse };
     },
   });
 
@@ -2428,7 +2595,11 @@ export function registerToneClientDefinitions(
       latestToneLfoActiveTargets = new Set();
       maybeStopTransport();
     },
-    syncActiveNodes: (activeNodeIds: Set<string>, nodes: NodeInstance[], connections: Connection[]) => {
+    syncActiveNodes: (
+      activeNodeIds: Set<string>,
+      nodes: NodeInstance[],
+      connections: Connection[]
+    ) => {
       updateAudioGraphSnapshot(registry, nodes ?? [], connections ?? []);
       for (const nodeId of Array.from(oscInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposeOscInstance(nodeId);

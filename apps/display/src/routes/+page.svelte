@@ -20,6 +20,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     destroyDisplay,
     executeControl,
     enableAudio,
+    reportNodeMediaStarted,
   } from '$lib/stores/display';
 
   let serverUrl = 'https://localhost:3001';
@@ -72,6 +73,8 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
       endSec={$videoState.endSec}
       cursorSec={$videoState.cursorSec}
       reverse={$videoState.reverse}
+      sourceNodeId={$videoState.sourceNodeId}
+      onStarted={reportNodeMediaStarted}
     />
   {/if}
 

@@ -2,26 +2,41 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { ClassicPreset } from 'rete';
-  import { audienceClients, clientReadiness, sensorData, state as managerState } from '$lib/stores/manager';
+  import {
+    audienceClients,
+    clientReadiness,
+    nodeMediaSignals,
+    sensorData,
+    state as managerState,
+  } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
   import { midiNodeBridge, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
-  import { getAudioSpectrogramDataUrl, getMediaDurationSec } from '$lib/features/assets/media-timeline-preview';
+  import {
+    getAudioSpectrogramDataUrl,
+    getMediaDurationSec,
+  } from '$lib/features/assets/media-timeline-preview';
 
   export let data: any;
   $: isInline = Boolean((data as any)?.inline);
-  $: inputControlLabel = data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
+  $: inputControlLabel =
+    data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
   $: numberInputMin =
-    data instanceof ClassicPreset.InputControl && data.type === 'number' ? (data as any).min : undefined;
+    data instanceof ClassicPreset.InputControl && data.type === 'number'
+      ? (data as any).min
+      : undefined;
   $: numberInputMax =
-    data instanceof ClassicPreset.InputControl && data.type === 'number' ? (data as any).max : undefined;
+    data instanceof ClassicPreset.InputControl && data.type === 'number'
+      ? (data as any).max
+      : undefined;
   $: numberInputStep =
     data instanceof ClassicPreset.InputControl && data.type === 'number'
       ? ((data as any).step ?? 'any')
       : undefined;
   const graphStateStore = nodeEngine.graphState;
+  const isRunningStore = nodeEngine.isRunning;
   const tickTimeStore = nodeEngine.tickTime;
   const midiLearnModeStore = midiNodeBridge.learnMode;
   const midiLastMessageStore = midiService.lastMessage;
@@ -99,8 +114,7 @@
   function buildAssetOptions(kind: string): { value: string; label: string }[] {
     const list = ($assetsStore?.assets ?? []) as any[];
     const k = kind && typeof kind === 'string' ? kind : 'any';
-    const filtered =
-      k === 'any' ? list : list.filter((a) => String(a?.kind ?? '') === k);
+    const filtered = k === 'any' ? list : list.filter((a) => String(a?.kind ?? '') === k);
     return filtered.map((a) => ({
       value: String(a?.id ?? ''),
       label: `${String(a?.originalName ?? a?.id ?? '')}`,
@@ -174,7 +188,8 @@
     if (portId === 'gyroB') return isAngle ? formatValue(payload.beta) : fallbackNumber;
     if (portId === 'gyroG') return isAngle ? formatValue(payload.gamma) : fallbackNumber;
 
-    if (portId === 'micVol') return msg.sensorType === 'mic' ? formatValue(payload.volume) : fallbackNumber;
+    if (portId === 'micVol')
+      return msg.sensorType === 'mic' ? formatValue(payload.volume) : fallbackNumber;
     if (portId === 'micLow')
       return msg.sensorType === 'mic' ? formatValue(payload.lowEnergy) : fallbackNumber;
     if (portId === 'micHigh')
@@ -190,7 +205,9 @@
     const conn = ($graphStateStore.connections ?? []).find(
       (c: any) => c.targetNodeId === nodeId && c.targetPortId === 'client'
     );
-    const srcNode = conn ? ($graphStateStore.nodes ?? []).find((n: any) => n.id === conn.sourceNodeId) : null;
+    const srcNode = conn
+      ? ($graphStateStore.nodes ?? []).find((n: any) => n.id === conn.sourceNodeId)
+      : null;
     sensorsClientId = srcNode?.config?.clientId ? String(srcNode.config.clientId) : '';
     sensorsData = sensorsClientId ? $sensorData.get(sensorsClientId) : null;
     sensorsPayload = sensorsData?.payload ?? {};
@@ -269,7 +286,9 @@
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      fileUploadError = text ? `Upload failed (${res.status}): ${text}` : `Upload failed (${res.status})`;
+      fileUploadError = text
+        ? `Upload failed (${res.status}): ${text}`
+        : `Upload failed (${res.status})`;
       return null;
     }
 
@@ -309,7 +328,8 @@
   function formatMidiEvent(event: MidiEvent | null): string {
     if (!event) return '—';
     const channel = `ch${event.channel + 1}`;
-    if (event.type === 'pitchbend') return `pitchbend • ${channel} • ${event.normalized.toFixed(3)}`;
+    if (event.type === 'pitchbend')
+      return `pitchbend • ${channel} • ${event.normalized.toFixed(3)}`;
     const num = event.number ?? 0;
     const suffix = event.type === 'note' ? (event.isPress ? 'on' : 'off') : `${event.rawValue}`;
     return `${event.type} ${num} • ${channel} • ${suffix}`;
@@ -319,7 +339,9 @@
     midiNodeId = String(data?.nodeId ?? '');
     const node = ($graphStateStore.nodes ?? []).find((n: any) => String(n.id) === midiNodeId);
     midiSource = node?.config?.source ?? null;
-    midiIsLearning = Boolean($midiLearnModeStore.active && $midiLearnModeStore.nodeId === midiNodeId);
+    midiIsLearning = Boolean(
+      $midiLearnModeStore.active && $midiLearnModeStore.nodeId === midiNodeId
+    );
   }
 
   $: fileDisplayLabel =
@@ -425,11 +447,14 @@
     return Number.isFinite(num) ? num >= 0.5 : null;
   };
 
-  const computeEffectiveRange = (nodeId: string): { startSec: number; endSec: number; cursorSec: number } => {
+  const computeEffectiveRange = (
+    nodeId: string
+  ): { startSec: number; endSec: number; cursorSec: number } => {
     const node = nodeEngine.getNode(nodeId);
     const startRaw =
       resolveConnectedNumber(nodeId, 'startSec') ?? readLocalNumber(node, 'startSec') ?? 0;
-    const endRaw = resolveConnectedNumber(nodeId, 'endSec') ?? readLocalNumber(node, 'endSec') ?? -1;
+    const endRaw =
+      resolveConnectedNumber(nodeId, 'endSec') ?? readLocalNumber(node, 'endSec') ?? -1;
     const cursorRaw =
       resolveConnectedNumber(nodeId, 'cursorSec') ?? readLocalNumber(node, 'cursorSec') ?? -1;
 
@@ -445,6 +470,44 @@
   let timeRangePlaybackRaf: number | null = null;
   let timeRangePlaybackCursorSec = 0;
   let timeRangePlaybackLastMs = 0;
+  // For media nodes, the UI playhead should only advance after we receive a client "started" signal.
+  let timeRangeLastPlayRequested: boolean | null = null;
+  let timeRangeStartSeqBase: number | null = null;
+  let timeRangeSignalNodeId = '';
+  let timeRangePlayheadLastReportMs = 0;
+  let timeRangeLastReportedCursorSec: number | null = null;
+
+  const TIME_RANGE_PLAYHEAD_REPORT_INTERVAL_MS = 250;
+
+  const reportTimeRangePlayhead = (cursorSec: number, nowMs: number) => {
+    if (!timeRangeNodeId) return;
+    if (
+      timeRangeNodeType !== 'load-audio-from-assets' &&
+      timeRangeNodeType !== 'load-video-from-assets'
+    ) {
+      return;
+    }
+    if (!Number.isFinite(cursorSec) || cursorSec < 0) return;
+    if (nowMs - timeRangePlayheadLastReportMs < TIME_RANGE_PLAYHEAD_REPORT_INTERVAL_MS) return;
+    timeRangePlayheadLastReportMs = nowMs;
+
+    // Round to avoid noisy updates while still keeping patch retargets in sync.
+    const rounded = Math.round(cursorSec * 1000) / 1000;
+    if (
+      timeRangeLastReportedCursorSec !== null &&
+      Math.abs(rounded - timeRangeLastReportedCursorSec) < 0.001
+    ) {
+      return;
+    }
+    timeRangeLastReportedCursorSec = rounded;
+    nodeEngine.setTimeRangePlayheadSec(timeRangeNodeId, rounded);
+  };
+
+  const clearTimeRangePlayhead = () => {
+    if (timeRangeNodeId) nodeEngine.setTimeRangePlayheadSec(timeRangeNodeId, null);
+    timeRangePlayheadLastReportMs = 0;
+    timeRangeLastReportedCursorSec = null;
+  };
 
   const syncTimeRangeUi = (values: { startSec: number; endSec: number; cursorSec: number }) => {
     timeRangeStartSec = values.startSec;
@@ -459,11 +522,15 @@
       timeRangeEndSec > 0 ? timeRangeEndSec : 0,
       timeRangeCursorSec > 0 ? timeRangeCursorSec : 0
     );
-    timeRangeMax = Math.max(timeRangeMin + timeRangeStep, maxFromAsset ?? maxFromField ?? maxFallback);
+    timeRangeMax = Math.max(
+      timeRangeMin + timeRangeStep,
+      maxFromAsset ?? maxFromField ?? maxFallback
+    );
 
     const clamp = (v: number) => Math.max(timeRangeMin, Math.min(timeRangeMax, v));
     timeRangeSliderStart = clamp(timeRangeStartSec);
-    timeRangeEffectiveEndSec = timeRangeEndSec < 0 ? (timeRangeDurationSec ?? null) : timeRangeEndSec;
+    timeRangeEffectiveEndSec =
+      timeRangeEndSec < 0 ? (timeRangeDurationSec ?? null) : timeRangeEndSec;
     timeRangeSliderEnd = timeRangeEndSec < 0 ? timeRangeMax : clamp(timeRangeEndSec);
     if (timeRangeSliderEnd < timeRangeSliderStart) timeRangeSliderEnd = timeRangeSliderStart;
 
@@ -492,13 +559,14 @@
       timeRangePlaybackRaf = null;
     }
     timeRangePlaybackLastMs = 0;
+    clearTimeRangePlayhead();
   }
 
   function startTimeRangePlayback(): void {
     stopTimeRangePlayback();
-    timeRangePlaybackCursorSec =
-      timeRangeCursorSec >= 0 ? timeRangeCursorSec : timeRangeStartSec;
+    timeRangePlaybackCursorSec = timeRangeCursorSec >= 0 ? timeRangeCursorSec : timeRangeStartSec;
     timeRangePlaybackLastMs = performance.now();
+    reportTimeRangePlayhead(timeRangePlaybackCursorSec, timeRangePlaybackLastMs);
 
     const frame = (nowMs: number) => {
       const dt = Math.max(0, nowMs - timeRangePlaybackLastMs);
@@ -506,9 +574,7 @@
 
       const start = timeRangeStartSec;
       const endRaw =
-        timeRangeEndSec < 0
-          ? timeRangeEffectiveEndSec ?? timeRangeMax
-          : timeRangeEndSec;
+        timeRangeEndSec < 0 ? (timeRangeEffectiveEndSec ?? timeRangeMax) : timeRangeEndSec;
       const end = Math.max(start, endRaw);
       const span = Math.max(0.0001, end - start);
 
@@ -523,10 +589,14 @@
       }
 
       // UI-only playhead: do not write back to node inputs (avoid spamming overrides).
-      timeRangeSliderCursor = Math.max(timeRangeSliderStart, Math.min(timeRangeSliderEnd, timeRangePlaybackCursorSec));
+      timeRangeSliderCursor = Math.max(
+        timeRangeSliderStart,
+        Math.min(timeRangeSliderEnd, timeRangePlaybackCursorSec)
+      );
       const fullSpan = timeRangeMax - timeRangeMin;
       timeRangeCursorFrac = fullSpan > 0 ? (timeRangeSliderCursor - timeRangeMin) / fullSpan : 0;
       timeRangeCursorPct = timeRangeCursorFrac * 100;
+      reportTimeRangePlayhead(timeRangeSliderCursor, nowMs);
 
       if (timeRangeIsPlaying) {
         timeRangePlaybackRaf = requestAnimationFrame(frame);
@@ -551,8 +621,18 @@
     const _tick = $tickTimeStore;
     void _tick;
 
+    // Also re-evaluate playhead state when the engine starts/stops.
+    const isEngineRunning = $isRunningStore;
+    void isEngineRunning;
+
     timeRangeNodeId = String(data?.nodeId ?? '');
     timeRangeNodeType = String(data?.nodeType ?? '');
+
+    if (timeRangeNodeId !== timeRangeSignalNodeId) {
+      timeRangeSignalNodeId = timeRangeNodeId;
+      timeRangeLastPlayRequested = null;
+      timeRangeStartSeqBase = null;
+    }
 
     const { startSec, endSec, cursorSec } = computeEffectiveRange(timeRangeNodeId);
 
@@ -560,7 +640,10 @@
     timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
 
     const runtimeNode = timeRangeNodeId ? nodeEngine.getNode(timeRangeNodeId) : null;
-    const assetId = typeof (runtimeNode as any)?.config?.assetId === 'string' ? String((runtimeNode as any).config.assetId) : '';
+    const assetId =
+      typeof (runtimeNode as any)?.config?.assetId === 'string'
+        ? String((runtimeNode as any).config.assetId)
+        : '';
 
     // Refresh duration/backdrop when the asset changes.
     if (assetId !== lastTimelineAssetId) {
@@ -582,14 +665,17 @@
           timeRangeDurationSec = duration;
         }
         if (kind === 'audio') {
-          const bg = await getAudioSpectrogramDataUrl(contentUrl, { width: 360, height: 84, fftSize: 1024 });
+          const bg = await getAudioSpectrogramDataUrl(contentUrl, {
+            width: 360,
+            height: 84,
+            fftSize: 1024,
+          });
           if (bg && contentUrl === lastTimelineUrl) timeRangeBackdropUrl = bg;
         }
       })();
     }
 
     // UI playhead: detect play/loop/reverse from node inputs (or connected overrides).
-    // This is intentionally UI-only and does not require client feedback.
     const playRaw =
       resolveConnectedBoolean(timeRangeNodeId, 'play') ??
       (() => {
@@ -618,6 +704,32 @@
     timeRangeIsPlaying = Boolean(playRaw);
     timeRangeLoopEnabled = Boolean(loopRaw);
     timeRangeReverseEnabled = Boolean(reverseRaw);
+    if (
+      timeRangeNodeType === 'load-audio-from-assets' ||
+      timeRangeNodeType === 'load-video-from-assets'
+    ) {
+      const hasAsset = Boolean(assetId && assetId.trim());
+      // Require a client "started" signal so the cursor only advances when playback actually begins.
+      const signal = $nodeMediaSignals.get(timeRangeNodeId);
+      const startedSeq = typeof signal?.startedSeq === 'number' ? signal.startedSeq : 0;
+
+      const playRequested = Boolean(playRaw);
+      if (timeRangeLastPlayRequested === null) {
+        timeRangeLastPlayRequested = playRequested;
+        timeRangeStartSeqBase = playRequested ? 0 : null;
+      } else if (!playRequested) {
+        timeRangeLastPlayRequested = false;
+        timeRangeStartSeqBase = null;
+      } else if (playRequested && !timeRangeLastPlayRequested) {
+        timeRangeLastPlayRequested = true;
+        timeRangeStartSeqBase = startedSeq;
+      }
+
+      const needsStartedSeq = timeRangeStartSeqBase ?? 0;
+      const hasStartedSignal = playRequested && startedSeq > needsStartedSeq;
+
+      timeRangeIsPlaying = timeRangeIsPlaying && hasAsset && Boolean(isEngineRunning) && hasStartedSignal;
+    }
 
     syncTimeRangeUi({ startSec, endSec, cursorSec });
   }
@@ -647,7 +759,9 @@
     const nextStart = Math.max(timeRangeMin, n);
     const nextEnd = timeRangeEndSec >= 0 ? Math.max(nextStart, timeRangeEndSec) : -1;
     const nextCursor =
-      timeRangeCursorSec >= 0 ? Math.max(nextStart, Math.min(timeRangeSliderEnd, timeRangeSliderCursor)) : -1;
+      timeRangeCursorSec >= 0
+        ? Math.max(nextStart, Math.min(timeRangeSliderEnd, timeRangeSliderCursor))
+        : -1;
     syncTimeRangeUi({ startSec: nextStart, endSec: nextEnd, cursorSec: nextCursor });
     setTimeRange(nextStart, nextEnd, nextCursor);
   };
@@ -660,7 +774,10 @@
     const nextEnd = nearEnd ? -1 : Math.max(timeRangeStartSec, Math.max(timeRangeMin, n));
     const nextCursor =
       timeRangeCursorSec >= 0
-        ? Math.min(nextEnd >= 0 ? nextEnd : timeRangeMax, Math.max(timeRangeStartSec, timeRangeSliderCursor))
+        ? Math.min(
+            nextEnd >= 0 ? nextEnd : timeRangeMax,
+            Math.max(timeRangeStartSec, timeRangeSliderCursor)
+          )
         : -1;
     syncTimeRangeUi({ startSec: timeRangeStartSec, endSec: nextEnd, cursorSec: nextCursor });
     setTimeRange(timeRangeStartSec, nextEnd, nextCursor);
@@ -722,7 +839,12 @@
 {:else if data?.controlType === 'boolean'}
   <div class="control-field boolean-field {isInline ? 'inline' : ''}">
     <label class="toggle {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
-      <input type="checkbox" checked={Boolean(data.value)} disabled={data.readonly} on:change={changeBoolean} />
+      <input
+        type="checkbox"
+        checked={Boolean(data.value)}
+        disabled={data.readonly}
+        on:change={changeBoolean}
+      />
       <span class="toggle-track">
         <span class="toggle-thumb"></span>
       </span>
@@ -780,7 +902,10 @@
     >
       <div
         class="time-range-highlight"
-        style="left: calc(10px + (100% - 20px) * {timeRangeStartFrac}); width: calc((100% - 20px) * {Math.max(0, timeRangeEndFrac - timeRangeStartFrac)});"
+        style="left: calc(10px + (100% - 20px) * {timeRangeStartFrac}); width: calc((100% - 20px) * {Math.max(
+          0,
+          timeRangeEndFrac - timeRangeStartFrac
+        )});"
       />
       <div
         class="time-range-cursor"
@@ -861,7 +986,11 @@
         {#each $audienceClients as c (c.clientId)}
           <button
             type="button"
-            class="client-item {c.clientId === primarySelectedClientId ? 'selected' : selectedClientIdSet.has(c.clientId) ? 'in-range' : ''}"
+            class="client-item {c.clientId === primarySelectedClientId
+              ? 'selected'
+              : selectedClientIdSet.has(c.clientId)
+                ? 'in-range'
+                : ''}"
             disabled={data.readonly}
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}
@@ -1035,7 +1164,9 @@
     align-items: center;
     padding: 2px;
     box-sizing: border-box;
-    transition: background 120ms ease, border-color 120ms ease;
+    transition:
+      background 120ms ease,
+      border-color 120ms ease;
   }
 
   .toggle-thumb {
@@ -1044,7 +1175,9 @@
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.78);
     transform: translateX(0);
-    transition: transform 120ms ease, background 120ms ease;
+    transition:
+      transform 120ms ease,
+      background 120ms ease;
   }
 
   .toggle input:checked + .toggle-track {
@@ -1080,7 +1213,7 @@
 
   .time-range-row {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
     gap: 10px;
     align-items: end;
   }
@@ -1104,12 +1237,11 @@
 
   .time-range-v {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 650;
     color: rgba(255, 255, 255, 0.9);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
   }
 
   .time-range-slider {
