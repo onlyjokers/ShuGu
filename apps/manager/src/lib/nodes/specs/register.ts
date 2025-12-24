@@ -728,6 +728,7 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         process: (inputs, config, context) => {
           const source = (config.source ?? null) as MidiSource | null;
           const key = midiSourceKey(source);
+          const buttonize = coerceBoolean((config as any)?.buttonize, true);
           const thresholdFromInput = (inputs as any).threshold;
           const thresholdRaw =
             typeof thresholdFromInput === 'number' && Number.isFinite(thresholdFromInput)
@@ -764,8 +765,12 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
           const pressed =
             event.type === 'note' ? Boolean(event.isPress) : event.normalized >= threshold;
 
-          if (pressed && !state.lastPressed) {
-            state.value = !state.value;
+          if (buttonize) {
+            if (pressed && !state.lastPressed) {
+              state.value = !state.value;
+            }
+          } else {
+            state.value = pressed;
           }
 
           state.lastPressed = pressed;
@@ -1042,7 +1047,10 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
-    outputs: [{ id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' }],
+    outputs: [
+      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
     configSchema: [
       {
         key: 'assetId',
@@ -1069,7 +1077,7 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
       // Return a simple gate value so downstream nodes can reflect play/pause state.
-      return { ref: assetId && play ? 1 : 0 };
+      return { ref: assetId && play ? 1 : 0, ended: false };
     },
   });
 }
@@ -1089,10 +1097,24 @@ if (!nodeRegistry.get('load-image-from-assets')) {
         assetKind: 'image',
         defaultValue: '',
       },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
     ],
     process: (_inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
-      return { ref: assetId ? `asset:${assetId}` : '' };
+      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
+      return { ref: assetId ? `asset:${assetId}${fitHash}` : '' };
     },
   });
 }
@@ -1111,7 +1133,10 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
-    outputs: [{ id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' }],
+    outputs: [
+      { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
     configSchema: [
       {
         key: 'assetId',
@@ -1128,9 +1153,22 @@ if (!nodeRegistry.get('load-video-from-assets')) {
         min: 0,
         step: 0.01,
       },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
     ],
     process: (inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
+      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
       const startSec =
         typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
           ? Number((inputs as any).startSec)
@@ -1160,11 +1198,13 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
       const positionParam =
         cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+      const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
 
       return {
         ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}`
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${fitParam}`
           : '',
+        ended: false,
       };
     },
   });

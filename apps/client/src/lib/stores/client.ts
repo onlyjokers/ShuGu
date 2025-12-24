@@ -108,17 +108,36 @@ type MediaClipParams = {
   play: boolean | null;
   reverse: boolean | null;
   cursorSec: number | null;
+  sourceNodeId: string | null;
 };
 
 function parseMediaClipParams(raw: string): MediaClipParams {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { baseUrl: '', startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+    return {
+      baseUrl: '',
+      startSec: 0,
+      endSec: -1,
+      loop: null,
+      play: null,
+      reverse: null,
+      cursorSec: null,
+      sourceNodeId: null,
+    };
   }
 
   const hashIndex = trimmed.indexOf('#');
   if (hashIndex < 0) {
-    return { baseUrl: trimmed, startSec: 0, endSec: -1, loop: null, play: null, reverse: null, cursorSec: null };
+    return {
+      baseUrl: trimmed,
+      startSec: 0,
+      endSec: -1,
+      loop: null,
+      play: null,
+      reverse: null,
+      cursorSec: null,
+      sourceNodeId: null,
+    };
   }
 
   const baseUrl = trimmed.slice(0, hashIndex).trim();
@@ -159,6 +178,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
   const playRaw = params.get('play');
   const reverseRaw = params.get('rev');
   const cursorRaw = params.get('p');
+  const nodeRaw = params.get('node');
 
   const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
   const cursorSec =
@@ -172,12 +192,14 @@ function parseMediaClipParams(raw: string): MediaClipParams {
     play: playRaw === null ? null : toBoolean(playRaw, true),
     reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
     cursorSec,
+    sourceNodeId: typeof nodeRaw === 'string' && nodeRaw.trim() ? nodeRaw.trim() : null,
   };
 }
 
 // Video playback state
 export const videoState = writable<{
   url: string | null;
+  sourceNodeId: string | null;
   playing: boolean;
   muted: boolean;
   loop: boolean;
@@ -188,6 +210,7 @@ export const videoState = writable<{
   reverse: boolean;
 }>({
   url: null,
+  sourceNodeId: null,
   playing: false,
   muted: true,
   loop: false,
@@ -611,6 +634,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           const reverse = clip?.reverse ?? false;
           multimediaCore?.media.playVideo({
             url: resolvedUrlString,
+            sourceNodeId: clip?.sourceNodeId ?? null,
             muted: mediaPayload.muted ?? true,
             loop,
             volume: mediaPayload.volume ?? 1,

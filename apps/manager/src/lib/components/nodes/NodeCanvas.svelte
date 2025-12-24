@@ -25,7 +25,10 @@
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
   import { getSDK, selectClients, sensorData, state as managerState } from '$lib/stores/manager';
-  import { displayBridgeState, sendPlugin as sendLocalDisplayPlugin } from '$lib/display/display-bridge';
+  import {
+    displayBridgeState,
+    sendPlugin as sendLocalDisplayPlugin,
+  } from '$lib/display/display-bridge';
   import type {
     NodeInstance,
     Connection as EngineConnection,
@@ -79,6 +82,7 @@
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
   let displayBridgeUnsub: (() => void) | null = null;
+  let loopDeployUnsub: (() => void) | null = null;
 
   const sockets = {
     number: new ClassicPreset.Socket('number'),
@@ -257,7 +261,11 @@
 
   const isLocalDisplayTarget = (id: string): boolean => id === LOCAL_DISPLAY_TARGET_ID;
 
-  const sendNodeExecutorPluginControl = (targetId: string, command: string, payload: Record<string, unknown>) => {
+  const sendNodeExecutorPluginControl = (
+    targetId: string,
+    command: string,
+    payload: Record<string, unknown>
+  ) => {
     const id = String(targetId ?? '');
     if (!id) return;
 
@@ -270,7 +278,12 @@
 
     const sdk = getSDK();
     if (!sdk) return;
-    sdk.sendPluginControl({ mode: 'clientIds', ids: [id] }, 'node-executor', command as any, payload as any);
+    sdk.sendPluginControl(
+      { mode: 'clientIds', ids: [id] },
+      'node-executor',
+      command as any,
+      payload as any
+    );
   };
 
   type DeployedPatch = {
@@ -284,6 +297,8 @@
   let patchDeployTimer: ReturnType<typeof setTimeout> | null = null;
   let patchLastTopologySignature: string | null = null;
   let patchLastTargetsKey = '';
+  let patchRuntimeTargetsLastCheckAt = 0;
+  const PATCH_RUNTIME_TARGETS_CHECK_INTERVAL_MS = 200;
 
   const getDeployedPatch = (): DeployedPatch | null => {
     const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
@@ -337,7 +352,9 @@
   const midiBridgeClientKey = (clientId: string, patchId: string, nodeId: string, portId: string) =>
     `${clientId}|${patchId}|${nodeId}|${portId}`;
 
-  const computeMidiBridgeRoutes = (patchNodeIds: Set<string>): { routes: MidiBridgeRoute[]; keys: Set<string> } => {
+  const computeMidiBridgeRoutes = (
+    patchNodeIds: Set<string>
+  ): { routes: MidiBridgeRoute[]; keys: Set<string> } => {
     const nodeById = new Map((graphState.nodes ?? []).map((n: any) => [String(n.id), n]));
     const routes: MidiBridgeRoute[] = [];
     const keys = new Set<string>();
@@ -373,7 +390,9 @@
     }
 
     // Stable ordering for deterministic behavior.
-    routes.sort((a, b) => a.key.localeCompare(b.key) || a.sourceNodeId.localeCompare(b.sourceNodeId));
+    routes.sort(
+      (a, b) => a.key.localeCompare(b.key) || a.sourceNodeId.localeCompare(b.sourceNodeId)
+    );
 
     return { routes, keys };
   };
@@ -412,7 +431,9 @@
 
         for (const k of toRemove) {
           const [nodeId, portId] = k.split('|');
-          midiBridgeLastSignatureByClientKey.delete(midiBridgeClientKey(clientId, patch.patchId, nodeId, portId));
+          midiBridgeLastSignatureByClientKey.delete(
+            midiBridgeClientKey(clientId, patch.patchId, nodeId, portId)
+          );
         }
       }
       midiBridgeActiveKeysByClientId.set(clientId, next);
@@ -472,12 +493,21 @@
         const raw = sourceNode?.outputValues?.[route.sourcePortId];
         const coerced = coerceForPortType(raw, route.targetType);
 
-        const key = midiBridgeClientKey(clientId, patch.patchId, route.targetNodeId, route.targetPortId);
+        const key = midiBridgeClientKey(
+          clientId,
+          patch.patchId,
+          route.targetNodeId,
+          route.targetPortId
+        );
         if (coerced === undefined) {
           if (activeKeys.has(route.key)) {
             activeKeys.delete(route.key);
             midiBridgeLastSignatureByClientKey.delete(key);
-            removals.push({ nodeId: route.targetNodeId, kind: 'input', portId: route.targetPortId });
+            removals.push({
+              nodeId: route.targetNodeId,
+              kind: 'input',
+              portId: route.targetPortId,
+            });
           }
           continue;
         }
@@ -517,6 +547,180 @@
     }
   };
 
+  // ===== MIDI Bridge (Loop Deploy) =====
+  // Loops are deployed without manager-only MIDI nodes. When a deployed loop node input is wired from
+  // a MIDI node in the manager graph, forward that value as a runtime override to the loop executor.
+  type MidiLoopBridgeTarget = { loopId: string; clientId: string; nodeIds: Set<string> };
+
+  let midiLoopBridgeRoutesByLoopId = new Map<string, MidiBridgeRoute[]>();
+  let midiLoopBridgeActiveKeysByLoopId = new Map<string, Set<string>>();
+  let midiLoopBridgeLastSignatureByClientKey = new Map<string, string>();
+  let midiLoopBridgeLastSendAt = 0;
+  let midiLoopBridgeDirty = true;
+
+  const midiLoopBridgeClientKey = (
+    clientId: string,
+    loopId: string,
+    nodeId: string,
+    portId: string
+  ) => `${clientId}|${loopId}|${nodeId}|${portId}`;
+
+  const clearMidiLoopBridgeState = () => {
+    midiLoopBridgeRoutesByLoopId = new Map();
+    midiLoopBridgeActiveKeysByLoopId = new Map();
+    midiLoopBridgeLastSignatureByClientKey = new Map();
+    midiLoopBridgeDirty = true;
+  };
+
+  const getMidiLoopBridgeTargets = (): MidiLoopBridgeTarget[] => {
+    if (!loopController) return [];
+    const deployed = get(loopController.deployedLoopIds);
+    if (!deployed || deployed.size === 0) return [];
+
+    const loops = get(loopController.localLoops) ?? [];
+    const targets: MidiLoopBridgeTarget[] = [];
+    for (const loop of loops) {
+      const loopId = String(loop?.id ?? '');
+      if (!loopId || !deployed.has(loopId)) continue;
+      const clientId = loopController.loopActions.getLoopClientId(loop);
+      if (!clientId) continue;
+
+      const nodeIds = new Set((loop.nodeIds ?? []).map((id) => String(id)).filter(Boolean));
+      if (nodeIds.size === 0) continue;
+
+      targets.push({ loopId, clientId: String(clientId), nodeIds });
+    }
+
+    targets.sort(
+      (a, b) => a.loopId.localeCompare(b.loopId) || a.clientId.localeCompare(b.clientId)
+    );
+    return targets;
+  };
+
+  const syncMidiLoopBridgeRoutes = () => {
+    const targets = getMidiLoopBridgeTargets();
+    if (targets.length === 0) {
+      clearMidiLoopBridgeState();
+      return;
+    }
+
+    const activeLoopIds = new Set(targets.map((t) => t.loopId));
+    for (const loopId of Array.from(midiLoopBridgeRoutesByLoopId.keys())) {
+      if (activeLoopIds.has(loopId)) continue;
+      midiLoopBridgeRoutesByLoopId.delete(loopId);
+      midiLoopBridgeActiveKeysByLoopId.delete(loopId);
+    }
+
+    for (const target of targets) {
+      const { routes, keys } = computeMidiBridgeRoutes(target.nodeIds);
+      midiLoopBridgeRoutesByLoopId.set(target.loopId, routes);
+
+      const prev = midiLoopBridgeActiveKeysByLoopId.get(target.loopId) ?? new Set<string>();
+      const next = new Set(keys);
+      const toRemove = Array.from(prev).filter((k) => !next.has(k));
+      if (toRemove.length > 0) {
+        const overrides = toRemove.map((k) => {
+          const [nodeId, portId] = k.split('|');
+          return { nodeId, kind: 'input', portId };
+        });
+        sendNodeExecutorPluginControl(String(target.clientId), 'override-remove', {
+          loopId: target.loopId,
+          overrides,
+        } as any);
+
+        for (const k of toRemove) {
+          const [nodeId, portId] = k.split('|');
+          midiLoopBridgeLastSignatureByClientKey.delete(
+            midiLoopBridgeClientKey(target.clientId, target.loopId, nodeId, portId)
+          );
+        }
+      }
+
+      midiLoopBridgeActiveKeysByLoopId.set(target.loopId, next);
+    }
+
+    midiLoopBridgeDirty = false;
+  };
+
+  const sendMidiLoopBridgeOverrides = () => {
+    if (!get(isRunningStore)) return;
+
+    const targets = getMidiLoopBridgeTargets();
+    if (targets.length === 0) return;
+
+    if (midiLoopBridgeDirty) syncMidiLoopBridgeRoutes();
+
+    const now = Date.now();
+    if (now - midiLoopBridgeLastSendAt < 30) return;
+    midiLoopBridgeLastSendAt = now;
+
+    for (const target of targets) {
+      const routes = midiLoopBridgeRoutesByLoopId.get(target.loopId) ?? [];
+      if (routes.length === 0) continue;
+
+      const overrides: any[] = [];
+      const removals: any[] = [];
+      const activeKeys = midiLoopBridgeActiveKeysByLoopId.get(target.loopId) ?? new Set<string>();
+
+      for (const route of routes) {
+        const sourceNode = nodeEngine.getNode(route.sourceNodeId);
+        const raw = sourceNode?.outputValues?.[route.sourcePortId];
+        const coerced = coerceForPortType(raw, route.targetType);
+
+        const key = midiLoopBridgeClientKey(
+          target.clientId,
+          target.loopId,
+          route.targetNodeId,
+          route.targetPortId
+        );
+        if (coerced === undefined) {
+          if (activeKeys.has(route.key)) {
+            activeKeys.delete(route.key);
+            midiLoopBridgeLastSignatureByClientKey.delete(key);
+            removals.push({
+              nodeId: route.targetNodeId,
+              kind: 'input',
+              portId: route.targetPortId,
+            });
+          }
+          continue;
+        }
+
+        const sig = signatureForValue(coerced, route.targetType);
+        const prevSig = midiLoopBridgeLastSignatureByClientKey.get(key);
+        if (prevSig === sig) {
+          activeKeys.add(route.key);
+          continue;
+        }
+
+        midiLoopBridgeLastSignatureByClientKey.set(key, sig);
+        activeKeys.add(route.key);
+        overrides.push({
+          nodeId: route.targetNodeId,
+          kind: 'input',
+          portId: route.targetPortId,
+          value: coerced,
+        });
+      }
+
+      midiLoopBridgeActiveKeysByLoopId.set(target.loopId, activeKeys);
+
+      if (removals.length > 0) {
+        sendNodeExecutorPluginControl(String(target.clientId), 'override-remove', {
+          loopId: target.loopId,
+          overrides: removals,
+        } as any);
+      }
+
+      if (overrides.length > 0) {
+        sendNodeExecutorPluginControl(String(target.clientId), 'override-set', {
+          loopId: target.loopId,
+          overrides,
+        } as any);
+      }
+    }
+  };
+
   const computeTopologySignature = (payload: { nodes?: any[]; connections?: any[] }): string => {
     const nodes = (payload.nodes ?? []).map((n: any) => ({
       id: String(n.id),
@@ -537,6 +741,22 @@
     });
 
     return JSON.stringify({ nodes, connections });
+  };
+
+  const applyTimeRangePlayheadsToPatchPayload = (payload: any) => {
+    const nodes = payload?.graph?.nodes;
+    if (!Array.isArray(nodes) || nodes.length === 0) return;
+
+    for (const node of nodes) {
+      const type = String(node?.type ?? '');
+      if (type !== 'load-audio-from-assets' && type !== 'load-video-from-assets') continue;
+      const nodeId = String(node?.id ?? '');
+      if (!nodeId) continue;
+      const playheadSec = nodeEngine.getTimeRangePlayheadSec(nodeId);
+      if (playheadSec === null) continue;
+
+      node.inputValues = { ...(node.inputValues ?? {}), cursorSec: playheadSec };
+    }
   };
 
   const resolvePatchTargetClientIds = (): string[] => {
@@ -589,15 +809,82 @@
     }
     const rootId = root.id;
 
-    // Patch target routing: `<patch-root>(cmd) -> client-object(in)`.
-    // Display target routing: `<patch-root>(cmd) -> display-object(in)`.
-    const deployToClientConns = connections.filter(
-      (c) => String(c.sourceNodeId) === rootId && String(c.sourcePortId) === 'cmd'
-    );
+    const outgoingBySourceKey = new Map<string, (typeof connections)[number][]>();
+    for (const c of connections) {
+      const key = `${String(c.sourceNodeId)}:${String(c.sourcePortId)}`;
+      const list = outgoingBySourceKey.get(key) ?? [];
+      list.push(c);
+      outgoingBySourceKey.set(key, list);
+    }
+
+    const typeById = new Map<string, string>();
+    for (const n of graphState.nodes ?? []) {
+      const id = String((n as any)?.id ?? '');
+      if (!id) continue;
+      typeById.set(id, String((n as any)?.type ?? ''));
+    }
+
+    const getCommandOutputPorts = (type: string): string[] => {
+      const def = nodeRegistry.get(String(type));
+      const ports = (def?.outputs ?? []).filter((p) => String(p.type) === 'command');
+      return ports.map((p) => String(p.id));
+    };
+
+    const isCommandInputPort = (type: string, portId: string): boolean => {
+      const def = nodeRegistry.get(String(type));
+      const port = (def?.inputs ?? []).find((p) => String(p.id) === String(portId));
+      return Boolean(port) && String(port?.type) === 'command';
+    };
+
+    // Patch target routing (Max/MSP style):
+    // - Direct: `<patch-root>(cmd) -> client-object(in)`.
+    // - Indirect (supported): `<patch-root>(cmd) -> cmd-aggregator(...) -> client-object(in)`.
+    // We follow the command-type subgraph starting from `<patch-root>(cmd)` to find target objects.
+    const routedClientNodeIds: string[] = [];
+    const routedClientNodeIdSet = new Set<string>();
+    let hasDisplayTarget = false;
+
+    const queue: { nodeId: string; portId: string }[] = [{ nodeId: rootId, portId: 'cmd' }];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      const visitKey = `${next.nodeId}:${next.portId}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+
+      const outgoing = outgoingBySourceKey.get(visitKey) ?? [];
+      for (const c of outgoing) {
+        const targetNodeId = String((c as any)?.targetNodeId ?? '');
+        if (!targetNodeId) continue;
+        const targetPortId = String((c as any)?.targetPortId ?? '');
+
+        const targetType = typeById.get(targetNodeId) ?? '';
+        if (!targetType) continue;
+        if (!isCommandInputPort(targetType, targetPortId)) continue;
+
+        if (targetType === 'display-object') {
+          hasDisplayTarget = true;
+          continue;
+        }
+
+        if (targetType === 'client-object') {
+          if (!routedClientNodeIdSet.has(targetNodeId)) {
+            routedClientNodeIdSet.add(targetNodeId);
+            routedClientNodeIds.push(targetNodeId);
+          }
+          continue;
+        }
+
+        // Continue walking through any node that can output commands.
+        for (const outPortId of getCommandOutputPorts(targetType)) {
+          queue.push({ nodeId: targetNodeId, portId: outPortId });
+        }
+      }
+    }
 
     const out: string[] = [];
     const seen = new Set<string>();
-    let hasDisplayTarget = false;
 
     const resolveClientId = (nodeId: string, outputPortId: string) => {
       const runtimeNode = nodeEngine.getNode(nodeId);
@@ -611,16 +898,8 @@
       return fromOut || fromConfig;
     };
 
-    for (const c of deployToClientConns) {
-      const targetNodeId = String(c.targetNodeId);
-      const runtimeNode = nodeEngine.getNode(targetNodeId);
-      const type = String(runtimeNode?.type ?? '');
-      if (type === 'display-object') {
-        hasDisplayTarget = true;
-        continue;
-      }
-      if (type !== 'client-object') continue;
-      const id = resolveClientId(targetNodeId, 'out');
+    for (const nodeId of routedClientNodeIds) {
+      const id = resolveClientId(nodeId, 'out');
       if (!id || !connected.has(id) || seen.has(id)) continue;
       seen.add(id);
       out.push(id);
@@ -750,6 +1029,8 @@
     // A deploy resets client overrides; ensure MIDI bridge resend starts fresh.
     midiBridgeLastSignatureByClientKey = new Map();
     midiBridgeActiveKeysByClientId = new Map();
+
+    applyTimeRangePlayheadsToPatchPayload(payload);
 
     for (const clientId of targets) {
       sendNodeExecutorPluginControl(String(clientId), 'deploy', payload);
@@ -1600,6 +1881,16 @@
 
     tickUnsub = nodeEngine.tickTime.subscribe(() => {
       sendMidiBridgeOverrides();
+      sendMidiLoopBridgeOverrides();
+
+      if (!get(isRunningStore)) return;
+      if (patchDeployTimer) return;
+      const now = Date.now();
+      if (now - patchRuntimeTargetsLastCheckAt < PATCH_RUNTIME_TARGETS_CHECK_INTERVAL_MS) return;
+      patchRuntimeTargetsLastCheckAt = now;
+
+      const targetsKey = resolvePatchTargetClientIds().join('|');
+      if (targetsKey !== patchLastTargetsKey) schedulePatchReconcile('runtime-target-change');
     });
 
     runningUnsub = isRunningStore.subscribe((running) => {
@@ -1608,7 +1899,15 @@
         loopController?.loopActions.stopAllClientEffects();
         loopController?.loopActions.stopAllDeployedLoops();
         stopAllDeployedPatches();
+        clearMidiLoopBridgeState();
       }
+    });
+
+    loopDeployUnsub = deployedLoopIds.subscribe(() => {
+      // Loop deploy/redeploy clears client runtime overrides; force resend of MIDI-driven overrides.
+      midiLoopBridgeDirty = true;
+      midiLoopBridgeLastSignatureByClientKey = new Map();
+      midiLoopBridgeActiveKeysByLoopId = new Map();
     });
 
     groupDisabledUnsub = groupController.groupDisabledNodeIds.subscribe((disabled) => {
@@ -1734,6 +2033,7 @@
       }
       graphSync?.schedule(state);
       schedulePatchReconcile('graph-change');
+      midiLoopBridgeDirty = true;
 
       // Keep MIDI bridge wiring responsive (MIDI nodes are excluded from deploy topology).
       const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
@@ -2067,6 +2367,7 @@
     paramsUnsub?.();
     tickUnsub?.();
     runningUnsub?.();
+    loopDeployUnsub?.();
     groupDisabledUnsub?.();
     managerUnsub?.();
     displayBridgeUnsub?.();

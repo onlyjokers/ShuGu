@@ -7,6 +7,8 @@
 
 export type VideoState = {
   url: string | null;
+  // Optional node graph source id (e.g. load-video-from-assets nodeId) for UI telemetry.
+  sourceNodeId: string | null;
   playing: boolean;
   muted: boolean;
   loop: boolean;
@@ -35,6 +37,7 @@ export class MediaEngine {
   private state: MediaEngineState = {
     video: {
       url: null,
+      sourceNodeId: null,
       playing: false,
       muted: true,
       loop: false,
@@ -91,8 +94,12 @@ export class MediaEngine {
     endSec?: number;
     cursorSec?: number;
     reverse?: boolean;
+    sourceNodeId?: string | null;
   }): void {
     const url = this.resolve(payload.url);
+    const sourceNodeIdRaw = payload.sourceNodeId;
+    const sourceNodeId =
+      typeof sourceNodeIdRaw === 'string' && sourceNodeIdRaw.trim() ? sourceNodeIdRaw.trim() : null;
     const startSecRaw = payload.startSec ?? 0;
     const endSecRaw = payload.endSec ?? -1;
     const cursorSecRaw = payload.cursorSec ?? -1;
@@ -112,6 +119,7 @@ export class MediaEngine {
     this.setState({
       video: {
         url,
+        sourceNodeId,
         playing,
         muted: Boolean(payload.muted ?? true),
         loop: Boolean(payload.loop ?? false),
@@ -128,6 +136,7 @@ export class MediaEngine {
     this.setState({
       video: {
         url: null,
+        sourceNodeId: null,
         playing: false,
         muted: true,
         loop: false,

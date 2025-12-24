@@ -34,6 +34,18 @@ export const state = writable<ManagerState>({
 // Sensor data store (latest data from each client)
 export const sensorData = writable<Map<string, SensorDataMessage>>(new Map());
 
+export type NodeMediaSignal = {
+    nodeType?: string;
+    lastClientId?: string;
+    startedSeq?: number;
+    endedSeq?: number;
+    startedAt?: number;
+    endedAt?: number;
+};
+
+// Node-level media signals emitted by clients (e.g. load-audio/video-from-assets actual start).
+export const nodeMediaSignals = writable<Map<string, NodeMediaSignal>>(new Map());
+
 export type ClientReadinessStatus =
     | 'connected' // connected but not verified assets yet (yellow)
     | 'assets-loading' // actively preloading (yellow)
@@ -90,6 +102,7 @@ export function connect(config: ManagerSDKConfig): void {
     if (sdk) {
         sdk.disconnect();
     }
+    nodeMediaSignals.set(new Map());
 
     // Seed registry-based control parameters early so MIDI/AutoUI/Project restore can see them.
     registerDefaultControlParameters();
@@ -139,6 +152,37 @@ export function connect(config: ManagerSDKConfig): void {
         // Parse multimedia-core readiness events (custom sensor channel).
         if (data.sensorType === 'custom') {
             const payload = (data.payload ?? {}) as Record<string, unknown>;
+
+            if (payload?.kind === 'node-media') {
+                const event = typeof payload.event === 'string' ? payload.event : '';
+                const nodeId = typeof payload.nodeId === 'string' ? payload.nodeId : '';
+                const nodeType = typeof payload.nodeType === 'string' ? payload.nodeType : undefined;
+                if (nodeId && (event === 'started' || event === 'ended')) {
+                    const at = Date.now();
+                    nodeMediaSignals.update((prev) => {
+                        const next = new Map(prev);
+                        const current = next.get(nodeId) ?? ({} as NodeMediaSignal);
+                        const startedSeq = typeof current.startedSeq === 'number' ? current.startedSeq : 0;
+                        const endedSeq = typeof current.endedSeq === 'number' ? current.endedSeq : 0;
+                        const patch: NodeMediaSignal = {
+                            ...current,
+                            nodeType: nodeType ?? current.nodeType,
+                            lastClientId: data.clientId,
+                        };
+                        if (event === 'started') {
+                            patch.startedSeq = startedSeq + 1;
+                            patch.startedAt = at;
+                        }
+                        if (event === 'ended') {
+                            patch.endedSeq = endedSeq + 1;
+                            patch.endedAt = at;
+                        }
+                        next.set(nodeId, patch);
+                        return next;
+                    });
+                }
+            }
+
             if (payload?.kind === 'multimedia-core' && payload?.event === 'asset-preload') {
                 const status = typeof payload.status === 'string' ? payload.status : '';
                 const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : undefined;
@@ -195,6 +239,7 @@ export function disconnect(): void {
     sdk = null;
     sensorData.set(new Map());
     clientReadiness.set(new Map());
+    nodeMediaSignals.set(new Map());
     parameterRegistry.clear();
 }
 

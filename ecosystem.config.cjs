@@ -10,7 +10,7 @@ module.exports = {
     },
     {
       name: 'shugu-client',
-      script: './apps/client/build/index.js',
+      script: './apps/client/build-client/index.js',
       env: {
         NODE_ENV: 'production',
         PORT: 3000
@@ -18,7 +18,7 @@ module.exports = {
     },
     {
       name: 'shugu-manager',
-      script: './apps/manager/build/index.js',
+      script: './apps/manager/build-manager/index.js',
       env: {
         NODE_ENV: 'production',
         PORT: 3002
