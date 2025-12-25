@@ -1,7 +1,7 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "MIDI → (Start/End Sec) → Load Audio From Assets (Timeline) → Tone Delay",
+  "title": "MIDI → (Start/End Sec) → Load Audio From Remote (Timeline) → Tone Delay",
   "purpose": "演示 Start/End 端口可接 MIDI 数字口：用 manager-only MIDI 节点通过 override bridge 实时控制 client 侧的片段播放范围。",
   "notes": [
     "需要你先在 Manager 的 Assets Manager 页面上传一个音频文件。",
@@ -11,7 +11,7 @@
   "howTo": [
     "1) 打开 client，点 Start（启用 ToneAudioEngine）。",
     "2) 打开 manager 的 Node Graph，点 ▶ Start（启动 NodeEngine）。",
-    "3) Load Audio From Assets 选择一个音频资产。",
+    "3) Load Audio From Remote 选择一个音频资产。",
     "4) MIDI Start / MIDI End 节点分别点 Learn，绑定两个 MIDI 控制。",
     "5) 转动 MIDI 控制：StartSec/EndSec 会实时更新；client 只播放该片段。",
     "6) 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。"

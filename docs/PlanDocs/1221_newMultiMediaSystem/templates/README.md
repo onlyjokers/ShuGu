@@ -19,12 +19,12 @@ How to import:
   - 演示 `tone-lfo.value → tone-delay.wet` 的连续调制（ToneAdapter 走 Tone.LFO.connect，而不是 30Hz 数值写入）。
 
 - `02_patch_asset_player_delay_audio_out.json`
-  - Load Audio From Assets → Tone Delay → Audio Patch to Client
-  - Requires uploading an audio asset first in `Assets Manager`, then picking it via `Load Audio From Assets`.
+  - Load Audio From Remote → Tone Delay → Audio Patch to Client
+  - Requires uploading an audio asset first in `Assets Manager`, then picking it via `Load Audio From Remote`.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `03_load_audio_from_assets_timeline.json`
-  - Load Audio From Assets（Timeline/Loop/Play）→ Audio Patch to Client
+  - Load Audio From Remote（Timeline/Loop/Play）→ Audio Patch to Client
   - Shows the new clip Timeline (2 cursors + playhead) + Loop + Play(Pause) + Reverse + Seek controls.
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
@@ -34,7 +34,7 @@ How to import:
   - 通过 `Audio Patch to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `08_midi_control_audio_clip_range.json`
-  - MIDI → (Start/End Sec) → Load Audio From Assets → Tone Delay
+  - MIDI → (Start/End Sec) → Load Audio From Remote → Tone Delay
   - 演示 `startSec/endSec` 端口可接 MIDI 数字口（manager-only MIDI → override bridge）。
 
 - `09_midi_select_waveform_tone_osc.json`
@@ -44,11 +44,11 @@ How to import:
 ## Media (Graph-driven Patch via Image/Video to Client)
 
 - `04_media_image_show.json`
-  - Load Image From Assets → Image to Client
+  - Load Image From Remote → Image to Client
   - 通过 `Image to Client(Deploy) → Client(In)` 指定播放目标。
 
 - `05_media_video_play.json`
-  - Load Video From Assets（Timeline/Loop/Play/Reverse/Seek）→ Video to Client
+  - Load Video From Remote（Timeline/Loop/Play/Reverse/Seek）→ Video to Client
   - 通过 `Video to Client(Deploy) → Client(In)` 指定播放目标。
 
 ## Synth(Update) (Tone single engine)

@@ -861,17 +861,6 @@
 
     <div class="time-range-row">
       <div class="time-range-kv" aria-hidden="true">
-        <div class="time-range-k">Duration</div>
-        <div class="time-range-v">
-          {#if timeRangeDurationSec !== null}
-            {formatSeconds(timeRangeDurationSec)}s
-          {:else}
-            —
-          {/if}
-        </div>
-      </div>
-
-      <div class="time-range-kv" aria-hidden="true">
         <div class="time-range-k">Start</div>
         <div class="time-range-v">{formatSeconds(timeRangeStartSec)}s</div>
       </div>
@@ -885,6 +874,17 @@
             (end)
           {:else}
             {formatSeconds(timeRangeEndSec)}s
+          {/if}
+        </div>
+      </div>
+
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">Duration</div>
+        <div class="time-range-v">
+          {#if timeRangeDurationSec !== null}
+            {formatSeconds(timeRangeDurationSec)}s
+          {:else}
+            —
           {/if}
         </div>
       </div>
@@ -1213,7 +1213,7 @@
 
   .time-range-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     align-items: end;
   }

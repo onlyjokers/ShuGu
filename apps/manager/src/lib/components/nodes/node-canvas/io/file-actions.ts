@@ -20,6 +20,7 @@ type FileActionsOptions = {
   getImportTemplatesInput: () => HTMLInputElement | null;
   getNodeGroups: () => NodeGroup[];
   appendNodeGroups: (groups: NodeGroup[]) => void;
+  onSelectNodeIds?: (nodeIds: string[]) => void;
   getViewportCenterGraphPos: () => { x: number; y: number };
 };
 
@@ -229,8 +230,15 @@ export function createFileActions(opts: FileActionsOptions) {
     const sourceNodes = Array.isArray(sourceGraph.nodes) ? sourceGraph.nodes : [];
     const sourceConnections = Array.isArray(sourceGraph.connections) ? sourceGraph.connections : [];
 
-    const { dx, dy } = computeTemplateOffset(sourceNodes, anchor);
+    // Compute the import offset from nodes we can actually import. Otherwise a single invalid/outlier node
+    // (unknown type) can skew the bounds and push imported nodes far away from the viewport.
+    const importableNodes = sourceNodes.filter((node) => {
+      const type = String((node as any)?.type ?? '');
+      return Boolean(type && nodeRegistry.get(type));
+    });
+    const { dx, dy } = computeTemplateOffset(importableNodes, anchor);
     const nodeIdMap = new Map<string, string>();
+    const importedNodeIds: string[] = [];
 
     let importedNodes = 0;
     let skippedNodes = 0;
@@ -269,6 +277,7 @@ export function createFileActions(opts: FileActionsOptions) {
       }
 
       if (oldId) nodeIdMap.set(oldId, newId);
+      importedNodeIds.push(newId);
       importedNodes += 1;
     }
 
@@ -300,6 +309,8 @@ export function createFileActions(opts: FileActionsOptions) {
     if (importedGroups.length > 0) opts.appendNodeGroups(importedGroups);
 
     const skippedGroups = Math.max(0, parsedFile.groups.length - importedGroups.length);
+
+    if (importedNodeIds.length > 0) opts.onSelectNodeIds?.(importedNodeIds);
 
     const groupSuffix = parsedFile.groups.length
       ? `\nGroups: ${importedGroups.length} imported, ${skippedGroups} skipped`
@@ -339,6 +350,15 @@ export function createFileActions(opts: FileActionsOptions) {
     }
 
     const created = instantiateMidiBindings(templates, { anchor: opts.getViewportCenterGraphPos() });
+    if (created.length > 0) {
+      const nodeIds = new Set<string>();
+      for (const binding of created) {
+        nodeIds.add(String(binding.midiNodeId));
+        nodeIds.add(String(binding.mapNodeId));
+        nodeIds.add(String(binding.targetNodeId));
+      }
+      opts.onSelectNodeIds?.(Array.from(nodeIds));
+    }
     alert(`Imported ${created.length} template(s).`);
   };
 

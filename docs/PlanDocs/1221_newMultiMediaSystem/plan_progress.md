@@ -180,7 +180,7 @@
     - `p=<sec>`：seek 到指定播放位置（用于 manager timeline playhead / MIDI scrub）
     - reverse 切换时：尽量保持当前位置不突兀跳回片段起点
 
-### ✅ 已完成：Load Video From Assets 的“精细片段控制”落到 client
+### ✅ 已完成：Load Video From Remote 的“精细片段控制”落到 client
 
 - `packages/multimedia-core/src/media-engine.ts`
   - videoState 扩展：`startSec/endSec/cursorSec/reverse` + `playing`
@@ -480,7 +480,7 @@
 
 ---
 
-## 新增节点：Load Audio From Assets（直接从资产库拿 assetRef）
+## 新增节点：Load Audio From Remote（直接从资产库拿 assetRef）
 
 你要求一个节点能直接从 “Assets Manager/资产库” 里选现有音频，不再上传文件，并且点击/选择后直接拿到 `asset:<id>` 引用。
 
@@ -849,13 +849,13 @@
 
 ---
 
-## ✅ Phase 2.6：Load Audio From Assets（Timeline/Loop/Play）+ 取消 Load Media* 节点
+## ✅ Phase 2.6：Load Audio From Remote（Timeline/Loop/Play）+ 取消 Load Media* 节点
 
-你要求「Load Audio From Assets 必须有 Timeline（双游标）+ Loop + Play/Pause，并且 Start/End 可接 MIDI 数字口」。本阶段完成了完整链路：
+你要求「Load Audio From Remote 必须有 Timeline（双游标）+ Loop + Play/Pause，并且 Start/End 可接 MIDI 数字口」。本阶段完成了完整链路：
 
 ### 新增能力
 
-1) **Load Audio From Assets 变为“Audio Clip Ref”**
+1) **Load Audio From Remote 变为“Audio Clip Ref”**
    - `packages/node-core/src/definitions.ts`
      - `load-audio-from-assets` 增加输入：`startSec/endSec/loop/play`
      - 增加配置：`range`（`time-range` 控件，双游标 + Start/End 精确输入）
@@ -900,7 +900,7 @@
 
 1) **Timeline/Loop/Play 基础验证**
    - 导入：`docs/PlanDocs/1221_newMultiMediaSystem/templates/03_load_audio_from_assets_timeline.json`
-   - Assets Manager 先上传音频 → Load Audio From Assets 选择它
+   - Assets Manager 先上传音频 → Load Audio From Remote 选择它
    - 拖动 Timeline 双游标（或输入 Start/End 秒）
    - 切换 `Loop` / `Play`：client 端应立即反映（Play=false 暂停，true 恢复）
 

@@ -956,9 +956,7 @@
     const sdk = getSDK();
     if (!sdk) return;
 
-    const targets = resolvePatchTargetClientIds();
-    const targetsKey = targets.join('|');
-
+    let targets = resolvePatchTargetClientIds();
     if (targets.length === 0) {
       if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
       return;
@@ -971,6 +969,27 @@
       nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
       return;
     }
+
+    const localOnlyNodeTypes = new Set([
+      'load-audio-from-local',
+      'load-image-from-local',
+      'load-video-from-local',
+    ]);
+    const isLocalOnlyPatch = (payload?.graph?.nodes ?? []).some((n: any) =>
+      localOnlyNodeTypes.has(String(n?.type ?? ''))
+    );
+
+    if (isLocalOnlyPatch) {
+      const localTargets = targets.filter((id) => isLocalDisplayTarget(id));
+      if (localTargets.length === 0) {
+        nodeEngine.lastError.set('Load * From Local(Display only) requires the local Display target.');
+        stopAllDeployedPatches();
+        return;
+      }
+      targets = localTargets;
+    }
+
+    const targetsKey = targets.join('|');
 
     const topologySignature = computeTopologySignature(payload.graph ?? {});
     const patchId = String(payload?.meta?.loopId ?? '');
@@ -1848,6 +1867,16 @@
     getImportTemplatesInput: () => importTemplatesInputEl,
     getNodeGroups: () => get(groupController.nodeGroups),
     appendNodeGroups: (groups) => groupController.appendGroups(groups),
+    onSelectNodeIds: (nodeIds) => {
+      const ids = (nodeIds ?? []).map((id) => String(id)).filter(Boolean);
+      if (ids.length === 0) return;
+      groupController.clearSelection();
+      setSelectedNode('');
+      groupController.groupSelectionNodeIds.set(new Set(ids));
+      groupController.scheduleHighlight();
+      requestFramesUpdate();
+      minimapController?.requestUpdate();
+    },
     getViewportCenterGraphPos: viewportCenterGraphPos,
   });
 

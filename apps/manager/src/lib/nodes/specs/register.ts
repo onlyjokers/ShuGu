@@ -1034,7 +1034,7 @@ registerDefaultNodeDefinitions(nodeRegistry, {
 if (!nodeRegistry.get('load-audio-from-assets')) {
   nodeRegistry.register({
     type: 'load-audio-from-assets',
-    label: 'Load Audio From Assets',
+    label: 'Load Audio From Remote',
     category: 'Assets',
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -1085,7 +1085,7 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
 if (!nodeRegistry.get('load-image-from-assets')) {
   nodeRegistry.register({
     type: 'load-image-from-assets',
-    label: 'Load Image From Assets',
+    label: 'Load Image From Remote',
     category: 'Assets',
     inputs: [],
     outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
@@ -1122,7 +1122,7 @@ if (!nodeRegistry.get('load-image-from-assets')) {
 if (!nodeRegistry.get('load-video-from-assets')) {
   nodeRegistry.register({
     type: 'load-video-from-assets',
-    label: 'Load Video From Assets',
+    label: 'Load Video From Remote',
     category: 'Assets',
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -1203,6 +1203,179 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       return {
         ref: assetId
           ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${fitParam}`
+          : '',
+        ended: false,
+      };
+    },
+  });
+}
+
+if (!nodeRegistry.get('load-audio-from-local')) {
+  nodeRegistry.register({
+    type: 'load-audio-from-local',
+    label: 'Load Audio From Local(Display only)',
+    category: 'Assets',
+    inputs: [
+      { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+    ],
+    outputs: [
+      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
+    configSchema: [
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+    ],
+    process: (inputs) => {
+      const asset = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+      const playRaw = (inputs as any)?.play;
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      return { ref: asset && play ? 1 : 0, ended: false };
+    },
+  });
+}
+
+if (!nodeRegistry.get('load-image-from-local')) {
+  nodeRegistry.register({
+    type: 'load-image-from-local',
+    label: 'Load Image From Local(Display only)',
+    category: 'Assets',
+    inputs: [{ id: 'asset', label: 'Asset', type: 'string', defaultValue: '' }],
+    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
+    configSchema: [
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
+    ],
+    process: (inputs, config) => {
+      const baseUrl = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
+      if (!baseUrl) return { ref: '' };
+      if (!fitHash) return { ref: baseUrl };
+      const hashIndex = baseUrl.indexOf('#');
+      if (hashIndex < 0) return { ref: `${baseUrl}${fitHash}` };
+      const withoutHash = baseUrl.slice(0, hashIndex);
+      const params = new URLSearchParams(baseUrl.slice(hashIndex + 1));
+      params.set('fit', fit);
+      return { ref: `${withoutHash}#${params.toString()}` };
+    },
+  });
+}
+
+if (!nodeRegistry.get('load-video-from-local')) {
+  nodeRegistry.register({
+    type: 'load-video-from-local',
+    label: 'Load Video From Local(Display only)',
+    category: 'Assets',
+    inputs: [
+      { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
+    ],
+    outputs: [
+      { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
+    configSchema: [
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
+    ],
+    process: (inputs, config, context) => {
+      const assetUrl = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+
+      const startSec =
+        typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
+          ? Number((inputs as any).startSec)
+          : 0;
+      const endSec =
+        typeof (inputs as any)?.endSec === 'number' && Number.isFinite((inputs as any).endSec)
+          ? Number((inputs as any).endSec)
+          : -1;
+      const cursorSec =
+        typeof (inputs as any)?.cursorSec === 'number' && Number.isFinite((inputs as any).cursorSec)
+          ? Number((inputs as any).cursorSec)
+          : -1;
+
+      const loopRaw = (inputs as any)?.loop;
+      const playRaw = (inputs as any)?.play;
+      const reverseRaw = (inputs as any)?.reverse;
+      const mutedRaw = (inputs as any)?.muted;
+      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+
+      const startClamped = Math.max(0, startSec);
+      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+
+      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+      const positionParam =
+        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
+      const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+      const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
+
+      const baseUrl = (() => {
+        if (!assetUrl) return '';
+        const hashIndex = assetUrl.indexOf('#');
+        return hashIndex >= 0 ? assetUrl.slice(0, hashIndex) : assetUrl;
+      })();
+
+      return {
+        ref: baseUrl
+          ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}${fitParam}`
           : '',
         ended: false,
       };

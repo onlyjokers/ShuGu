@@ -74,8 +74,11 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createToneGranularNode());
     // Media playback helpers.
     registry.register(createLoadAudioFromAssetsNode());
+    registry.register(createLoadAudioFromLocalNode());
     registry.register(createLoadImageFromAssetsNode());
+    registry.register(createLoadImageFromLocalNode());
     registry.register(createLoadVideoFromAssetsNode());
+    registry.register(createLoadVideoFromLocalNode());
     registry.register(createPlayMediaNode());
     // Patch root sinks (Max/MSP style).
     registry.register(createAudioOutNode());
@@ -89,7 +92,7 @@ export function registerDefaultNodeDefinitions(registry, deps) {
 function createLoadAudioFromAssetsNode() {
     return {
         type: 'load-audio-from-assets',
-        label: 'Load Audio From Assets',
+        label: 'Load Audio From Remote',
         category: 'Assets',
         inputs: [
             { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -143,10 +146,60 @@ function createLoadAudioFromAssetsNode() {
         },
     };
 }
+function createLoadAudioFromLocalNode() {
+    return {
+        type: 'load-audio-from-local',
+        label: 'Load Audio From Local(Display only)',
+        category: 'Assets',
+        inputs: [
+            { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+            { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+            { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+            {
+                id: 'cursorSec',
+                label: 'Cursor (s)',
+                type: 'number',
+                defaultValue: -1,
+                min: -1,
+                step: 0.01,
+            },
+            { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+            { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+            { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { id: 'bus', label: 'Bus', type: 'string' },
+        ],
+        outputs: [
+            { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+            { id: 'ended', label: 'Ended', type: 'boolean' },
+        ],
+        configSchema: [
+            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+            {
+                key: 'timeline',
+                label: 'Timeline',
+                type: 'time-range',
+                defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+                min: 0,
+                step: 0.01,
+            },
+        ],
+        process: (inputs) => {
+            const asset = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+            const playRaw = inputs.play;
+            const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+            // Client runtime may override this for real playback. Manager-side stays as a simple gate.
+            return { ref: asset && play ? 1 : 0, ended: false };
+        },
+    };
+}
 function createLoadImageFromAssetsNode() {
     return {
         type: 'load-image-from-assets',
-        label: 'Load Image From Assets',
+        label: 'Load Image From Remote',
         category: 'Assets',
         inputs: [],
         outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
@@ -179,11 +232,50 @@ function createLoadImageFromAssetsNode() {
         },
     };
 }
+function createLoadImageFromLocalNode() {
+    return {
+        type: 'load-image-from-local',
+        label: 'Load Image From Local(Display only)',
+        category: 'Assets',
+        inputs: [{ id: 'asset', label: 'Asset', type: 'string', defaultValue: '' }],
+        outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
+        configSchema: [
+            {
+                key: 'fit',
+                label: 'Fit',
+                type: 'select',
+                defaultValue: 'contain',
+                options: [
+                    { value: 'contain', label: 'Contain' },
+                    { value: 'cover', label: 'Cover' },
+                    { value: 'fill', label: 'Fill' },
+                ],
+            },
+        ],
+        process: (inputs, config) => {
+            const baseUrl = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+            const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+            const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+            const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
+            if (!baseUrl)
+                return { ref: '' };
+            if (!fitHash)
+                return { ref: baseUrl };
+            const hashIndex = baseUrl.indexOf('#');
+            if (hashIndex < 0)
+                return { ref: `${baseUrl}${fitHash}` };
+            const withoutHash = baseUrl.slice(0, hashIndex);
+            const params = new URLSearchParams(baseUrl.slice(hashIndex + 1));
+            params.set('fit', fit);
+            return { ref: `${withoutHash}#${params.toString()}` };
+        },
+    };
+}
 const loadVideoTimelineState = new Map();
 function createLoadVideoFromAssetsNode() {
     return {
         type: 'load-video-from-assets',
-        label: 'Load Video From Assets',
+        label: 'Load Video From Remote',
         category: 'Assets',
         inputs: [
             { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -274,6 +366,164 @@ function createLoadVideoFromAssetsNode() {
             const qSec = (value) => Math.round(value * 100) / 100;
             const signature = [
                 assetId,
+                qSec(startClamped),
+                qSec(endClamped),
+                qSec(cursorForPlayback ?? -1),
+                loop ? 1 : 0,
+                reverse ? 1 : 0,
+            ].join('|');
+            const prevState = loadVideoTimelineState.get(context.nodeId);
+            const state = prevState ?? {
+                signature: '',
+                lastPlay: false,
+                accumulatedMs: 0,
+                ended: false,
+                endedPulsePending: false,
+            };
+            const settingsChanged = signature !== state.signature;
+            if (settingsChanged) {
+                state.signature = signature;
+                state.accumulatedMs = 0;
+                state.ended = false;
+                state.endedPulsePending = false;
+            }
+            const playActive = play;
+            const playRising = playActive && !state.lastPlay;
+            if (state.ended && playRising) {
+                state.accumulatedMs = 0;
+                state.ended = false;
+                state.endedPulsePending = false;
+            }
+            let durationSec = null;
+            if (!loop) {
+                if (reverse) {
+                    const startPos = cursorForPlayback ?? (endClamped >= 0 ? endClamped : startClamped);
+                    durationSec = Math.max(0, startPos - startClamped);
+                }
+                else if (endClamped >= 0) {
+                    const startPos = cursorForPlayback ?? startClamped;
+                    durationSec = Math.max(0, endClamped - startPos);
+                }
+            }
+            const dtMs = typeof context.deltaTime === 'number' && Number.isFinite(context.deltaTime)
+                ? Math.max(0, context.deltaTime)
+                : 0;
+            if (!loop && durationSec !== null && playActive && !state.ended) {
+                if (durationSec <= 0) {
+                    state.ended = true;
+                    state.endedPulsePending = true;
+                }
+                else if (state.lastPlay) {
+                    state.accumulatedMs += dtMs;
+                    if (state.accumulatedMs >= durationSec * 1000) {
+                        state.accumulatedMs = durationSec * 1000;
+                        state.ended = true;
+                        state.endedPulsePending = true;
+                    }
+                }
+            }
+            const endedPulse = state.endedPulsePending;
+            state.endedPulsePending = false;
+            state.lastPlay = playActive;
+            loadVideoTimelineState.set(context.nodeId, state);
+            return { ref: refWithFit, ended: endedPulse };
+        },
+    };
+}
+function createLoadVideoFromLocalNode() {
+    return {
+        type: 'load-video-from-local',
+        label: 'Load Video From Local(Display only)',
+        category: 'Assets',
+        inputs: [
+            { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+            { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+            { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+            {
+                id: 'cursorSec',
+                label: 'Cursor (s)',
+                type: 'number',
+                defaultValue: -1,
+                min: -1,
+                step: 0.01,
+            },
+            { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+            { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+            { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
+        ],
+        outputs: [
+            { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
+            { id: 'ended', label: 'Ended', type: 'boolean' },
+        ],
+        configSchema: [
+            {
+                key: 'timeline',
+                label: 'Timeline',
+                type: 'time-range',
+                defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+                min: 0,
+                step: 0.01,
+            },
+            {
+                key: 'fit',
+                label: 'Fit',
+                type: 'select',
+                defaultValue: 'contain',
+                options: [
+                    { value: 'contain', label: 'Contain' },
+                    { value: 'cover', label: 'Cover' },
+                    { value: 'fill', label: 'Fill' },
+                ],
+            },
+        ],
+        process: (inputs, config, context) => {
+            const assetUrl = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+            const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+            const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+            const startSecRaw = inputs.startSec;
+            const endSecRaw = inputs.endSec;
+            const cursorSecRaw = inputs.cursorSec;
+            const startSec = typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
+            const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
+            const cursorSec = typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
+            const loopRaw = inputs.loop;
+            const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+            const playRaw = inputs.play;
+            const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+            const reverseRaw = inputs.reverse;
+            const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+            const mutedRaw = inputs.muted;
+            const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+            const startClamped = Math.max(0, startSec);
+            const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+            const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+            const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+            const cursorForPlayback = cursorClamped >= 0
+                ? endClamped >= 0
+                    ? Math.min(endClamped, cursorClamped)
+                    : cursorClamped
+                : null;
+            const positionParam = cursorForPlayback !== null ? `&p=${cursorForPlayback}` : '';
+            const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+            const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
+            const baseUrl = (() => {
+                if (!assetUrl)
+                    return '';
+                const hashIndex = assetUrl.indexOf('#');
+                return hashIndex >= 0 ? assetUrl.slice(0, hashIndex) : assetUrl;
+            })();
+            const refBase = baseUrl
+                ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`
+                : '';
+            const refWithFit = fitParam ? `${refBase}${fitParam}` : refBase;
+            if (!baseUrl) {
+                loadVideoTimelineState.delete(context.nodeId);
+                return { ref: '', ended: false };
+            }
+            const qSec = (value) => Math.round(value * 100) / 100;
+            const signature = [
+                baseUrl,
                 qSec(startClamped),
                 qSec(endClamped),
                 qSec(cursorForPlayback ?? -1),
