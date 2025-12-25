@@ -5,7 +5,7 @@
  * URLs can be raw or `asset:` refs; callers can inject a resolver.
  */
 
-export type MediaFit = 'contain' | 'cover' | 'fill';
+export type MediaFit = 'contain' | 'fit-screen' | 'cover' | 'fill';
 
 export type VideoState = {
   url: string | null;
@@ -80,6 +80,8 @@ export class MediaEngine {
 
   private coerceFit(raw: unknown): MediaFit {
     const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (normalized === 'fit-screen' || normalized === 'fitscreen' || normalized === 'fullscreen')
+      return 'fit-screen';
     if (normalized === 'cover') return 'cover';
     if (normalized === 'fill' || normalized === 'stretch') return 'fill';
     return 'contain';

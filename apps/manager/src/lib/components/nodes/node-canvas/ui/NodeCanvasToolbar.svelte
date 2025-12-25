@@ -7,11 +7,11 @@
   import {
     nodeGraphEdgeShadows,
     nodeGraphLiveValues,
-    nodeGraphPerfOverlay,
+    nodeGraphPerfConsole,
     nodeGraphFlags,
     setEdgeShadows,
     setLiveValues,
-    setPerfOverlay,
+    setPerfConsole,
   } from '$lib/features/node-graph-flags';
 
   export let isRunning = false;
@@ -144,9 +144,9 @@
               <button
                 type="button"
                 class="toolbar-menu-item"
-                on:click={() => setPerfOverlay(!$nodeGraphPerfOverlay)}
+                on:click={() => setPerfConsole(!$nodeGraphPerfConsole)}
               >
-                Perf overlay: {$nodeGraphPerfOverlay ? 'ON' : 'OFF'}
+                Perf console: {$nodeGraphPerfConsole ? 'ON' : 'OFF'}
               </button>
               <button
                 type="button"

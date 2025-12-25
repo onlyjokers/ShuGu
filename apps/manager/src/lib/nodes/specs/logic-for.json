@@ -1,13 +1,19 @@
 {
-  "__purpose": "Manager node spec for logic for (emits an integer index from start..end, advancing one step per tick).",
+  "__purpose": "Manager node spec for logic for (emits an integer index from start..end when triggered; optional wait between steps).",
   "type": "logic-for",
   "label": "for",
   "category": "Logic",
   "inputs": [
-    { "id": "start", "label": "start", "type": "number", "defaultValue": 1, "min": 1, "step": 1 },
-    { "id": "end", "label": "end", "type": "number", "defaultValue": 1, "min": 1, "step": 1 }
+    { "id": "run", "label": "start", "type": "boolean", "defaultValue": false },
+    { "id": "start", "label": "from", "type": "number", "defaultValue": 1, "min": 1, "step": 1 },
+    { "id": "end", "label": "to", "type": "number", "defaultValue": 1, "min": 1, "step": 1 },
+    { "id": "wait", "label": "wait (ms)", "type": "number", "defaultValue": 0, "min": 0, "step": 10 }
   ],
-  "outputs": [{ "id": "index", "label": "index", "type": "number" }],
+  "outputs": [
+    { "id": "index", "label": "index", "type": "number" },
+    { "id": "running", "label": "running", "type": "boolean" },
+    { "id": "loopEnd", "label": "loop end", "type": "boolean" }
+  ],
   "configSchema": [],
   "runtime": { "kind": "logic-for" }
 }

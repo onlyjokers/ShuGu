@@ -138,6 +138,8 @@ function parseMediaClipParams(raw: string): MediaClipParams {
   const fit = (() => {
     if (fitRaw === null) return null;
     const normalized = fitRaw.trim().toLowerCase();
+    if (normalized === 'fit-screen' || normalized === 'fitscreen' || normalized === 'fullscreen')
+      return 'fit-screen';
     if (normalized === 'cover') return 'cover';
     if (normalized === 'fill' || normalized === 'stretch') return 'fill';
     if (normalized === 'contain') return 'contain';

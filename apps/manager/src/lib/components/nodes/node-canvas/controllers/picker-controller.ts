@@ -54,6 +54,9 @@ const writeUsageMap = (next: UsageMap) => {
   }
 };
 
+const isHiddenFromPicker = (type: string): boolean =>
+  type === 'group-activate' || type === 'group-bridge';
+
 export function createPickerController(opts: PickerControllerOptions) {
   const isOpen = writable(false);
   const mode = writable<PickerMode>('add');
@@ -88,6 +91,7 @@ export function createPickerController(opts: PickerControllerOptions) {
       const neededSide: 'input' | 'output' = initial.side === 'output' ? 'input' : 'output';
 
       for (const def of opts.nodeRegistry.list()) {
+        if (isHiddenFromPicker(String(def.type))) continue;
         const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
         const match = opts.bestMatchingPort(ports, requiredType, neededSide);
         if (!match) continue;
@@ -106,6 +110,7 @@ export function createPickerController(opts: PickerControllerOptions) {
       }
     } else {
       for (const def of opts.nodeRegistry.list()) {
+        if (isHiddenFromPicker(String(def.type))) continue;
         addItem({ type: def.type, label: def.label, category: def.category });
       }
     }

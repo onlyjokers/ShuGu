@@ -19,8 +19,8 @@
   import NodeCanvasMinimap from './node-canvas/ui/NodeCanvasMinimap.svelte';
   import NodeCanvasToolbar from './node-canvas/ui/NodeCanvasToolbar.svelte';
   import NodePickerOverlay from './node-canvas/ui/NodePickerOverlay.svelte';
-  import PerformanceDebugOverlay from './node-canvas/ui/PerformanceDebugOverlay.svelte';
-  import { nodeGraphPerfOverlay, nodeGraphEdgeShadows } from '$lib/features/node-graph-flags';
+  import PerformanceDebugConsole from './node-canvas/ui/PerformanceDebugConsole.svelte';
+  import { nodeGraphPerfConsole, nodeGraphEdgeShadows } from '$lib/features/node-graph-flags';
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
@@ -65,6 +65,8 @@
   let tickUnsub: (() => void) | null = null;
   let runningUnsub: (() => void) | null = null;
   let groupDisabledUnsub: (() => void) | null = null;
+  let groupNodesUnsub: (() => void) | null = null;
+  let groupFramesUnsub: (() => void) | null = null;
   let keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   let wheelHandler: ((event: WheelEvent) => void) | null = null;
   let contextMenuHandler: ((event: MouseEvent) => void) | null = null;
@@ -97,6 +99,9 @@
     fuzzy: new ClassicPreset.Socket('fuzzy'),
     any: new ClassicPreset.Socket('any'),
   } as const;
+
+  const GROUP_ACTIVATE_NODE_TYPE = 'group-activate';
+  const GROUP_BRIDGE_NODE_TYPE = 'group-bridge';
 
   const nodeMap = new Map<string, any>();
   const connectionMap = new Map<string, any>();
@@ -1479,6 +1484,224 @@
 
   const generateId = () => `node-${crypto.randomUUID?.() ?? Date.now()}`;
 
+  const isGroupPortNodeType = (type: string) =>
+    type === GROUP_ACTIVATE_NODE_TYPE || type === GROUP_BRIDGE_NODE_TYPE;
+
+  const groupIdFromNode = (node: NodeInstance): string => {
+    const raw = (node.config as any)?.groupId;
+    return typeof raw === 'string' ? raw : raw ? String(raw) : '';
+  };
+
+  const buildGroupPortIndex = (state: GraphState) => {
+    const byGroupId = new Map<string, { activateId?: string; bridgeId?: string }>();
+
+    for (const node of state.nodes ?? []) {
+      const type = String(node.type ?? '');
+      if (!isGroupPortNodeType(type)) continue;
+      const groupId = groupIdFromNode(node);
+      if (!groupId) continue;
+
+      const entry = byGroupId.get(groupId) ?? {};
+      if (type === GROUP_ACTIVATE_NODE_TYPE && !entry.activateId) entry.activateId = String(node.id);
+      if (type === GROUP_BRIDGE_NODE_TYPE && !entry.bridgeId) entry.bridgeId = String(node.id);
+      byGroupId.set(groupId, entry);
+    }
+
+    return byGroupId;
+  };
+
+  const computeGroupNodeBounds = (group: any, state: GraphState) => {
+    const ids = Array.isArray(group?.nodeIds) ? group.nodeIds.map(String).filter(Boolean) : [];
+    if (ids.length === 0) return null;
+
+    const nodeById = new Map((state.nodes ?? []).map((n) => [String(n.id), n]));
+
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const id of ids) {
+      const node = nodeById.get(id);
+      if (!node) continue;
+      const x = Number(node.position?.x ?? 0);
+      const y = Number(node.position?.y ?? 0);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+
+    const ok =
+      Number.isFinite(minX) &&
+      Number.isFinite(maxX) &&
+      Number.isFinite(minY) &&
+      Number.isFinite(maxY);
+    if (!ok) return null;
+
+    return { minX, maxX, minY, maxY, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2 };
+  };
+
+  const addGroupPortNode = (type: string, groupId: string, position: { x: number; y: number }) => {
+    const def = nodeRegistry.get(type);
+    if (!def) return '';
+
+    const config: Record<string, unknown> = {};
+    for (const field of def.configSchema) config[field.key] = field.defaultValue;
+    config.groupId = groupId;
+
+    const newNode: NodeInstance = {
+      id: generateId(),
+      type,
+      position,
+      config,
+      inputValues: {},
+      outputValues: {},
+    };
+
+    nodeEngine.addNode(newNode);
+    return newNode.id;
+  };
+
+  const ensureGroupPortNodes = () => {
+    const groups = get(groupController.nodeGroups);
+    if (groups.length === 0) return;
+
+    const state = nodeEngine.exportGraph();
+    const index = buildGroupPortIndex(state);
+
+    for (const group of groups) {
+      const groupId = String(group?.id ?? '');
+      if (!groupId) continue;
+      const existing = index.get(groupId) ?? {};
+      if (existing.activateId && existing.bridgeId) continue;
+
+      const bounds = computeGroupNodeBounds(group, state);
+      const baseX = bounds ? bounds.centerX : 120 + nodeCount * 10;
+      const baseY = bounds ? bounds.centerY : 120 + nodeCount * 6;
+      const leftX = bounds ? bounds.minX : baseX;
+      const rightX = bounds ? bounds.maxX : baseX;
+
+      if (!existing.activateId) {
+        addGroupPortNode(GROUP_ACTIVATE_NODE_TYPE, groupId, { x: leftX - 140, y: baseY - 20 });
+      }
+      if (!existing.bridgeId) {
+        addGroupPortNode(GROUP_BRIDGE_NODE_TYPE, groupId, { x: rightX + 140, y: baseY - 20 });
+      }
+    }
+  };
+
+  let groupPortAlignRaf = 0;
+  const scheduleGroupPortAlign = () => {
+    if (typeof requestAnimationFrame === 'undefined') return;
+    if (groupPortAlignRaf) return;
+    groupPortAlignRaf = requestAnimationFrame(() => {
+      groupPortAlignRaf = 0;
+      alignGroupPortNodes();
+    });
+  };
+
+  const alignGroupPortNodes = () => {
+    const frames = get(groupFrames);
+    if (frames.length === 0) return;
+
+    const state = nodeEngine.exportGraph();
+    const index = buildGroupPortIndex(state);
+
+    groupController.beginProgrammaticTranslate();
+    try {
+      for (const frame of frames) {
+        const groupId = String(frame.group?.id ?? '');
+        if (!groupId) continue;
+        const ports = index.get(groupId);
+        if (!ports) continue;
+
+        const centerY = frame.top + frame.height / 2;
+
+        if (ports.activateId) {
+          const nodeId = String(ports.activateId);
+          const b = viewAdapter.getNodeBounds(nodeId);
+          const w = b ? b.right - b.left : 72;
+          const h = b ? b.bottom - b.top : 40;
+          const desiredX = frame.left - w / 2;
+          const desiredY = centerY - h / 2;
+          const cur = viewAdapter.getNodePosition(nodeId);
+          if (!cur || Math.abs(cur.x - desiredX) > 1 || Math.abs(cur.y - desiredY) > 1) {
+            viewAdapter.setNodePosition(nodeId, desiredX, desiredY);
+          }
+        }
+
+        if (ports.bridgeId) {
+          const nodeId = String(ports.bridgeId);
+          const b = viewAdapter.getNodeBounds(nodeId);
+          const w = b ? b.right - b.left : 92;
+          const h = b ? b.bottom - b.top : 44;
+          const desiredX = frame.left + frame.width - w / 2;
+          const desiredY = centerY - h / 2;
+          const cur = viewAdapter.getNodePosition(nodeId);
+          if (!cur || Math.abs(cur.x - desiredX) > 1 || Math.abs(cur.y - desiredY) > 1) {
+            viewAdapter.setNodePosition(nodeId, desiredX, desiredY);
+          }
+        }
+      }
+    } finally {
+      groupController.endProgrammaticTranslate();
+    }
+  };
+
+  const updateGroupRuntimeActives = () => {
+    const groups = get(groupController.nodeGroups);
+    if (groups.length === 0) return;
+
+    const state = nodeEngine.exportGraph();
+    const activeByGroupId = new Map<string, boolean>();
+
+    for (const node of state.nodes ?? []) {
+      if (String(node.type) !== GROUP_ACTIVATE_NODE_TYPE) continue;
+      const groupId = groupIdFromNode(node);
+      if (!groupId) continue;
+      const raw = (node.outputValues as any)?.active;
+      activeByGroupId.set(groupId, typeof raw === 'boolean' ? raw : true);
+    }
+
+    groupController.setRuntimeActiveByGroupId(activeByGroupId);
+  };
+
+  const removeGroupPortNodesForGroupIds = (groupIds: string[]) => {
+    const ids = new Set((groupIds ?? []).map((id) => String(id)).filter(Boolean));
+    if (ids.size === 0) return;
+
+    const state = nodeEngine.exportGraph();
+    for (const node of state.nodes ?? []) {
+      const type = String(node.type ?? '');
+      if (!isGroupPortNodeType(type)) continue;
+      const groupId = groupIdFromNode(node);
+      if (!groupId || !ids.has(groupId)) continue;
+      nodeEngine.removeNode(String(node.id));
+    }
+  };
+
+  const disassembleGroupAndPorts = (groupId: string) => {
+    const rootId = String(groupId ?? '');
+    if (!rootId) return;
+
+    const groupsSnapshot = get(groupController.nodeGroups);
+    const toRemove = new Set<string>();
+    const stack = [rootId];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (!id || toRemove.has(id)) continue;
+      toRemove.add(id);
+      for (const g of groupsSnapshot) {
+        if (String(g.parentId ?? '') === id) stack.push(String(g.id));
+      }
+    }
+
+    groupController.disassembleGroup(rootId);
+    removeGroupPortNodesForGroupIds(Array.from(toRemove));
+  };
+
   function computeGraphPosition(clientX: number, clientY: number) {
     const area = areaPlugin?.area;
     const holder: HTMLElement | null = area?.content?.holder ?? null;
@@ -1910,6 +2133,7 @@
     paramsUnsub = parameterRegistry.subscribe(() => refreshNumberParams());
 
     tickUnsub = nodeEngine.tickTime.subscribe(() => {
+      updateGroupRuntimeActives();
       sendMidiBridgeOverrides();
       sendMidiLoopBridgeOverrides();
 
@@ -2068,6 +2292,15 @@
       // Keep MIDI bridge wiring responsive (MIDI nodes are excluded from deploy topology).
       const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
       if (first) syncMidiBridgeRoutes(first.patchId, first.nodeIds);
+    });
+
+    groupNodesUnsub = groupController.nodeGroups.subscribe(() => {
+      ensureGroupPortNodes();
+      scheduleGroupPortAlign();
+    });
+
+    groupFramesUnsub = groupFrames.subscribe(() => {
+      scheduleGroupPortAlign();
     });
 
     let lastClientKey = '';
@@ -2394,6 +2627,8 @@
 
   onDestroy(() => {
     graphUnsub?.();
+    groupNodesUnsub?.();
+    groupFramesUnsub?.();
     paramsUnsub?.();
     tickUnsub?.();
     runningUnsub?.();
@@ -2409,6 +2644,7 @@
     loopController?.destroy();
     groupController.destroy();
     minimapController.destroy();
+    if (groupPortAlignRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(groupPortAlignRaf);
     if (wheelHandler) window.removeEventListener('wheel', wheelHandler, { capture: true } as any);
     if (contextMenuHandler)
       container?.removeEventListener('contextmenu', contextMenuHandler, { capture: true } as any);
@@ -2518,9 +2754,9 @@
   </svelte:fragment>
 
   <svelte:fragment slot="overlays">
-    {#if $nodeGraphPerfOverlay}
-      <PerformanceDebugOverlay
-        visible={true}
+    {#if $nodeGraphPerfConsole}
+      <PerformanceDebugConsole
+        enabled={true}
         {nodeCount}
         connectionCount={graphState.connections?.length ?? 0}
         rendererType="rete"
@@ -2557,7 +2793,7 @@
       toast={$groupEditToast}
       onToggleDisabled={groupController.toggleGroupDisabled}
       onToggleEditMode={groupController.toggleGroupEditMode}
-      onDisassemble={groupController.disassembleGroup}
+      onDisassemble={disassembleGroupAndPorts}
       onRename={groupController.renameGroup}
       onHeaderPointerDown={startGroupHeaderDrag}
     />

@@ -1,0 +1,14 @@
+{
+  "__purpose": "Manager-only node: attach to a Group frame as a boundary bridge (in:any -> out:any + bool:boolean) so internal signals can exit the group.",
+  "type": "group-bridge",
+  "label": "Group Bridge",
+  "category": "Internal",
+  "inputs": [{ "id": "in", "label": "In", "type": "any" }],
+  "outputs": [
+    { "id": "out", "label": "Out", "type": "any" },
+    { "id": "bool", "label": "Bool", "type": "boolean" }
+  ],
+  "configSchema": [{ "key": "groupId", "label": "Group ID", "type": "string", "defaultValue": "" }],
+  "runtime": { "kind": "group-bridge" }
+}
+

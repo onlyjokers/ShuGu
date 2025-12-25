@@ -13,6 +13,62 @@ function clampInt(value, fallback, min, max) {
     const next = Math.floor(n);
     return Math.max(min, Math.min(max, next));
 }
+function coerceBoolean(value) {
+    if (typeof value === 'boolean')
+        return value;
+    if (typeof value === 'number')
+        return Number.isFinite(value) ? value >= 0.5 : false;
+    if (typeof value === 'string') {
+        const s = value.trim().toLowerCase();
+        if (!s)
+            return false;
+        if (s === 'true' || s === '1' || s === 'yes' || s === 'y')
+            return true;
+        if (s === 'false' || s === '0' || s === 'no' || s === 'n')
+            return false;
+        return true;
+    }
+    return false;
+}
+function formatAnyPreview(value) {
+    const MAX_LEN = 160;
+    const clamp = (raw) => {
+        const singleLine = raw.replace(/\s+/g, ' ').trim();
+        if (!singleLine)
+            return '--';
+        if (singleLine.length <= MAX_LEN)
+            return singleLine;
+        return `${singleLine.slice(0, MAX_LEN - 1)}…`;
+    };
+    if (value === undefined)
+        return '--';
+    if (value === null)
+        return 'null';
+    if (typeof value === 'boolean')
+        return value ? 'true' : 'false';
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value))
+            return '--';
+        const rounded = Math.round(value * 1000) / 1000;
+        return clamp(String(rounded));
+    }
+    if (typeof value === 'string')
+        return clamp(value);
+    try {
+        const json = JSON.stringify(value);
+        if (typeof json === 'string')
+            return clamp(json);
+    }
+    catch {
+        // ignore
+    }
+    try {
+        return clamp(String(value));
+    }
+    catch {
+        return '--';
+    }
+}
 function buildStableRandomOrder(nodeId, clients) {
     const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
     keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
@@ -57,9 +113,11 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createLogicMultipleNode());
     registry.register(createLogicSubtractNode());
     registry.register(createLogicDivideNode());
+    registry.register(createLogicNotNode());
     registry.register(createLogicIfNode());
     registry.register(createLogicForNode());
     registry.register(createLogicSleepNode());
+    registry.register(createShowAnythingNode());
     registry.register(createNumberNode());
     registry.register(createStringNode());
     registry.register(createBoolNode());
@@ -320,6 +378,7 @@ function createLoadVideoFromAssetsNode() {
                 defaultValue: 'contain',
                 options: [
                     { value: 'contain', label: 'Contain' },
+                    { value: 'fit-screen', label: 'Fit Screen' },
                     { value: 'cover', label: 'Cover' },
                     { value: 'fill', label: 'Fill' },
                 ],
@@ -328,7 +387,7 @@ function createLoadVideoFromAssetsNode() {
         process: (inputs, config, context) => {
             const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
             const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
-            const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+            const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
             const startSecRaw = inputs.startSec;
             const endSecRaw = inputs.endSec;
             const cursorSecRaw = inputs.cursorSec;
@@ -472,6 +531,7 @@ function createLoadVideoFromLocalNode() {
                 defaultValue: 'contain',
                 options: [
                     { value: 'contain', label: 'Contain' },
+                    { value: 'fit-screen', label: 'Fit Screen' },
                     { value: 'cover', label: 'Cover' },
                     { value: 'fill', label: 'Fill' },
                 ],
@@ -480,7 +540,7 @@ function createLoadVideoFromLocalNode() {
         process: (inputs, config, context) => {
             const assetUrl = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
             const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
-            const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+            const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
             const startSecRaw = inputs.startSec;
             const endSecRaw = inputs.endSec;
             const cursorSecRaw = inputs.cursorSec;
@@ -1120,35 +1180,39 @@ function createLogicDivideNode() {
         },
     };
 }
+// Logic: invert a boolean (NOT gate).
+function createLogicNotNode() {
+    return {
+        type: 'logic-not',
+        label: 'Not',
+        category: 'Logic',
+        inputs: [{ id: 'in', label: 'In', type: 'boolean', defaultValue: false }],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: !coerceBoolean(inputs.in) }),
+    };
+}
 function createLogicIfNode() {
     return {
         type: 'logic-if',
         label: 'if',
         category: 'Logic',
         inputs: [
-            { id: 'input', label: 'input', type: 'number', defaultValue: 0 },
-            { id: 'condition', label: 'condition', type: 'number', defaultValue: 0 },
+            { id: 'input', label: 'input', type: 'boolean', defaultValue: false },
+            { id: 'condition', label: 'condition', type: 'boolean', defaultValue: false },
         ],
         outputs: [
-            { id: 'false', label: 'false', type: 'number' },
-            { id: 'true', label: 'true', type: 'number' },
+            { id: 'false', label: 'false', type: 'boolean' },
+            { id: 'true', label: 'true', type: 'boolean' },
         ],
         configSchema: [],
         process: (inputs) => {
-            const inputRaw = inputs.input;
-            const conditionRaw = inputs.condition;
-            const inputValue = typeof inputRaw === 'number' && Number.isFinite(inputRaw)
-                ? inputRaw
-                : Number(inputRaw ?? 0);
-            const conditionValue = typeof conditionRaw === 'number' && Number.isFinite(conditionRaw)
-                ? conditionRaw
-                : Number(conditionRaw ?? 0);
-            const value = Number.isFinite(inputValue) ? inputValue : 0;
-            const condition = Number.isFinite(conditionValue) ? conditionValue : 0;
-            // Treat condition as a numeric boolean (>= 0.5 is true).
-            if (condition >= 0.5)
-                return { true: value };
-            return { false: value };
+            const value = coerceBoolean(inputs.input);
+            const condition = coerceBoolean(inputs.condition);
+            return {
+                true: condition ? value : false,
+                false: condition ? false : value,
+            };
         },
     };
 }
@@ -1159,14 +1223,22 @@ function createLogicForNode() {
         label: 'for',
         category: 'Logic',
         inputs: [
-            { id: 'start', label: 'start', type: 'number', defaultValue: 1 },
-            { id: 'end', label: 'end', type: 'number', defaultValue: 1 },
+            { id: 'run', label: 'start', type: 'boolean', defaultValue: false },
+            { id: 'start', label: 'from', type: 'number', defaultValue: 1, min: 1, step: 1 },
+            { id: 'end', label: 'to', type: 'number', defaultValue: 1, min: 1, step: 1 },
+            { id: 'wait', label: 'wait (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
         ],
-        outputs: [{ id: 'index', label: 'index', type: 'number' }],
+        outputs: [
+            { id: 'index', label: 'index', type: 'number' },
+            { id: 'running', label: 'running', type: 'boolean' },
+            { id: 'loopEnd', label: 'loop end', type: 'boolean' },
+        ],
         configSchema: [],
         process: (inputs, _config, context) => {
+            const run = coerceBoolean(inputs.run);
             const startRaw = inputs.start;
             const endRaw = inputs.end;
+            const waitRaw = inputs.wait;
             const startValue = typeof startRaw === 'number' && Number.isFinite(startRaw)
                 ? startRaw
                 : Number(startRaw ?? 1);
@@ -1176,17 +1248,51 @@ function createLogicForNode() {
             const clampedStart = Math.max(1, start);
             const clampedEnd = Math.max(clampedStart, end);
             const prev = logicForState.get(context.nodeId);
-            if (!prev || prev.start !== clampedStart || prev.end !== clampedEnd) {
-                const initial = { current: clampedStart, start: clampedStart, end: clampedEnd };
-                const out = initial.current;
-                initial.current = out >= initial.end ? initial.start : out + 1;
-                logicForState.set(context.nodeId, initial);
-                return { index: out };
+            const state = prev ?? {
+                running: false,
+                current: clampedStart,
+                start: clampedStart,
+                end: clampedEnd,
+                nextEmitAt: context.time,
+                lastRunSignal: false,
+            };
+            const waitParsed = typeof waitRaw === 'number' ? waitRaw : Number(waitRaw ?? 0);
+            const waitMs = Number.isFinite(waitParsed) ? Math.max(0, waitParsed) : 0;
+            // Allow editing range while idle; keep running range stable once started.
+            if (!state.running && (state.start !== clampedStart || state.end !== clampedEnd)) {
+                state.start = clampedStart;
+                state.end = clampedEnd;
+                state.current = clampedStart;
             }
-            const out = prev.current;
-            prev.current = out >= prev.end ? prev.start : out + 1;
-            logicForState.set(context.nodeId, prev);
-            return { index: out };
+            const rising = run && !state.lastRunSignal;
+            state.lastRunSignal = run;
+            if (rising && !state.running) {
+                state.running = true;
+                state.start = clampedStart;
+                state.end = clampedEnd;
+                state.current = clampedStart;
+                state.nextEmitAt = context.time;
+            }
+            if (!state.running) {
+                logicForState.set(context.nodeId, state);
+                return { running: false, loopEnd: false };
+            }
+            if (context.time < state.nextEmitAt) {
+                logicForState.set(context.nodeId, state);
+                return { running: true, loopEnd: false };
+            }
+            const out = state.current;
+            const done = out >= state.end;
+            if (done) {
+                state.running = false;
+                state.current = state.start;
+                logicForState.set(context.nodeId, state);
+                return { index: out, running: false, loopEnd: true };
+            }
+            state.current = out + 1;
+            state.nextEmitAt = context.time + waitMs;
+            logicForState.set(context.nodeId, state);
+            return { index: out, running: true, loopEnd: false };
         },
     };
 }
@@ -1221,6 +1327,17 @@ function createLogicSleepNode() {
             logicSleepState.set(context.nodeId, state);
             return { output: state.lastOutput };
         },
+    };
+}
+function createShowAnythingNode() {
+    return {
+        type: 'show-anything',
+        label: 'Show Anything',
+        category: 'Logic',
+        inputs: [{ id: 'in', label: 'In', type: 'any' }],
+        outputs: [{ id: 'value', label: 'Value', type: 'string' }],
+        configSchema: [],
+        process: (inputs) => ({ value: formatAnyPreview(inputs.in) }),
     };
 }
 const TONE_LFO_WAVEFORM_OPTIONS = [
@@ -1372,23 +1489,6 @@ function createStringNode() {
     };
 }
 function createBoolNode() {
-    const coerce = (value) => {
-        if (typeof value === 'boolean')
-            return value;
-        if (typeof value === 'number')
-            return Number.isFinite(value) ? value >= 0.5 : false;
-        if (typeof value === 'string') {
-            const s = value.trim().toLowerCase();
-            if (!s)
-                return false;
-            if (s === 'true' || s === '1' || s === 'yes' || s === 'y')
-                return true;
-            if (s === 'false' || s === '0' || s === 'no' || s === 'n')
-                return false;
-            return true;
-        }
-        return false;
-    };
     return {
         type: 'bool',
         label: 'Bool',
@@ -1398,8 +1498,8 @@ function createBoolNode() {
         configSchema: [{ key: 'value', label: 'Value', type: 'boolean', defaultValue: false }],
         process: (inputs, config) => {
             if (inputs.value !== undefined)
-                return { value: coerce(inputs.value) };
-            return { value: coerce(config.value) };
+                return { value: coerceBoolean(inputs.value) };
+            return { value: coerceBoolean(config.value) };
         },
     };
 }

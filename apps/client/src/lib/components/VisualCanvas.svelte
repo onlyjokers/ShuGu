@@ -235,7 +235,7 @@
     return sourceCanvas;
   }
 
-  type MediaFit = 'contain' | 'cover' | 'fill';
+  type MediaFit = 'contain' | 'fit-screen' | 'cover' | 'fill';
 
   function getFittedDrawParams(
     srcW: number,
@@ -258,7 +258,11 @@
     }
 
     // contain: preserve aspect ratio and don't scale up beyond 1x (real size when possible).
-    const scale = Math.min(1, dstW / srcW, dstH / srcH);
+    // fit-screen: preserve aspect ratio and scale up to fit the screen.
+    const scale =
+      fit === 'fit-screen'
+        ? Math.min(dstW / srcW, dstH / srcH)
+        : Math.min(1, dstW / srcW, dstH / srcH);
     const dw = srcW * scale;
     const dh = srcH * scale;
     const dx = (dstW - dw) / 2;

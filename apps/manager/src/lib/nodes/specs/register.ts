@@ -111,6 +111,8 @@ type NodeRuntime =
   | { kind: 'logic-if' }
   | { kind: 'logic-for' }
   | { kind: 'logic-sleep' }
+  | { kind: 'group-activate' }
+  | { kind: 'group-bridge' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
   | { kind: 'tone-resonator' }
@@ -780,6 +782,36 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         },
       };
     }
+    case 'group-activate': {
+      return {
+        ...base,
+        process: (inputs) => {
+          const raw = (inputs as any).active;
+          const active =
+            typeof raw === 'boolean'
+              ? raw
+              : typeof raw === 'number' && Number.isFinite(raw)
+                ? raw >= 0.5
+                : true;
+          return { active };
+        },
+      };
+    }
+    case 'group-bridge': {
+      return {
+        ...base,
+        process: (inputs) => {
+          const value = (inputs as any).in;
+          const bool =
+            typeof value === 'boolean'
+              ? value
+              : typeof value === 'number' && Number.isFinite(value)
+                ? value >= 0.5
+                : Boolean(value);
+          return { out: value, bool };
+        },
+      };
+    }
     case 'midi-map': {
       return {
         ...base,
@@ -1160,6 +1192,7 @@ if (!nodeRegistry.get('load-video-from-assets')) {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -1168,7 +1201,7 @@ if (!nodeRegistry.get('load-video-from-assets')) {
     process: (inputs, config) => {
       const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
       const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const startSec =
         typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)
           ? Number((inputs as any).startSec)
@@ -1325,6 +1358,7 @@ if (!nodeRegistry.get('load-video-from-local')) {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -1333,7 +1367,7 @@ if (!nodeRegistry.get('load-video-from-local')) {
     process: (inputs, config, context) => {
       const assetUrl = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
       const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
 
       const startSec =
         typeof (inputs as any)?.startSec === 'number' && Number.isFinite((inputs as any).startSec)

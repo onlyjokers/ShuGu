@@ -353,7 +353,7 @@
 
 <div
   bind:this={nodeEl}
-  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
+  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate' ? 'group-port-activate' : ''} {instanceType === 'group-bridge' ? 'group-port-bridge' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"
@@ -530,6 +530,39 @@
     user-select: none;
     line-height: initial;
     position: relative;
+  }
+
+  .node.group-port-activate,
+  .node.group-port-bridge {
+    border-radius: 999px;
+  }
+
+  .node.group-port-activate {
+    min-width: 140px;
+  }
+
+  .node.group-port-bridge {
+    min-width: 160px;
+  }
+
+  .node.group-port-activate .title,
+  .node.group-port-bridge .title {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-bottom: none;
+    text-align: center;
+  }
+
+  .node.group-port-activate .ports,
+  .node.group-port-bridge .ports {
+    padding: 6px 0;
+    gap: 6px;
+  }
+
+  .node.group-port-activate .port-row,
+  .node.group-port-bridge .port-row {
+    padding: 0 10px;
+    gap: 10px;
   }
 
   .title {

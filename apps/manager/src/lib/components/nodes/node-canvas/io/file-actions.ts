@@ -15,6 +15,7 @@ type FileActionsOptions = {
     exportGraph: () => GraphState;
     addNode: (node: NodeInstance) => void;
     addConnection: (connection: Connection) => boolean;
+    updateNodeConfig: (nodeId: string, config: Record<string, unknown>) => void;
   };
   getImportGraphInput: () => HTMLInputElement | null;
   getImportTemplatesInput: () => HTMLInputElement | null;
@@ -97,7 +98,7 @@ function generateId(prefix: string): string {
   return prefix.endsWith(':') ? `${prefix}${token}` : `${prefix}-${token}`;
 }
 
-function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, string>): NodeGroup[] {
+function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, string>) {
   const kept: NodeGroup[] = [];
   for (const group of sourceGroups) {
     const id = String(group.id ?? '');
@@ -112,7 +113,7 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
     kept.push({ id, parentId, name, nodeIds: uniqueNodeIds, disabled: Boolean(group.disabled) });
   }
 
-  if (kept.length === 0) return [];
+  if (kept.length === 0) return { groups: [] as NodeGroup[], groupIdMap: new Map<string, string>() };
 
   const groupIdMap = new Map<string, string>();
   for (const group of kept) groupIdMap.set(String(group.id), generateId('group:'));
@@ -159,7 +160,7 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
     computeUnion(String(g.id));
   }
 
-  return remapped;
+  return { groups: remapped, groupIdMap };
 }
 
 function computeTemplateOffset(nodes: GraphState['nodes'], anchor: { x: number; y: number }) {
@@ -305,7 +306,24 @@ export function createFileActions(opts: FileActionsOptions) {
       else skippedConnections += 1;
     }
 
-    const importedGroups = remapImportedGroups(parsedFile.groups, nodeIdMap);
+    const { groups: importedGroups, groupIdMap } = remapImportedGroups(parsedFile.groups, nodeIdMap);
+
+    // Keep group port nodes (Group Activate / Group Bridge) wired to the remapped group IDs *before* appending
+    // groups, so the auto "ensureGroupPortNodes" hook doesn't create duplicates.
+    if (groupIdMap.size > 0) {
+      for (const node of sourceNodes) {
+        const type = String((node as any)?.type ?? '');
+        if (type !== 'group-activate' && type !== 'group-bridge') continue;
+        const oldNodeId = String((node as any)?.id ?? '');
+        const newNodeId = nodeIdMap.get(oldNodeId);
+        if (!newNodeId) continue;
+        const oldGroupId = String(((node as any)?.config as any)?.groupId ?? '');
+        const nextGroupId = groupIdMap.get(oldGroupId);
+        if (!nextGroupId) continue;
+        opts.nodeEngine.updateNodeConfig(newNodeId, { groupId: nextGroupId });
+      }
+    }
+
     if (importedGroups.length > 0) opts.appendNodeGroups(importedGroups);
 
     const skippedGroups = Math.max(0, parsedFile.groups.length - importedGroups.length);
