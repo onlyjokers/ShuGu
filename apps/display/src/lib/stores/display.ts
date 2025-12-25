@@ -17,7 +17,13 @@
  */
 
 import { writable, derived } from 'svelte/store';
-import { MultimediaCore, toneAudioEngine, type MultimediaCoreState, type MediaEngineState } from '@shugu/multimedia-core';
+import {
+  MultimediaCore,
+  toneAudioEngine,
+  type MultimediaCoreState,
+  type MediaEngineState,
+  type MediaFit,
+} from '@shugu/multimedia-core';
 import type {
   ControlAction,
   ControlPayload,
@@ -51,6 +57,7 @@ type MediaClipParams = {
   reverse: boolean | null;
   cursorSec: number | null;
   sourceNodeId: string | null;
+  fit: MediaFit | null;
 };
 
 function parseMediaClipParams(raw: string): MediaClipParams {
@@ -65,6 +72,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       reverse: null,
       cursorSec: null,
       sourceNodeId: null,
+      fit: null,
     };
   }
 
@@ -79,6 +87,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       reverse: null,
       cursorSec: null,
       sourceNodeId: null,
+      fit: null,
     };
   }
 
@@ -121,9 +130,19 @@ function parseMediaClipParams(raw: string): MediaClipParams {
   const reverseRaw = params.get('rev');
   const cursorRaw = params.get('p');
   const nodeRaw = params.get('node');
+  const fitRaw = params.get('fit');
 
   const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
   const cursorSec = cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0 ? cursorParsed : null;
+
+  const fit = (() => {
+    if (fitRaw === null) return null;
+    const normalized = fitRaw.trim().toLowerCase();
+    if (normalized === 'cover') return 'cover';
+    if (normalized === 'fill' || normalized === 'stretch') return 'fill';
+    if (normalized === 'contain') return 'contain';
+    return null;
+  })();
 
   return {
     baseUrl,
@@ -134,6 +153,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
     reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
     cursorSec,
     sourceNodeId: typeof nodeRaw === 'string' && nodeRaw.trim() ? nodeRaw.trim() : null,
+    fit,
   };
 }
 
@@ -218,12 +238,14 @@ export const videoState = writable<MediaEngineState['video']>({
   endSec: -1,
   cursorSec: -1,
   reverse: false,
+  fit: 'contain',
 });
 
 export const imageState = writable<MediaEngineState['image']>({
   url: null,
   visible: false,
   duration: undefined,
+  fit: 'contain',
 });
 
 export const screenOverlay = writable<ScreenOverlayState>({
@@ -707,7 +729,14 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
   switch (action) {
     case 'showImage': {
       const imagePayload = payload as ShowImagePayload;
-      multimediaCore?.media.showImage({ url: String(imagePayload.url ?? ''), duration: imagePayload.duration });
+      const clip = typeof imagePayload.url === 'string' ? parseMediaClipParams(imagePayload.url) : null;
+      const baseUrl = clip ? clip.baseUrl : String(imagePayload.url ?? '');
+      const fit = clip?.fit ?? null;
+      multimediaCore?.media.showImage({
+        url: baseUrl,
+        duration: imagePayload.duration,
+        ...(fit === null ? {} : { fit }),
+      });
       return;
     }
 
@@ -737,6 +766,7 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
       const endSec = clip ? clip.endSec : -1;
       const cursorSec = clip?.cursorSec ?? -1;
       const reverse = clip?.reverse ?? false;
+      const fit = clip?.fit ?? null;
 
       multimediaCore?.media.playVideo({
         url: resolvedUrlString,
@@ -749,6 +779,7 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
         endSec,
         cursorSec,
         reverse,
+        ...(fit === null ? {} : { fit }),
       });
       return;
     }

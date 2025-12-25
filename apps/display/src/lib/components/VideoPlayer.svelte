@@ -14,6 +14,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
   export let endSec = -1; // -1 means "to end"
   export let cursorSec = -1; // -1 means "unset"
   export let reverse = false;
+  export let fit: 'contain' | 'cover' | 'fill' = 'contain';
   // Optional node graph source id (e.g. load-video-from-assets nodeId) for UI telemetry.
   export let sourceNodeId: string | null = null;
   export let onEnded: (() => void) | undefined = undefined;
@@ -218,7 +219,13 @@ Purpose: Display video overlay (full-screen) for the Display app.
 </script>
 
 {#if url}
-  <div class="video-overlay" class:visible transition:fade={{ duration: 500 }}>
+  <div
+    class="video-overlay"
+    class:visible
+    class:fit-cover={fit === 'cover'}
+    class:fit-fill={fit === 'fill'}
+    transition:fade={{ duration: 500 }}
+  >
     <video
       bind:this={videoElement}
       src={url}
@@ -250,6 +257,11 @@ Purpose: Display video overlay (full-screen) for the Display app.
     opacity: 1;
   }
 
+  .video-overlay.fit-cover,
+  .video-overlay.fit-fill {
+    padding: 0;
+  }
+
   video {
     max-width: calc(100% - 48px);
     max-height: calc(100% - 48px);
@@ -259,5 +271,23 @@ Purpose: Display video overlay (full-screen) for the Display app.
     box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
     object-fit: contain;
     background: #000;
+  }
+
+  .video-overlay.fit-cover video,
+  .video-overlay.fit-fill video {
+    max-width: 100%;
+    max-height: 100%;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .video-overlay.fit-cover video {
+    object-fit: cover;
+  }
+
+  .video-overlay.fit-fill video {
+    object-fit: fill;
   }
 </style>

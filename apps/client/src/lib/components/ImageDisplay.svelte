@@ -4,6 +4,7 @@
 
   export let url: string;
   export let duration: number | undefined = undefined;
+  export let fit: 'contain' | 'cover' | 'fill' = 'contain';
   export let onHide: (() => void) | undefined = undefined;
 
   let visible = false;
@@ -55,7 +56,12 @@
 
 {#if url}
   {#if visible}
-    <div class="image-overlay" transition:fade={{ duration: 500 }}>
+    <div
+      class="image-overlay"
+      class:fit-cover={fit === 'cover'}
+      class:fit-fill={fit === 'fill'}
+      transition:fade={{ duration: 500 }}
+    >
       <img src={url} alt="" on:load={handleLoad} on:error={handleError} crossorigin="anonymous" />
     </div>
   {:else}
@@ -76,6 +82,11 @@
     padding: 24px; /* Margin from screen edges */
   }
 
+  .image-overlay.fit-cover,
+  .image-overlay.fit-fill {
+    padding: 0;
+  }
+
   img {
     max-width: calc(100% - 48px);
     max-height: calc(100% - 48px);
@@ -84,5 +95,24 @@
     border-radius: 16px;
     box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
     object-fit: contain;
+    background: #000;
+  }
+
+  .image-overlay.fit-cover img,
+  .image-overlay.fit-fill img {
+    max-width: 100%;
+    max-height: 100%;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .image-overlay.fit-cover img {
+    object-fit: cover;
+  }
+
+  .image-overlay.fit-fill img {
+    object-fit: fill;
   }
 </style>
