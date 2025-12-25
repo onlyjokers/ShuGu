@@ -1846,7 +1846,8 @@
     nodeEngine,
     getImportGraphInput: () => importGraphInputEl,
     getImportTemplatesInput: () => importTemplatesInputEl,
-    onResetGroups: resetGroups,
+    getNodeGroups: () => get(groupController.nodeGroups),
+    appendNodeGroups: (groups) => groupController.appendGroups(groups),
     getViewportCenterGraphPos: viewportCenterGraphPos,
   });
 

@@ -49,6 +49,8 @@ export type GroupController = {
   groupDisabledNodeIds: Writable<Set<string>>;
   marqueeRect: Writable<{ left: number; top: number; width: number; height: number } | null>;
   requestFramesUpdate: () => void;
+  setGroups: (groups: NodeGroup[]) => void;
+  appendGroups: (groups: NodeGroup[]) => void;
   applyHighlights: () => Promise<void>;
   scheduleHighlight: () => void;
   clearSelection: () => void;
@@ -1263,6 +1265,27 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     });
   };
 
+  const setGroups = (groups: NodeGroup[]) => {
+    const next = Array.isArray(groups) ? groups : [];
+    nodeGroups.set(next);
+    recomputeDisabledNodes(next);
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+  };
+
+  const appendGroups = (groups: NodeGroup[]) => {
+    const incoming = Array.isArray(groups) ? groups : [];
+    if (incoming.length === 0) return;
+    nodeGroups.set([...get(nodeGroups), ...incoming]);
+    recomputeDisabledNodes();
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+  };
+
   const clearSelection = () => {
     if (get(groupSelectionNodeIds).size === 0) return;
     groupSelectionNodeIds.set(new Set());
@@ -1380,6 +1403,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     groupDisabledNodeIds,
     marqueeRect,
     requestFramesUpdate,
+    setGroups,
+    appendGroups,
     applyHighlights,
     scheduleHighlight,
     clearSelection,
