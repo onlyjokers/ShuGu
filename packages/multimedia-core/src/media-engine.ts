@@ -5,6 +5,8 @@
  * URLs can be raw or `asset:` refs; callers can inject a resolver.
  */
 
+export type MediaFit = 'contain' | 'cover' | 'fill';
+
 export type VideoState = {
   url: string | null;
   // Optional node graph source id (e.g. load-video-from-assets nodeId) for UI telemetry.
@@ -17,12 +19,14 @@ export type VideoState = {
   endSec: number;
   cursorSec: number;
   reverse: boolean;
+  fit: MediaFit;
 };
 
 export type ImageState = {
   url: string | null;
   visible: boolean;
   duration: number | undefined;
+  fit: MediaFit;
 };
 
 export type MediaEngineState = {
@@ -46,8 +50,9 @@ export class MediaEngine {
       endSec: -1,
       cursorSec: -1,
       reverse: false,
+      fit: 'contain',
     },
-    image: { url: null, visible: false, duration: undefined },
+    image: { url: null, visible: false, duration: undefined, fit: 'contain' },
   };
 
   constructor(private readonly opts: { resolveUrl?: (url: string) => string } = {}) {}
@@ -73,15 +78,23 @@ export class MediaEngine {
     return this.opts.resolveUrl ? this.opts.resolveUrl(raw) : raw;
   }
 
-  showImage(payload: { url: string; duration?: number }): void {
+  private coerceFit(raw: unknown): MediaFit {
+    const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (normalized === 'cover') return 'cover';
+    if (normalized === 'fill' || normalized === 'stretch') return 'fill';
+    return 'contain';
+  }
+
+  showImage(payload: { url: string; duration?: number; fit?: MediaFit }): void {
     const url = this.resolve(payload.url);
+    const fit = this.coerceFit(payload.fit);
     this.setState({
-      image: { url, visible: Boolean(url), duration: payload.duration },
+      image: { url, visible: Boolean(url), duration: payload.duration, fit },
     });
   }
 
   hideImage(): void {
-    this.setState({ image: { url: null, visible: false, duration: undefined } });
+    this.setState({ image: { url: null, visible: false, duration: undefined, fit: 'contain' } });
   }
 
   playVideo(payload: {
@@ -95,11 +108,13 @@ export class MediaEngine {
     cursorSec?: number;
     reverse?: boolean;
     sourceNodeId?: string | null;
+    fit?: MediaFit;
   }): void {
     const url = this.resolve(payload.url);
     const sourceNodeIdRaw = payload.sourceNodeId;
     const sourceNodeId =
       typeof sourceNodeIdRaw === 'string' && sourceNodeIdRaw.trim() ? sourceNodeIdRaw.trim() : null;
+    const fit = this.coerceFit(payload.fit);
     const startSecRaw = payload.startSec ?? 0;
     const endSecRaw = payload.endSec ?? -1;
     const cursorSecRaw = payload.cursorSec ?? -1;
@@ -128,6 +143,7 @@ export class MediaEngine {
         endSec,
         cursorSec,
         reverse,
+        fit,
       },
     });
   }
@@ -145,6 +161,7 @@ export class MediaEngine {
         endSec: -1,
         cursorSec: -1,
         reverse: false,
+        fit: 'contain',
       },
     });
   }

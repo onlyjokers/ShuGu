@@ -235,44 +235,104 @@
     return sourceCanvas;
   }
 
+  type MediaFit = 'contain' | 'cover' | 'fill';
+
+  function getFittedDrawParams(
+    srcW: number,
+    srcH: number,
+    dstW: number,
+    dstH: number,
+    fit: MediaFit
+  ): { sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number } {
+    if (fit === 'fill') {
+      return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx: 0, dy: 0, dw: dstW, dh: dstH };
+    }
+
+    if (fit === 'cover') {
+      const scale = Math.max(dstW / srcW, dstH / srcH);
+      const sw = dstW / scale;
+      const sh = dstH / scale;
+      const sx = (srcW - sw) / 2;
+      const sy = (srcH - sh) / 2;
+      return { sx, sy, sw, sh, dx: 0, dy: 0, dw: dstW, dh: dstH };
+    }
+
+    // contain: preserve aspect ratio and don't scale up beyond 1x (real size when possible).
+    const scale = Math.min(1, dstW / srcW, dstH / srcH);
+    const dw = srcW * scale;
+    const dh = srcH * scale;
+    const dx = (dstW - dw) / 2;
+    const dy = (dstH - dh) / 2;
+    return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx, dy, dw, dh };
+  }
+
   function updateMediaCanvas(): HTMLCanvasElement | null {
     const video = container?.querySelector('video');
     const img = container?.querySelector('img');
 
-    if (video && $videoState.playing && (video as HTMLVideoElement).readyState >= 2) {
-        const width = (video as HTMLVideoElement).videoWidth || container?.clientWidth || 0;
-        const height = (video as HTMLVideoElement).videoHeight || container?.clientHeight || 0;
-        if (!mediaCanvas) {
-            mediaCanvas = document.createElement('canvas');
-            mediaCtx = mediaCanvas.getContext('2d');
-        }
-        if (!mediaCtx || width === 0 || height === 0) return null;
-        mediaCanvas.width = width;
-        mediaCanvas.height = height;
-        try {
-            mediaCtx.drawImage(video as HTMLVideoElement, 0, 0, width, height);
-        } catch {
-            return null; // cross-origin without CORS
-        }
-        return mediaCanvas;
+    const targetW = container?.clientWidth ?? 0;
+    const targetH = container?.clientHeight ?? 0;
+    if (targetW === 0 || targetH === 0) return null;
+
+    const ensureMediaCanvas = () => {
+      if (!mediaCanvas) {
+        mediaCanvas = document.createElement('canvas');
+        mediaCtx = mediaCanvas.getContext('2d');
+      }
+      if (!mediaCtx) return null;
+      if (mediaCanvas.width !== targetW) mediaCanvas.width = targetW;
+      if (mediaCanvas.height !== targetH) mediaCanvas.height = targetH;
+      mediaCtx.setTransform(1, 0, 0, 1, 0, 0);
+      mediaCtx.clearRect(0, 0, targetW, targetH);
+      mediaCtx.fillStyle = '#0a0a0f';
+      mediaCtx.fillRect(0, 0, targetW, targetH);
+      return mediaCtx;
+    };
+
+    if (video && $videoState.url && (video as HTMLVideoElement).readyState >= 2) {
+      const el = video as HTMLVideoElement;
+      const srcW = el.videoWidth || 0;
+      const srcH = el.videoHeight || 0;
+      if (srcW === 0 || srcH === 0) return null;
+      const ctx = ensureMediaCanvas();
+      if (!ctx) return null;
+
+      const fit = ($videoState.fit ?? 'contain') as MediaFit;
+      const padding = fit === 'contain' ? 24 : 0;
+      const dstW = Math.max(0, targetW - padding * 2);
+      const dstH = Math.max(0, targetH - padding * 2);
+      if (dstW === 0 || dstH === 0) return null;
+      const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
+
+      try {
+        ctx.drawImage(el, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+      } catch {
+        return null; // cross-origin without CORS
+      }
+      return mediaCanvas;
     }
 
-    if (img && $imageState.visible) {
-        const width = (img as HTMLImageElement).naturalWidth || img.clientWidth;
-        const height = (img as HTMLImageElement).naturalHeight || img.clientHeight;
-        if (!mediaCanvas) {
-            mediaCanvas = document.createElement('canvas');
-            mediaCtx = mediaCanvas.getContext('2d');
-        }
-        if (!mediaCtx || width === 0 || height === 0) return null;
-        mediaCanvas.width = width;
-        mediaCanvas.height = height;
-        try {
-            mediaCtx.drawImage(img as HTMLImageElement, 0, 0, width, height);
-        } catch {
-            return null; // cross-origin without CORS
-        }
-        return mediaCanvas;
+    if (img && $imageState.visible && $imageState.url) {
+      const el = img as HTMLImageElement;
+      const srcW = el.naturalWidth || el.clientWidth || 0;
+      const srcH = el.naturalHeight || el.clientHeight || 0;
+      if (srcW === 0 || srcH === 0) return null;
+      const ctx = ensureMediaCanvas();
+      if (!ctx) return null;
+
+      const fit = ($imageState.fit ?? 'contain') as MediaFit;
+      const padding = fit === 'contain' ? 24 : 0;
+      const dstW = Math.max(0, targetW - padding * 2);
+      const dstH = Math.max(0, targetH - padding * 2);
+      if (dstW === 0 || dstH === 0) return null;
+      const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
+
+      try {
+        ctx.drawImage(el, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+      } catch {
+        return null; // cross-origin without CORS
+      }
+      return mediaCanvas;
     }
 
     return null;
@@ -446,6 +506,7 @@
       endSec={$videoState.endSec}
       cursorSec={$videoState.cursorSec}
       reverse={$videoState.reverse}
+      fit={$videoState.fit}
       sourceNodeId={$videoState.sourceNodeId}
       onStarted={reportVideoStarted}
     />
@@ -453,7 +514,7 @@
 
   <!-- Image Display (z-index: 1, below ASCII) -->
   {#if $imageState.url && $imageState.visible}
-    <ImageDisplay url={$imageState.url} duration={$imageState.duration} />
+    <ImageDisplay url={$imageState.url} duration={$imageState.duration} fit={$imageState.fit} />
   {/if}
 
   <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>

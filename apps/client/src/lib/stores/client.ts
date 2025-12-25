@@ -17,7 +17,7 @@ import {
   type ClientSDKConfig,
   type ClientIdentity,
 } from '@shugu/sdk-client';
-import { MultimediaCore, toneAudioEngine, type MediaEngineState } from '@shugu/multimedia-core';
+import { MultimediaCore, toneAudioEngine, type MediaEngineState, type MediaFit } from '@shugu/multimedia-core';
 import type {
   ControlMessage,
   PluginControlMessage,
@@ -109,6 +109,7 @@ type MediaClipParams = {
   reverse: boolean | null;
   cursorSec: number | null;
   sourceNodeId: string | null;
+  fit: MediaFit | null;
 };
 
 function parseMediaClipParams(raw: string): MediaClipParams {
@@ -123,6 +124,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       reverse: null,
       cursorSec: null,
       sourceNodeId: null,
+      fit: null,
     };
   }
 
@@ -137,6 +139,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       reverse: null,
       cursorSec: null,
       sourceNodeId: null,
+      fit: null,
     };
   }
 
@@ -179,10 +182,20 @@ function parseMediaClipParams(raw: string): MediaClipParams {
   const reverseRaw = params.get('rev');
   const cursorRaw = params.get('p');
   const nodeRaw = params.get('node');
+  const fitRaw = params.get('fit');
 
   const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
   const cursorSec =
     cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0 ? cursorParsed : null;
+
+  const fit = (() => {
+    if (fitRaw === null) return null;
+    const normalized = fitRaw.trim().toLowerCase();
+    if (normalized === 'cover') return 'cover';
+    if (normalized === 'fill' || normalized === 'stretch') return 'fill';
+    if (normalized === 'contain') return 'contain';
+    return null;
+  })();
 
   return {
     baseUrl,
@@ -193,6 +206,7 @@ function parseMediaClipParams(raw: string): MediaClipParams {
     reverse: reverseRaw === null ? null : toBoolean(reverseRaw, false),
     cursorSec,
     sourceNodeId: typeof nodeRaw === 'string' && nodeRaw.trim() ? nodeRaw.trim() : null,
+    fit,
   };
 }
 
@@ -208,6 +222,7 @@ export const videoState = writable<{
   endSec: number;
   cursorSec: number;
   reverse: boolean;
+  fit: MediaFit;
 }>({
   url: null,
   sourceNodeId: null,
@@ -219,6 +234,7 @@ export const videoState = writable<{
   endSec: -1,
   cursorSec: -1,
   reverse: false,
+  fit: 'contain',
 });
 
 // Image display state
@@ -226,10 +242,12 @@ export const imageState = writable<{
   url: string | null;
   visible: boolean;
   duration: number | undefined;
+  fit: MediaFit;
 }>({
   url: null,
   visible: false,
   duration: undefined,
+  fit: 'contain',
 });
 
 // Derived stores
@@ -632,6 +650,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           const endSec = clip ? clip.endSec : -1;
           const cursorSec = clip?.cursorSec ?? -1;
           const reverse = clip?.reverse ?? false;
+          const fit = clip?.fit ?? null;
           multimediaCore?.media.playVideo({
             url: resolvedUrlString,
             sourceNodeId: clip?.sourceNodeId ?? null,
@@ -643,6 +662,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
             endSec,
             cursorSec,
             reverse,
+            ...(fit === null ? {} : { fit }),
           });
         } else {
           // Audio path: prefer ToneSoundPlayer when enabled; fallback to legacy SoundPlayer otherwise.
@@ -675,13 +695,16 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'showImage': {
         const imagePayload = payload as ShowImagePayload;
+        const clip =
+          typeof imagePayload.url === 'string' ? parseMediaClipParams(imagePayload.url) : null;
+        const baseUrl = clip ? clip.baseUrl : imagePayload.url;
         const url =
-          typeof imagePayload.url === 'string'
-            ? multimediaCore?.resolveAssetRef(imagePayload.url) ?? imagePayload.url
-            : imagePayload.url;
+          typeof baseUrl === 'string' ? multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl : baseUrl;
+        const fit = clip?.fit ?? null;
         multimediaCore?.media.showImage({
           url: String(url ?? ''),
           duration: imagePayload.duration,
+          ...(fit === null ? {} : { fit }),
         });
         break;
       }

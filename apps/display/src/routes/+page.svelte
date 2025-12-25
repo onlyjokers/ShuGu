@@ -73,6 +73,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
       endSec={$videoState.endSec}
       cursorSec={$videoState.cursorSec}
       reverse={$videoState.reverse}
+      fit={$videoState.fit}
       sourceNodeId={$videoState.sourceNodeId}
       onStarted={reportNodeMediaStarted}
     />
@@ -82,6 +83,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     <ImageDisplay
       url={$imageState.url}
       duration={$imageState.duration}
+      fit={$imageState.fit}
       onHide={() => executeControl('hideImage', {})}
     />
   {/if}
