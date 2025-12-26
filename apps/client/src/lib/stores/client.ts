@@ -772,9 +772,10 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
       executeAction(delaySeconds);
     } else {
       // Standard scheduling for visual effects (setTimeout is fine)
-      const { delay } = sdk.scheduleAt(executeAt, () => executeAction(0));
+      const { cancel, delay } = sdk.scheduleAt(executeAt, () => executeAction(0));
       if (delay < 0) {
-        // Already past
+        // Already past: execute immediately and cancel the scheduled callback to avoid double execution.
+        cancel();
         executeAction(0);
       }
     }

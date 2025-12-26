@@ -107,13 +107,16 @@ export function scheduleAtServerTime(
     callback: () => void,
     minDelay: number = 0
 ): { cancel: () => void; delay: number } {
-    const delay = Math.max(calculateExecutionDelay(executeAt, state), minDelay);
+    // Preserve the raw delay (can be negative) so callers can detect "already late".
+    // Still clamp the actual timer delay to avoid scheduling negative timeouts.
+    const rawDelay = calculateExecutionDelay(executeAt, state);
+    const delay = Math.max(rawDelay, minDelay);
 
     const timeoutId = setTimeout(callback, delay);
 
     return {
         cancel: () => clearTimeout(timeoutId),
-        delay,
+        delay: rawDelay,
     };
 }
 

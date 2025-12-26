@@ -188,6 +188,16 @@ export class NodeRuntime {
     return this.nodes.get(nodeId);
   }
 
+  /**
+   * Returns the latest computed non-sink input values for a node.
+   *
+   * Note: connected (non-sink) inputs are not stored in `node.inputValues`, so UIs that need
+   * to reflect live connected inputs should use this accessor.
+   */
+  getLastComputedInputs(nodeId: string): Record<string, unknown> | null {
+    return this.lastComputedInputsByNode.get(nodeId) ?? null;
+  }
+
   getGraphRef(): GraphState {
     return {
       nodes: Array.from(this.nodes.values()),

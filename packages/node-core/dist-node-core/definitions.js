@@ -139,7 +139,7 @@ function selectClientIdsForNode(nodeId, clients, options) {
         return { index: 1, selectedIds: [] };
     const index = clampInt(options.index, 1, 1, total);
     const range = clampInt(options.range, 1, 1, total);
-    const random = Boolean(options.random);
+    const random = coerceBoolean(options.random);
     const availableKey = clients.join('|');
     const prev = clientSelectionStateByNodeId.get(nodeId);
     const needRebuild = !prev ||

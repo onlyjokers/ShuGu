@@ -59,6 +59,49 @@
   let projectRestored = false;
   let autoSaveStarted = false;
 
+  const wheelListenerOptions: AddEventListenerOptions = { passive: false };
+
+  function canScrollHorizontally(element: Element | null, deltaX: number): boolean {
+    let current: Element | null = element;
+
+    while (current && current !== document.documentElement) {
+      if (current instanceof HTMLElement) {
+        const style = window.getComputedStyle(current);
+        const overflowX = style.overflowX;
+        const isScrollable =
+          overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay';
+
+        if (isScrollable && current.scrollWidth > current.clientWidth) {
+          const maxScrollLeft = current.scrollWidth - current.clientWidth;
+          if (deltaX < 0 && current.scrollLeft > 0) return true;
+          if (deltaX > 0 && current.scrollLeft < maxScrollLeft) return true;
+        }
+      }
+
+      current = current.parentElement;
+    }
+
+    return false;
+  }
+
+  function handleWheelNavigationGuard(event: WheelEvent): void {
+    if (!event.cancelable) return;
+
+    // Trackpad pinch-to-zoom on Chrome comes through as wheel+ctrlKey; don't interfere.
+    if (event.ctrlKey) return;
+
+    const deltaX = event.deltaX ?? 0;
+    const deltaY = event.deltaY ?? 0;
+
+    // Only guard against primarily-horizontal gestures (these tend to trigger back/forward).
+    if (Math.abs(deltaX) <= Math.abs(deltaY) || deltaX === 0) return;
+
+    const target = event.target instanceof Element ? event.target : null;
+    if (canScrollHorizontally(target, deltaX)) return;
+
+    event.preventDefault();
+  }
+
   // Global Sync State
   let useSync = true;
 
@@ -107,6 +150,11 @@
       disconnect();
       stopAutoSave();
     };
+  });
+
+  onMount(() => {
+    window.addEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
+    return () => window.removeEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
   });
 
   onMount(() => {

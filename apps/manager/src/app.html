@@ -7,6 +7,27 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      /* Global interaction policy:
+         - Disable text selection across the UI (except form inputs / editable fields).
+         - Reduce scroll chaining/overscroll that can trigger browser navigation gestures. */
+      html,
+      body {
+        overscroll-behavior: none;
+      }
+
+      body * {
+        -webkit-user-select: none !important;
+        user-select: none !important;
+      }
+
+      input,
+      textarea,
+      [contenteditable]:not([contenteditable='false']) {
+        -webkit-user-select: text !important;
+        user-select: text !important;
+      }
+    </style>
     <title>Fluffy Core Manager</title>
     %sveltekit.head%
   </head>

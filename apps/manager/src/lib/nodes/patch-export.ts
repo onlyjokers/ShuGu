@@ -9,13 +9,18 @@ import type { GraphState } from './types';
 import type { NodeRegistry } from '@shugu/node-core';
 
 export type PatchExportResult = {
-  rootNodeId: string;
+  rootNodeIds: string[];
   graph: Pick<GraphState, 'nodes' | 'connections'>;
   assetRefs: string[];
 };
 
 type PatchExportOptions = {
   rootType?: string;
+  /**
+   * Multi-root patch export. When provided, the exported patch is the union of all subgraphs rooted at
+   * these nodes (Max/MSP style), with manager-only routing still excluded.
+   */
+  rootNodeIds?: string[];
   nodeRegistry?: NodeRegistry;
   isNodeEnabled?: (nodeId: string) => boolean;
 };
@@ -57,6 +62,7 @@ export function exportGraphForPatch(
   opts: PatchExportOptions = {}
 ): PatchExportResult {
   const rootType = opts.rootType ?? 'audio-out';
+  const requestedRootNodeIds = (opts.rootNodeIds ?? []).map(String).filter(Boolean);
   const registry = opts.nodeRegistry ?? null;
   const isNodeEnabled = opts.isNodeEnabled ?? null;
   const nodes = (state.nodes ?? []).slice();
@@ -72,14 +78,25 @@ export function exportGraphForPatch(
 
   const isManagerOnlyNodeType = (type: string): boolean => type.startsWith('midi-');
 
-  const roots = nodes.filter((n) => n.type === rootType);
-  if (roots.length === 0) {
-    throw new Error(`No patch root node found (${rootType}). Add an "${rootType}" node first.`);
-  }
-  if (roots.length > 1) {
-    throw new Error(`Multiple patch root nodes found (${rootType}). Keep only one for deploy.`);
-  }
-  const root = roots[0]!;
+  const rootNodeIds = (() => {
+    if (requestedRootNodeIds.length > 0) {
+      const uniq = Array.from(new Set(requestedRootNodeIds));
+      for (const id of uniq) {
+        if (!byId.has(id)) throw new Error(`Invalid patch root id: ${id}`);
+      }
+      uniq.sort((a, b) => a.localeCompare(b));
+      return uniq;
+    }
+
+    const roots = nodes.filter((n) => n.type === rootType);
+    if (roots.length === 0) {
+      throw new Error(`No patch root node found (${rootType}). Add an "${rootType}" node first.`);
+    }
+    if (roots.length > 1) {
+      throw new Error(`Multiple patch root nodes found (${rootType}). Keep only one for deploy.`);
+    }
+    return [String(roots[0]!.id)];
+  })();
 
   const incomingByTarget = new Map<string, { sourceNodeId: string; targetPortId: string }[]>();
   for (const c of connections) {
@@ -90,7 +107,8 @@ export function exportGraphForPatch(
   }
   for (const list of incomingByTarget.values()) {
     list.sort(
-      (a, b) => a.targetPortId.localeCompare(b.targetPortId) || a.sourceNodeId.localeCompare(b.sourceNodeId)
+      (a, b) =>
+        a.targetPortId.localeCompare(b.targetPortId) || a.sourceNodeId.localeCompare(b.sourceNodeId)
     );
   }
 
@@ -123,7 +141,7 @@ export function exportGraphForPatch(
       visit(inc.sourceNodeId);
     }
   };
-  visit(String(root.id));
+  for (const rootId of rootNodeIds) visit(rootId);
 
   const keptNodes = nodes.filter((n) => keep.has(String(n.id)));
   const keptNodeIds = new Set(keptNodes.map((n) => String(n.id)));
@@ -177,8 +195,12 @@ export function exportGraphForPatch(
     const currentConnections = keptConnections.slice();
     const currentNodes = new Map(keptNodes.map((n) => [String(n.id), n]));
 
-    const connectionKey = (c: { sourceNodeId: string; sourcePortId: string; targetNodeId: string; targetPortId: string }) =>
-      `${c.sourceNodeId}|${c.sourcePortId}|${c.targetNodeId}|${c.targetPortId}`;
+    const connectionKey = (c: {
+      sourceNodeId: string;
+      sourcePortId: string;
+      targetNodeId: string;
+      targetPortId: string;
+    }) => `${c.sourceNodeId}|${c.sourcePortId}|${c.targetNodeId}|${c.targetPortId}`;
 
     const dedupe = new Set(currentConnections.map(connectionKey));
 
@@ -230,11 +252,7 @@ export function exportGraphForPatch(
     if (removed.size > 0) {
       effectiveNodes = keptNodes.filter((n) => !removed.has(String(n.id)));
       keptConnections = currentConnections
-        .filter(
-          (c) =>
-            !removed.has(String(c.sourceNodeId)) &&
-            !removed.has(String(c.targetNodeId))
-        )
+        .filter((c) => !removed.has(String(c.sourceNodeId)) && !removed.has(String(c.targetNodeId)))
         .concat(rewired);
     }
   }
@@ -265,7 +283,7 @@ export function exportGraphForPatch(
   }
 
   return {
-    rootNodeId: String(root.id),
+    rootNodeIds,
     graph: { nodes: effectiveNodes, connections: keptConnections },
     assetRefs,
   };
