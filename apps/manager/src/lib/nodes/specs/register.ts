@@ -112,7 +112,6 @@ type NodeRuntime =
   | { kind: 'logic-for' }
   | { kind: 'logic-sleep' }
   | { kind: 'group-activate' }
-  | { kind: 'group-bridge' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
   | { kind: 'tone-resonator' }
@@ -797,21 +796,6 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         },
       };
     }
-    case 'group-bridge': {
-      return {
-        ...base,
-        process: (inputs) => {
-          const value = (inputs as any).in;
-          const bool =
-            typeof value === 'boolean'
-              ? value
-              : typeof value === 'number' && Number.isFinite(value)
-                ? value >= 0.5
-                : Boolean(value);
-          return { out: value, bool };
-        },
-      };
-    }
     case 'midi-map': {
       return {
         ...base,
@@ -1243,6 +1227,53 @@ if (!nodeRegistry.get('load-video-from-assets')) {
   });
 }
 
+const ensureLocalMediaKindQuery = (ref: string, kind: 'audio' | 'image' | 'video'): string => {
+  const hashIndex = ref.indexOf('#');
+  const hash = hashIndex >= 0 ? ref.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? ref.slice(0, hashIndex) : ref;
+
+  const qIndex = withoutHash.indexOf('?');
+  if (qIndex < 0) return `${withoutHash}?kind=${kind}${hash}`;
+
+  const base = withoutHash.slice(0, qIndex);
+  const search = withoutHash.slice(qIndex + 1);
+  try {
+    const params = new URLSearchParams(search);
+    if (!params.has('kind')) params.set('kind', kind);
+    return `${base}?${params.toString()}${hash}`;
+  } catch {
+    const joiner = withoutHash.endsWith('?') || withoutHash.endsWith('&') ? '' : '&';
+    return `${withoutHash}${joiner}kind=${kind}${hash}`;
+  }
+};
+
+const normalizeLocalMediaRef = (raw: string, kind: 'audio' | 'image' | 'video'): string => {
+  const s = raw.trim();
+  if (!s) return '';
+
+  if (s.startsWith('localfile:')) {
+    return ensureLocalMediaKindQuery(s, kind);
+  }
+
+  const shuguLocalPrefix = 'shugu://local-file/';
+  if (s.startsWith(shuguLocalPrefix)) {
+    const filePath = s.slice(shuguLocalPrefix.length).trim();
+    if (!filePath) return '';
+    return ensureLocalMediaKindQuery(`localfile:${filePath}`, kind);
+  }
+
+  if (
+    s.startsWith('http://') ||
+    s.startsWith('https://') ||
+    s.startsWith('asset:') ||
+    s.startsWith('shugu://asset/')
+  ) {
+    return ensureLocalMediaKindQuery(s, kind);
+  }
+
+  return ensureLocalMediaKindQuery(`localfile:${s}`, kind);
+};
+
 if (!nodeRegistry.get('load-audio-from-local')) {
   nodeRegistry.register({
     type: 'load-audio-from-local',
@@ -1265,6 +1296,13 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { id: 'ended', label: 'Ended', type: 'boolean' },
     ],
     configSchema: [
+      {
+        key: 'assetPath',
+        label: 'Audio Asset',
+        type: 'local-asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -1277,8 +1315,13 @@ if (!nodeRegistry.get('load-audio-from-local')) {
         step: 0.01,
       },
     ],
-    process: (inputs) => {
-      const asset = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+    process: (inputs, config) => {
+      const asset =
+        typeof (inputs as any)?.asset === 'string' && String((inputs as any).asset).trim()
+          ? String((inputs as any).asset).trim()
+          : typeof (config as any)?.assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
       const playRaw = (inputs as any)?.play;
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       return { ref: asset && play ? 1 : 0, ended: false };
@@ -1295,6 +1338,13 @@ if (!nodeRegistry.get('load-image-from-local')) {
     outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
     configSchema: [
       {
+        key: 'assetPath',
+        label: 'Image Asset',
+        type: 'local-asset-picker',
+        assetKind: 'image',
+        defaultValue: '',
+      },
+      {
         key: 'fit',
         label: 'Fit',
         type: 'select',
@@ -1307,16 +1357,22 @@ if (!nodeRegistry.get('load-image-from-local')) {
       },
     ],
     process: (inputs, config) => {
-      const baseUrl = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+      const baseUrl =
+        typeof (inputs as any)?.asset === 'string' && String((inputs as any).asset).trim()
+          ? String((inputs as any).asset).trim()
+          : typeof (config as any)?.assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
+      const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
       const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
       const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
-      if (!baseUrl) return { ref: '' };
-      if (!fitHash) return { ref: baseUrl };
-      const hashIndex = baseUrl.indexOf('#');
-      if (hashIndex < 0) return { ref: `${baseUrl}${fitHash}` };
-      const withoutHash = baseUrl.slice(0, hashIndex);
-      const params = new URLSearchParams(baseUrl.slice(hashIndex + 1));
+      if (!baseRef) return { ref: '' };
+      if (!fitHash) return { ref: baseRef };
+      const hashIndex = baseRef.indexOf('#');
+      if (hashIndex < 0) return { ref: `${baseRef}${fitHash}` };
+      const withoutHash = baseRef.slice(0, hashIndex);
+      const params = new URLSearchParams(baseRef.slice(hashIndex + 1));
       params.set('fit', fit);
       return { ref: `${withoutHash}#${params.toString()}` };
     },
@@ -1344,6 +1400,13 @@ if (!nodeRegistry.get('load-video-from-local')) {
     ],
     configSchema: [
       {
+        key: 'assetPath',
+        label: 'Video Asset',
+        type: 'local-asset-picker',
+        assetKind: 'video',
+        defaultValue: '',
+      },
+      {
         key: 'timeline',
         label: 'Timeline',
         type: 'time-range',
@@ -1365,7 +1428,13 @@ if (!nodeRegistry.get('load-video-from-local')) {
       },
     ],
     process: (inputs, config, context) => {
-      const assetUrl = typeof (inputs as any)?.asset === 'string' ? String((inputs as any).asset).trim() : '';
+      const assetUrl =
+        typeof (inputs as any)?.asset === 'string' && String((inputs as any).asset).trim()
+          ? String((inputs as any).asset).trim()
+          : typeof (config as any)?.assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
+      const localRef = assetUrl ? normalizeLocalMediaRef(assetUrl, 'video') : '';
       const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
       const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
 
@@ -1402,9 +1471,9 @@ if (!nodeRegistry.get('load-video-from-local')) {
       const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
 
       const baseUrl = (() => {
-        if (!assetUrl) return '';
-        const hashIndex = assetUrl.indexOf('#');
-        return hashIndex >= 0 ? assetUrl.slice(0, hashIndex) : assetUrl;
+        if (!localRef) return '';
+        const hashIndex = localRef.indexOf('#');
+        return hashIndex >= 0 ? localRef.slice(0, hashIndex) : localRef;
       })();
 
       return {

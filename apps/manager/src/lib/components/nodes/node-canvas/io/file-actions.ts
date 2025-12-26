@@ -308,12 +308,12 @@ export function createFileActions(opts: FileActionsOptions) {
 
     const { groups: importedGroups, groupIdMap } = remapImportedGroups(parsedFile.groups, nodeIdMap);
 
-    // Keep group port nodes (Group Activate / Group Bridge) wired to the remapped group IDs *before* appending
-    // groups, so the auto "ensureGroupPortNodes" hook doesn't create duplicates.
+    // Keep Group Activate nodes wired to the remapped group IDs *before* appending groups, so the auto
+    // "ensureGroupPortNodes" hook doesn't create duplicates.
     if (groupIdMap.size > 0) {
       for (const node of sourceNodes) {
         const type = String((node as any)?.type ?? '');
-        if (type !== 'group-activate' && type !== 'group-bridge') continue;
+        if (type !== 'group-activate') continue;
         const oldNodeId = String((node as any)?.id ?? '');
         const newNodeId = nodeIdMap.get(oldNodeId);
         if (!newNodeId) continue;

@@ -10,6 +10,7 @@ import {
   ClientPickerControl,
   ClientSensorValueControl,
   AssetPickerControl,
+  LocalAssetPickerControl,
   FilePickerControl,
   MidiLearnControl,
   SelectControl,
@@ -383,6 +384,17 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
           },
         });
         node.addControl(key, control);
+      } else if (field.type === 'local-asset-picker') {
+        const control: any = new LocalAssetPickerControl({
+          label: field.label,
+          initial: String(current ?? ''),
+          assetKind: (field as any).assetKind ?? 'any',
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
+        });
+        node.addControl(key, control);
       } else if (field.type === 'param-path') {
         node.addControl(
           key,
@@ -430,7 +442,13 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
           step: field.step,
           change: (value) => {
             // Special: asset timeline controls are UI helpers which update input ports (so they are connectable/modulatable).
-            if (instance.type === 'load-audio-from-assets' || instance.type === 'load-video-from-assets') {
+            const timelineNodeTypes = new Set([
+              'load-audio-from-assets',
+              'load-video-from-assets',
+              'load-audio-from-local',
+              'load-video-from-local',
+            ]);
+            if (timelineNodeTypes.has(instance.type)) {
               const nextStart = typeof (value as any)?.startSec === 'number' ? (value as any).startSec : 0;
               const nextEnd = typeof (value as any)?.endSec === 'number' ? (value as any).endSec : -1;
               const nextCursor = (value as any)?.cursorSec;

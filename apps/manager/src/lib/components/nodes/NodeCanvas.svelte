@@ -101,7 +101,6 @@
   } as const;
 
   const GROUP_ACTIVATE_NODE_TYPE = 'group-activate';
-  const GROUP_BRIDGE_NODE_TYPE = 'group-bridge';
 
   const nodeMap = new Map<string, any>();
   const connectionMap = new Map<string, any>();
@@ -198,6 +197,7 @@
   } = loopController;
 
   const {
+    nodeGroups,
     groupFrames,
     editModeGroupId,
     canvasToast,
@@ -215,6 +215,151 @@
     getAdapter: () => viewAdapter,
     isSyncingGraph: () => isSyncingRef.value,
   });
+
+  const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  const mergeBounds = (
+    base: { left: number; top: number; right: number; bottom: number } | null,
+    next: { left: number; top: number; right: number; bottom: number } | null
+  ) => {
+    if (!next) return base;
+    if (!base) return { ...next };
+    return {
+      left: Math.min(base.left, next.left),
+      top: Math.min(base.top, next.top),
+      right: Math.max(base.right, next.right),
+      bottom: Math.max(base.bottom, next.bottom),
+    };
+  };
+
+  let pendingFocusNodeIds: string[] | null = null;
+
+  const focusNodeIds = (nodeIdsRaw: string[], opts: { force?: boolean } = {}) => {
+    if (!container) return;
+
+    const nodeById = new Map((graphState.nodes ?? []).map((n) => [String(n.id), n]));
+    const typeByNodeId = new Map((graphState.nodes ?? []).map((n) => [String(n.id), String(n.type ?? '')]));
+
+    const ids = (nodeIdsRaw ?? []).map((id) => String(id)).filter(Boolean);
+    const nodeIds = ids.filter((id) => {
+      const type = typeByNodeId.get(id) ?? '';
+      return Boolean(type) && type !== GROUP_ACTIVATE_NODE_TYPE;
+    });
+    if (nodeIds.length === 0) return;
+
+    const getNodeBoundsApprox = (nodeId: string) => {
+      const node = nodeById.get(String(nodeId));
+      const pos = node?.position as any;
+      const x = Number(pos?.x ?? 0);
+      const y = Number(pos?.y ?? 0);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const w = 230;
+      const h = 100;
+      return { left: x, top: y, right: x + w, bottom: y + h };
+    };
+
+    let bounds: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const id of nodeIds) {
+      const raw = viewAdapter.getNodeBounds(id);
+      const usable = (() => {
+        if (!raw) return null;
+        const bw = raw.right - raw.left;
+        const bh = raw.bottom - raw.top;
+        if (!Number.isFinite(bw) || !Number.isFinite(bh)) return null;
+        if (bw < 40 || bh < 30) return null;
+        return raw;
+      })();
+      bounds = mergeBounds(bounds, usable ?? getNodeBoundsApprox(id));
+    }
+    if (!bounds) return;
+
+    const w = bounds.right - bounds.left;
+    const h = bounds.bottom - bounds.top;
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 1 || h <= 1) return;
+
+    if (!opts.force) {
+      const t = viewAdapter.getViewportTransform();
+      const k = Number(t?.k ?? 1) || 1;
+      const tx = Number(t?.tx ?? 0) || 0;
+      const ty = Number(t?.ty ?? 0) || 0;
+
+      const visibleLeft = (-tx) / k;
+      const visibleTop = (-ty) / k;
+      const visibleRight = (container.clientWidth - tx) / k;
+      const visibleBottom = (container.clientHeight - ty) / k;
+
+      const marginX = 48 / k;
+      const marginY = 64 / k;
+      const fullyVisible =
+        bounds.left >= visibleLeft + marginX &&
+        bounds.right <= visibleRight - marginX &&
+        bounds.top >= visibleTop + marginY &&
+        bounds.bottom <= visibleBottom - marginY;
+
+      if (fullyVisible) return;
+    }
+
+    const marginX = 120;
+    const marginY = 140;
+    const availW = Math.max(240, container.clientWidth - marginX * 2);
+    const availH = Math.max(180, container.clientHeight - marginY * 2);
+
+    let k = Math.min(availW / w, availH / h);
+    if (!Number.isFinite(k) || k <= 0) k = 1;
+    k = clampNumber(k, 0.08, 2.2);
+
+    const cx = (bounds.left + bounds.right) / 2;
+    const cy = (bounds.top + bounds.bottom) / 2;
+    const tx = container.clientWidth / 2 - cx * k;
+    const ty = container.clientHeight / 2 - cy * k;
+
+    viewAdapter.setViewportTransform({ k, tx, ty });
+    minimapController?.requestUpdate();
+    requestFramesUpdate();
+  };
+
+  const focusGroupById = (groupId: string) => {
+    const targetId = String(groupId ?? '');
+    if (!targetId) return;
+
+    const groups = get(nodeGroups) as any[];
+    if (!Array.isArray(groups) || groups.length === 0) return;
+
+    const byId = new Map<string, any>();
+    const childrenByParentId = new Map<string, string[]>();
+
+    for (const g of groups) {
+      const id = String(g?.id ?? '');
+      if (!id) continue;
+      byId.set(id, g);
+
+      const pid = g?.parentId ? String(g.parentId) : '';
+      if (!pid) continue;
+      const list = childrenByParentId.get(pid) ?? [];
+      list.push(id);
+      childrenByParentId.set(pid, list);
+    }
+
+    const groupIds = new Set<string>();
+    const stack = [targetId];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (!id || groupIds.has(id)) continue;
+      groupIds.add(id);
+      for (const childId of childrenByParentId.get(id) ?? []) stack.push(childId);
+    }
+
+    const nodeIdsSet = new Set<string>();
+    for (const gid of groupIds) {
+      const g = byId.get(gid);
+      for (const nid of g?.nodeIds ?? []) {
+        const id = String(nid);
+        if (id) nodeIdsSet.add(id);
+      }
+    }
+
+    focusNodeIds(Array.from(nodeIdsSet), { force: true });
+  };
 
   requestFramesUpdate = () => {
     const t = readAreaTransform(areaPlugin);
@@ -265,6 +410,14 @@
   const LOCAL_DISPLAY_TARGET_ID = 'local:display';
 
   const isLocalDisplayTarget = (id: string): boolean => id === LOCAL_DISPLAY_TARGET_ID;
+
+  const isDisplayTarget = (id: string): boolean => {
+    if (isLocalDisplayTarget(id)) return true;
+    const clients = get(managerState).clients ?? [];
+    return clients.some(
+      (c: any) => String(c?.clientId ?? '') === id && String(c?.group ?? '') === 'display'
+    );
+  };
 
   const sendNodeExecutorPluginControl = (
     targetId: string,
@@ -985,13 +1138,15 @@
     );
 
     if (isLocalOnlyPatch) {
-      const localTargets = targets.filter((id) => isLocalDisplayTarget(id));
-      if (localTargets.length === 0) {
-        nodeEngine.lastError.set('Load * From Local(Display only) requires the local Display target.');
+      const displayTargets = targets.filter((id) => isDisplayTarget(id));
+      if (displayTargets.length === 0) {
+        nodeEngine.lastError.set(
+          'Load * From Local(Display only) requires a Display target (connect Deploy to Display).'
+        );
         stopAllDeployedPatches();
         return;
       }
-      targets = localTargets;
+      targets = displayTargets;
     }
 
     const targetsKey = targets.join('|');
@@ -1484,8 +1639,7 @@
 
   const generateId = () => `node-${crypto.randomUUID?.() ?? Date.now()}`;
 
-  const isGroupPortNodeType = (type: string) =>
-    type === GROUP_ACTIVATE_NODE_TYPE || type === GROUP_BRIDGE_NODE_TYPE;
+  const isGroupPortNodeType = (type: string) => type === GROUP_ACTIVATE_NODE_TYPE;
 
   const groupIdFromNode = (node: NodeInstance): string => {
     const raw = (node.config as any)?.groupId;
@@ -1493,7 +1647,7 @@
   };
 
   const buildGroupPortIndex = (state: GraphState) => {
-    const byGroupId = new Map<string, { activateId?: string; bridgeId?: string }>();
+    const byGroupId = new Map<string, { activateId?: string }>();
 
     for (const node of state.nodes ?? []) {
       const type = String(node.type ?? '');
@@ -1503,7 +1657,6 @@
 
       const entry = byGroupId.get(groupId) ?? {};
       if (type === GROUP_ACTIVATE_NODE_TYPE && !entry.activateId) entry.activateId = String(node.id);
-      if (type === GROUP_BRIDGE_NODE_TYPE && !entry.bridgeId) entry.bridgeId = String(node.id);
       byGroupId.set(groupId, entry);
     }
 
@@ -1575,19 +1728,15 @@
       const groupId = String(group?.id ?? '');
       if (!groupId) continue;
       const existing = index.get(groupId) ?? {};
-      if (existing.activateId && existing.bridgeId) continue;
+      if (existing.activateId) continue;
 
       const bounds = computeGroupNodeBounds(group, state);
       const baseX = bounds ? bounds.centerX : 120 + nodeCount * 10;
       const baseY = bounds ? bounds.centerY : 120 + nodeCount * 6;
       const leftX = bounds ? bounds.minX : baseX;
-      const rightX = bounds ? bounds.maxX : baseX;
 
       if (!existing.activateId) {
         addGroupPortNode(GROUP_ACTIVATE_NODE_TYPE, groupId, { x: leftX - 140, y: baseY - 20 });
-      }
-      if (!existing.bridgeId) {
-        addGroupPortNode(GROUP_BRIDGE_NODE_TYPE, groupId, { x: rightX + 140, y: baseY - 20 });
       }
     }
   };
@@ -1632,18 +1781,6 @@
           }
         }
 
-        if (ports.bridgeId) {
-          const nodeId = String(ports.bridgeId);
-          const b = viewAdapter.getNodeBounds(nodeId);
-          const w = b ? b.right - b.left : 92;
-          const h = b ? b.bottom - b.top : 44;
-          const desiredX = frame.left + frame.width - w / 2;
-          const desiredY = centerY - h / 2;
-          const cur = viewAdapter.getNodePosition(nodeId);
-          if (!cur || Math.abs(cur.x - desiredX) > 1 || Math.abs(cur.y - desiredY) > 1) {
-            viewAdapter.setNodePosition(nodeId, desiredX, desiredY);
-          }
-        }
       }
     } finally {
       groupController.endProgrammaticTranslate();
@@ -1703,13 +1840,9 @@
   };
 
   function computeGraphPosition(clientX: number, clientY: number) {
-    const area = areaPlugin?.area;
-    const holder: HTMLElement | null = area?.content?.holder ?? null;
-    if (!area || !holder) return { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
-
-    const rect = holder.getBoundingClientRect();
-    const k = Number(area.transform?.k ?? 1) || 1;
-    return { x: (clientX - rect.left) / k, y: (clientY - rect.top) / k };
+    const pos = viewAdapter.clientToGraph(clientX, clientY);
+    if (Number.isFinite(pos.x) && Number.isFinite(pos.y)) return pos;
+    return { x: 120 + nodeCount * 10, y: 120 + nodeCount * 6 };
   }
 
   const findPortRowSocketAt = (
@@ -2099,6 +2232,7 @@
       groupController.scheduleHighlight();
       requestFramesUpdate();
       minimapController?.requestUpdate();
+      pendingFocusNodeIds = ids;
     },
     getViewportCenterGraphPos: viewportCenterGraphPos,
   });
@@ -2275,6 +2409,16 @@
         } else {
           syncPatchOffloadState(new Set());
           void applyPatchHighlights(new Set());
+        }
+
+        if (pendingFocusNodeIds && pendingFocusNodeIds.length > 0) {
+          const ids = pendingFocusNodeIds;
+          pendingFocusNodeIds = null;
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => focusNodeIds(ids));
+          } else {
+            focusNodeIds(ids);
+          }
         }
       },
       isSyncingRef,
@@ -2728,6 +2872,8 @@
       bind:toolbarMenuWrap
       isRunning={$isRunningStore}
       {nodeCount}
+      groups={$nodeGroups}
+      onFocusGroup={focusGroupById}
       lastError={$lastErrorStore}
       isMenuOpen={isToolbarMenuOpen}
       onToggleEngine={handleToggleEngine}

@@ -256,6 +256,7 @@ class NodeEngineClass {
     const targetPort = targetDef?.inputs.find((p) => p.id === connection.targetPortId);
 
     if (!sourcePort || !targetPort) return false;
+
     let sourceType = (sourcePort.type ?? 'any') as PortType;
     const targetType = (targetPort.type ?? 'any') as PortType;
 
@@ -440,7 +441,7 @@ class NodeEngineClass {
         if (!rootId) continue;
         if (!rootContainsLocalOnlyNodes(rootId)) continue;
         if (rootRoutesToClientObject(rootId)) {
-          return 'Load * From Local(Display only) nodes can only deploy to the local Display (not Client).';
+          return 'Load * From Local(Display only) can only connect Deploy to Display (not Client).';
         }
       }
 
@@ -523,18 +524,36 @@ class NodeEngineClass {
   }
 
   loadGraph(state: GraphState): void {
-    const nodes: GraphState['nodes'] = (state.nodes ?? []).map((node) => ({
-      ...node,
-      config: { ...(node.config ?? {}) },
-      inputValues: { ...(node.inputValues ?? {}) },
-      outputValues: {}, // reset runtime outputs
-    }));
+    const rawNodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const rawConnections = Array.isArray(state.connections) ? state.connections : [];
+
+    // Defensive loading: skip unknown node types so older graphs (or plugins removed from manager)
+    // don't brick the whole canvas.
+    const keptNodeIds = new Set<string>();
+    const nodes: GraphState['nodes'] = [];
+    for (const node of rawNodes) {
+      const id = String((node as any)?.id ?? '');
+      const type = String((node as any)?.type ?? '');
+      if (!id || !type) continue;
+      if (!nodeRegistry.get(type)) continue;
+      keptNodeIds.add(id);
+      nodes.push({
+        ...node,
+        config: { ...(node.config ?? {}) },
+        inputValues: { ...(node.inputValues ?? {}) },
+        outputValues: {}, // reset runtime outputs
+      });
+    }
 
     // Enforce node system rule: every input port accepts at most one connection.
     // If a loaded graph violates this (older files), keep the first connection deterministically.
     const connections: GraphState['connections'] = [];
     const connectedInputs = new Set<string>();
-    for (const c of state.connections ?? []) {
+    for (const c of rawConnections) {
+      const src = String((c as any)?.sourceNodeId ?? '');
+      const dst = String((c as any)?.targetNodeId ?? '');
+      if (!src || !dst) continue;
+      if (!keptNodeIds.has(src) || !keptNodeIds.has(dst)) continue;
       const key = `${String(c.targetNodeId)}:${String(c.targetPortId)}`;
       if (connectedInputs.has(key)) continue;
       connectedInputs.add(key);

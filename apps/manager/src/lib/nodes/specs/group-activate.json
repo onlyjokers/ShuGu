@@ -1,10 +1,10 @@
 {
   "__purpose": "Manager-only node: attach to a Group frame as an activation gate input (bool) to enable/disable the group's nodes.",
   "type": "group-activate",
-  "label": "Group Activate",
+  "label": "Activate",
   "category": "Internal",
   "inputs": [{ "id": "active", "label": "Active", "type": "boolean", "defaultValue": true }],
-  "outputs": [{ "id": "active", "label": "Active", "type": "boolean" }],
+  "outputs": [],
   "configSchema": [{ "key": "groupId", "label": "Group ID", "type": "string", "defaultValue": "" }],
   "runtime": { "kind": "group-activate" }
 }

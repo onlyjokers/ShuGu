@@ -30,6 +30,65 @@ function coerceBoolean(value) {
     }
     return false;
 }
+function ensureLocalMediaKindQuery(ref, kind) {
+    const hashIndex = ref.indexOf('#');
+    const hash = hashIndex >= 0 ? ref.slice(hashIndex) : '';
+    const withoutHash = hashIndex >= 0 ? ref.slice(0, hashIndex) : ref;
+    const qIndex = withoutHash.indexOf('?');
+    if (qIndex < 0)
+        return `${withoutHash}?kind=${kind}${hash}`;
+    const base = withoutHash.slice(0, qIndex);
+    const search = withoutHash.slice(qIndex + 1);
+    try {
+        const params = new URLSearchParams(search);
+        if (!params.has('kind'))
+            params.set('kind', kind);
+        return `${base}?${params.toString()}${hash}`;
+    }
+    catch {
+        const joiner = withoutHash.endsWith('?') || withoutHash.endsWith('&') ? '' : '&';
+        return `${withoutHash}${joiner}kind=${kind}${hash}`;
+    }
+}
+function isAbsoluteFilePath(filePath) {
+    const s = filePath.trim();
+    if (!s)
+        return false;
+    if (s.startsWith('/'))
+        return true;
+    if (/^[a-zA-Z]:[\\/]/.test(s))
+        return true;
+    if (s.startsWith('\\\\'))
+        return true;
+    return false;
+}
+function normalizeLocalMediaRef(raw, kind) {
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    if (!s)
+        return '';
+    if (s.startsWith('localfile:')) {
+        return ensureLocalMediaKindQuery(s, kind);
+    }
+    const shuguLocalPrefix = 'shugu://local-file/';
+    if (s.startsWith(shuguLocalPrefix)) {
+        const encoded = s.slice(shuguLocalPrefix.length).trim();
+        if (!encoded)
+            return '';
+        try {
+            const decoded = decodeURIComponent(encoded);
+            if (!decoded.trim())
+                return '';
+            return ensureLocalMediaKindQuery(`localfile:${decoded.trim()}`, kind);
+        }
+        catch {
+            return ensureLocalMediaKindQuery(`localfile:${encoded}`, kind);
+        }
+    }
+    // Local nodes must never fetch remote assets; accept only absolute local paths.
+    if (!isAbsoluteFilePath(s))
+        return '';
+    return ensureLocalMediaKindQuery(`localfile:${s}`, kind);
+}
 function formatAnyPreview(value) {
     const MAX_LEN = 160;
     const clamp = (raw) => {
@@ -233,6 +292,13 @@ function createLoadAudioFromLocalNode() {
             { id: 'ended', label: 'Ended', type: 'boolean' },
         ],
         configSchema: [
+            {
+                key: 'assetPath',
+                label: 'Audio Asset',
+                type: 'local-asset-picker',
+                assetKind: 'audio',
+                defaultValue: '',
+            },
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -245,8 +311,12 @@ function createLoadAudioFromLocalNode() {
                 step: 0.01,
             },
         ],
-        process: (inputs) => {
-            const asset = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+        process: (inputs, config) => {
+            const asset = typeof inputs.asset === 'string' && inputs.asset.trim()
+                ? inputs.asset.trim()
+                : typeof config.assetPath === 'string'
+                    ? String(config.assetPath).trim()
+                    : '';
             const playRaw = inputs.play;
             const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
             // Client runtime may override this for real playback. Manager-side stays as a simple gate.
@@ -299,6 +369,13 @@ function createLoadImageFromLocalNode() {
         outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
         configSchema: [
             {
+                key: 'assetPath',
+                label: 'Image Asset',
+                type: 'local-asset-picker',
+                assetKind: 'image',
+                defaultValue: '',
+            },
+            {
                 key: 'fit',
                 label: 'Fit',
                 type: 'select',
@@ -311,19 +388,24 @@ function createLoadImageFromLocalNode() {
             },
         ],
         process: (inputs, config) => {
-            const baseUrl = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+            const baseUrl = typeof inputs.asset === 'string' && inputs.asset.trim()
+                ? inputs.asset.trim()
+                : typeof config.assetPath === 'string'
+                    ? String(config.assetPath).trim()
+                    : '';
+            const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
             const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
             const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
             const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
-            if (!baseUrl)
+            if (!baseRef)
                 return { ref: '' };
             if (!fitHash)
-                return { ref: baseUrl };
-            const hashIndex = baseUrl.indexOf('#');
+                return { ref: baseRef };
+            const hashIndex = baseRef.indexOf('#');
             if (hashIndex < 0)
-                return { ref: `${baseUrl}${fitHash}` };
-            const withoutHash = baseUrl.slice(0, hashIndex);
-            const params = new URLSearchParams(baseUrl.slice(hashIndex + 1));
+                return { ref: `${baseRef}${fitHash}` };
+            const withoutHash = baseRef.slice(0, hashIndex);
+            const params = new URLSearchParams(baseRef.slice(hashIndex + 1));
             params.set('fit', fit);
             return { ref: `${withoutHash}#${params.toString()}` };
         },
@@ -517,6 +599,13 @@ function createLoadVideoFromLocalNode() {
         ],
         configSchema: [
             {
+                key: 'assetPath',
+                label: 'Video Asset',
+                type: 'local-asset-picker',
+                assetKind: 'video',
+                defaultValue: '',
+            },
+            {
                 key: 'timeline',
                 label: 'Timeline',
                 type: 'time-range',
@@ -538,7 +627,12 @@ function createLoadVideoFromLocalNode() {
             },
         ],
         process: (inputs, config, context) => {
-            const assetUrl = typeof inputs.asset === 'string' ? inputs.asset.trim() : '';
+            const assetUrl = typeof inputs.asset === 'string' && inputs.asset.trim()
+                ? inputs.asset.trim()
+                : typeof config.assetPath === 'string'
+                    ? String(config.assetPath).trim()
+                    : '';
+            const localRef = assetUrl ? normalizeLocalMediaRef(assetUrl, 'video') : '';
             const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
             const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
             const startSecRaw = inputs.startSec;
@@ -568,10 +662,10 @@ function createLoadVideoFromLocalNode() {
             const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
             const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
             const baseUrl = (() => {
-                if (!assetUrl)
+                if (!localRef)
                     return '';
-                const hashIndex = assetUrl.indexOf('#');
-                return hashIndex >= 0 ? assetUrl.slice(0, hashIndex) : assetUrl;
+                const hashIndex = localRef.indexOf('#');
+                return hashIndex >= 0 ? localRef.slice(0, hashIndex) : localRef;
             })();
             const refBase = baseUrl
                 ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`

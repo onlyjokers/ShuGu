@@ -52,6 +52,7 @@ export interface ConfigField {
     | 'midi-source'
     | 'client-picker'
     | 'asset-picker'
+    | 'local-asset-picker'
     | 'file';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
