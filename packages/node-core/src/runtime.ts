@@ -163,10 +163,14 @@ export class NodeRuntime {
       if (!sourcePort || !targetPort) continue;
 
       const inputKey = `${String(conn.targetNodeId)}:${String(conn.targetPortId)}`;
-      if (connectedInputKeys.has(inputKey)) {
-        throw new Error(`input already connected: ${String(conn.targetNodeId)}:${String(conn.targetPortId)}`);
+      if (targetPort.kind !== 'sink') {
+        if (connectedInputKeys.has(inputKey)) {
+          throw new Error(
+            `input already connected: ${String(conn.targetNodeId)}:${String(conn.targetPortId)}`
+          );
+        }
+        connectedInputKeys.add(inputKey);
       }
-      connectedInputKeys.add(inputKey);
       nextConnections.push(conn);
     }
     this.connections = nextConnections;

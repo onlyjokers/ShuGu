@@ -4,19 +4,28 @@
   import { onDestroy } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { fly } from 'svelte/transition';
+  import GroupIndexItem from './GroupIndexItem.svelte';
   import {
     nodeGraphEdgeShadows,
     nodeGraphLiveValues,
-    nodeGraphPerfOverlay,
+    nodeGraphPerfConsole,
     nodeGraphFlags,
     setEdgeShadows,
     setLiveValues,
-    setPerfOverlay,
+    setPerfConsole,
   } from '$lib/features/node-graph-flags';
 
   export let isRunning = false;
   export let lastError: string | null = null;
   export let nodeCount = 0;
+  export let groups: Array<{
+    id: string;
+    parentId: string | null;
+    name: string;
+    disabled: boolean;
+    runtimeActive?: boolean;
+  }> = [];
+  export let onFocusGroup: (groupId: string) => void = () => undefined;
 
   export let isMenuOpen = false;
   export let toolbarMenuWrap: HTMLDivElement | null = null;
@@ -39,6 +48,42 @@
 
   // DEV-only toggles for Node Graph feature flags (Step 0.3).
   const showDevFlags = import.meta.env.DEV;
+
+  type GroupIndexNode = {
+    group: (typeof groups)[number];
+    children: GroupIndexNode[];
+  };
+
+  let groupIndexRoots: GroupIndexNode[] = [];
+
+  const buildGroupIndexTree = (raw: typeof groups): GroupIndexNode[] => {
+    const normalized = (raw ?? [])
+      .map((g) => ({
+        id: String(g?.id ?? ''),
+        parentId: g?.parentId ? String(g.parentId) : null,
+        name: String(g?.name ?? 'Group'),
+        disabled: Boolean(g?.disabled),
+        runtimeActive: g?.runtimeActive,
+      }))
+      .filter((g) => g.id);
+
+    const byId = new Map<string, GroupIndexNode>();
+    for (const g of normalized) byId.set(g.id, { group: g, children: [] });
+
+    const roots: GroupIndexNode[] = [];
+    for (const g of normalized) {
+      const node = byId.get(g.id);
+      if (!node) continue;
+      const pid = g.parentId ? String(g.parentId) : null;
+      const parent = pid ? byId.get(pid) : null;
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    }
+
+    return roots;
+  };
+
+  $: groupIndexRoots = buildGroupIndexTree(groups);
 
   const showErrorPill = (message: string) => {
     const m = String(message ?? '').trim();
@@ -90,6 +135,16 @@
       >
         {isRunning ? '⏹' : '▶'}
       </Button>
+    </div>
+
+    <div class="toolbar-center">
+      {#if groupIndexRoots.length > 0}
+        <div class="group-index" aria-label="Group index">
+          {#each groupIndexRoots as node (node.group.id)}
+            <GroupIndexItem {node} depth={0} onFocus={onFocusGroup} />
+          {/each}
+        </div>
+      {/if}
     </div>
 
     <div class="toolbar-right">
@@ -144,9 +199,9 @@
               <button
                 type="button"
                 class="toolbar-menu-item"
-                on:click={() => setPerfOverlay(!$nodeGraphPerfOverlay)}
+                on:click={() => setPerfConsole(!$nodeGraphPerfConsole)}
               >
-                Perf overlay: {$nodeGraphPerfOverlay ? 'ON' : 'OFF'}
+                Perf console: {$nodeGraphPerfConsole ? 'ON' : 'OFF'}
               </button>
               <button
                 type="button"
@@ -251,6 +306,36 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+  }
+
+  .toolbar-center {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .group-index {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 2px 10px;
+  }
+
+  .group-index::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .group-index::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+  }
+
+  .group-index::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   .toolbar-menu-wrap {

@@ -55,13 +55,16 @@
       {@const isEditing = editModeGroupId === group.id}
       {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
       {@const showCount = !isTiny}
+      {@const runtimeGateClosed = group.runtimeActive === false}
       {@const gateClosed = !isRunning || frame.effectiveDisabled}
       {@const gateReason = !isRunning
         ? 'Graph STOP'
         : frame.effectiveDisabled
           ? group.disabled
             ? 'Gate closed'
-            : 'Parent gate closed'
+            : runtimeGateClosed
+              ? 'Input gate closed'
+              : 'Parent gate closed'
           : 'Gate open'}
       <div
         class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''}"

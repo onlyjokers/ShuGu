@@ -8,7 +8,7 @@ Purpose: Display image overlay (full-screen) for the Display app.
 
   export let url: string;
   export let duration: number | undefined = undefined;
-  export let fit: 'contain' | 'cover' | 'fill' = 'contain';
+  export let fit: 'contain' | 'fit-screen' | 'cover' | 'fill' = 'contain';
   export let onHide: (() => void) | undefined = undefined;
 
   let visible = false;
@@ -62,6 +62,7 @@ Purpose: Display image overlay (full-screen) for the Display app.
   {#if visible}
     <div
       class="image-overlay"
+      class:fit-screen={fit === 'fit-screen'}
       class:fit-cover={fit === 'cover'}
       class:fit-fill={fit === 'fill'}
       transition:fade={{ duration: 500 }}
@@ -94,7 +95,8 @@ Purpose: Display image overlay (full-screen) for the Display app.
   }
 
   .image-overlay.fit-cover,
-  .image-overlay.fit-fill {
+  .image-overlay.fit-fill,
+  .image-overlay.fit-screen {
     padding: 0;
   }
 
@@ -110,13 +112,18 @@ Purpose: Display image overlay (full-screen) for the Display app.
   }
 
   .image-overlay.fit-cover img,
-  .image-overlay.fit-fill img {
+  .image-overlay.fit-fill img,
+  .image-overlay.fit-screen img {
     max-width: 100%;
     max-height: 100%;
     width: 100%;
     height: 100%;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .image-overlay.fit-screen img {
+    object-fit: contain;
   }
 
   .image-overlay.fit-cover img {

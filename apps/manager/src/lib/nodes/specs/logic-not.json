@@ -1,0 +1,9 @@
+{
+  "__purpose": "Manager node spec for logic not (inverts boolean input).",
+  "type": "logic-not",
+  "label": "!",
+  "category": "Logic",
+  "inputs": [{ "id": "in", "label": "In", "type": "boolean" }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "boolean" }],
+  "configSchema": []
+}

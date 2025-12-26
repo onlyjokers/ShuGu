@@ -718,7 +718,7 @@ UI 层（NodeCanvas）：
 - [x] 上传鉴权：`POST /api/assets` 必须带 `Authorization: Bearer <ASSET_WRITE_TOKEN>`（token 存在 manager 配置里，不写入 graph）
 
 2) 节点层面
-- [x] 新增 `Load Audio From Assets / Load Image From Assets / Load Video From Assets`（asset-picker 输出 assetRef）
+- [x] 新增 `Load Audio From Remote / Load Image From Remote / Load Video From Remote`（asset-picker 输出 assetRef）
 - [x] 取消 `Load Media Sound / Load Media Image / Load Media Video`（NodeGraph 不再上传）
 
 3) 兼容旧项目
@@ -782,7 +782,7 @@ UI 层（NodeCanvas）：
 
 ---
 
-### Phase 2.6 - Load Audio From Assets：Timeline/Loop/Play（片段播放）
+### Phase 2.6 - Load Audio From Remote：Timeline/Loop/Play（片段播放）
 
 > 目标：在 Node Graph 里像 Max/MSP 一样“节点化操纵音频播放片段”，Manager 改参数，Client 实时反映。
 
@@ -809,7 +809,7 @@ UI 层（NodeCanvas）：
 
 ---
 
-### Phase 2.7 - Load Video From Assets：Timeline/Loop/Play/Reverse/Seek（片段播放）
+### Phase 2.7 - Load Video From Remote：Timeline/Loop/Play/Reverse/Seek（片段播放）
 
 > 目标：Load Video 节点拥有与音频一致的“精细片段控制”（timeline/loop/play/reverse/seek），并在 client 端实时生效。
 

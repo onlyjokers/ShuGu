@@ -10,7 +10,7 @@
   export let endSec = -1; // -1 means "to end"
   export let cursorSec = -1; // -1 means "unset"
   export let reverse = false;
-  export let fit: 'contain' | 'cover' | 'fill' = 'contain';
+  export let fit: 'contain' | 'fit-screen' | 'cover' | 'fill' = 'contain';
   // Optional node graph source id (e.g. load-video-from-assets nodeId) for UI telemetry.
   export let sourceNodeId: string | null = null;
   export let onEnded: (() => void) | undefined = undefined;
@@ -219,6 +219,7 @@
   <div
     class="video-overlay"
     class:visible
+    class:fit-screen={fit === 'fit-screen'}
     class:fit-cover={fit === 'cover'}
     class:fit-fill={fit === 'fill'}
     transition:fade={{ duration: 500 }}
@@ -258,7 +259,8 @@
   }
 
   .video-overlay.fit-cover,
-  .video-overlay.fit-fill {
+  .video-overlay.fit-fill,
+  .video-overlay.fit-screen {
     padding: 0;
   }
 
@@ -274,13 +276,18 @@
   }
 
   .video-overlay.fit-cover video,
-  .video-overlay.fit-fill video {
+  .video-overlay.fit-fill video,
+  .video-overlay.fit-screen video {
     max-width: 100%;
     max-height: 100%;
     width: 100%;
     height: 100%;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .video-overlay.fit-screen video {
+    object-fit: contain;
   }
 
   .video-overlay.fit-cover video {

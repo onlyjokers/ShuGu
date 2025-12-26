@@ -290,6 +290,7 @@ export class NodeExecutor {
         .filter((node) =>
           [
             'load-audio-from-assets',
+            'load-audio-from-local',
             'tone-osc',
             'tone-delay',
             'tone-resonator',

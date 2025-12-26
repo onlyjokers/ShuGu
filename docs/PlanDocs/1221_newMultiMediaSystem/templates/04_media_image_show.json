@@ -1,12 +1,12 @@
 {
   "kind": "node-graph",
   "version": 1,
-  "title": "Patch: Load Image From Assets → Image to Client",
+  "title": "Patch: Load Image From Remote → Image to Client",
   "purpose": "体验 asset:<id> 引用 + client 侧 MediaEngine(showImage) 播放链路（Graph-driven Patch）",
   "howTo": [
     "1) 打开 client。",
     "2) manager Node Graph 点 ▶ Start。",
-    "3) 先在 Assets Manager 上传图片，然后在 Load Image From Assets 里选择该图片。",
+    "3) 先在 Assets Manager 上传图片，然后在 Load Image From Remote 里选择该图片。",
     "4) 通过 `Image to Client(Deploy) → Client(In)` 指定播放目标。"
   ],
   "graph": {

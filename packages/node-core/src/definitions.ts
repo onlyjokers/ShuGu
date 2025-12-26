@@ -82,6 +82,110 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.max(min, Math.min(max, next));
 }
 
+function coerceBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value >= 0.5 : false;
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (!s) return false;
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return true;
+    if (s === 'false' || s === '0' || s === 'no' || s === 'n') return false;
+    return true;
+  }
+  return false;
+}
+
+type LocalMediaKind = 'audio' | 'image' | 'video';
+
+function ensureLocalMediaKindQuery(ref: string, kind: LocalMediaKind): string {
+  const hashIndex = ref.indexOf('#');
+  const hash = hashIndex >= 0 ? ref.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? ref.slice(0, hashIndex) : ref;
+
+  const qIndex = withoutHash.indexOf('?');
+  if (qIndex < 0) return `${withoutHash}?kind=${kind}${hash}`;
+
+  const base = withoutHash.slice(0, qIndex);
+  const search = withoutHash.slice(qIndex + 1);
+  try {
+    const params = new URLSearchParams(search);
+    if (!params.has('kind')) params.set('kind', kind);
+    return `${base}?${params.toString()}${hash}`;
+  } catch {
+    const joiner = withoutHash.endsWith('?') || withoutHash.endsWith('&') ? '' : '&';
+    return `${withoutHash}${joiner}kind=${kind}${hash}`;
+  }
+}
+
+function isAbsoluteFilePath(filePath: string): boolean {
+  const s = filePath.trim();
+  if (!s) return false;
+  if (s.startsWith('/')) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return true;
+  if (s.startsWith('\\\\')) return true;
+  return false;
+}
+
+function normalizeLocalMediaRef(raw: unknown, kind: LocalMediaKind): string {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  if (!s) return '';
+
+  if (s.startsWith('localfile:')) {
+    return ensureLocalMediaKindQuery(s, kind);
+  }
+
+  const shuguLocalPrefix = 'shugu://local-file/';
+  if (s.startsWith(shuguLocalPrefix)) {
+    const encoded = s.slice(shuguLocalPrefix.length).trim();
+    if (!encoded) return '';
+    try {
+      const decoded = decodeURIComponent(encoded);
+      if (!decoded.trim()) return '';
+      return ensureLocalMediaKindQuery(`localfile:${decoded.trim()}`, kind);
+    } catch {
+      return ensureLocalMediaKindQuery(`localfile:${encoded}`, kind);
+    }
+  }
+
+  // Local nodes must never fetch remote assets; accept only absolute local paths.
+  if (!isAbsoluteFilePath(s)) return '';
+  return ensureLocalMediaKindQuery(`localfile:${s}`, kind);
+}
+
+function formatAnyPreview(value: unknown): string {
+  const MAX_LEN = 160;
+
+  const clamp = (raw: string): string => {
+    const singleLine = raw.replace(/\s+/g, ' ').trim();
+    if (!singleLine) return '--';
+    if (singleLine.length <= MAX_LEN) return singleLine;
+    return `${singleLine.slice(0, MAX_LEN - 1)}…`;
+  };
+
+  if (value === undefined) return '--';
+  if (value === null) return 'null';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return '--';
+    const rounded = Math.round(value * 1000) / 1000;
+    return clamp(String(rounded));
+  }
+  if (typeof value === 'string') return clamp(value);
+
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json === 'string') return clamp(json);
+  } catch {
+    // ignore
+  }
+
+  try {
+    return clamp(String(value));
+  } catch {
+    return '--';
+  }
+}
+
 function buildStableRandomOrder(nodeId: string, clients: string[]): string[] {
   const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
   keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
@@ -139,9 +243,11 @@ export function registerDefaultNodeDefinitions(
   registry.register(createLogicMultipleNode());
   registry.register(createLogicSubtractNode());
   registry.register(createLogicDivideNode());
+  registry.register(createLogicNotNode());
   registry.register(createLogicIfNode());
   registry.register(createLogicForNode());
   registry.register(createLogicSleepNode());
+  registry.register(createShowAnythingNode());
   registry.register(createNumberNode());
   registry.register(createStringNode());
   registry.register(createBoolNode());
@@ -156,8 +262,11 @@ export function registerDefaultNodeDefinitions(
   registry.register(createToneGranularNode());
   // Media playback helpers.
   registry.register(createLoadAudioFromAssetsNode());
+  registry.register(createLoadAudioFromLocalNode());
   registry.register(createLoadImageFromAssetsNode());
+  registry.register(createLoadImageFromLocalNode());
   registry.register(createLoadVideoFromAssetsNode());
+  registry.register(createLoadVideoFromLocalNode());
   registry.register(createPlayMediaNode());
   // Patch root sinks (Max/MSP style).
   registry.register(createAudioOutNode());
@@ -172,7 +281,7 @@ export function registerDefaultNodeDefinitions(
 function createLoadAudioFromAssetsNode(): NodeDefinition {
   return {
     type: 'load-audio-from-assets',
-    label: 'Load Audio From Assets',
+    label: 'Load Audio From Remote',
     category: 'Assets',
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -227,10 +336,73 @@ function createLoadAudioFromAssetsNode(): NodeDefinition {
   };
 }
 
+function createLoadAudioFromLocalNode(): NodeDefinition {
+  return {
+    type: 'load-audio-from-local',
+    label: 'Load Audio From Local(Display only)',
+    category: 'Assets',
+    inputs: [
+      { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'bus', label: 'Bus', type: 'string' },
+    ],
+    outputs: [
+      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
+    configSchema: [
+      {
+        key: 'assetPath',
+        label: 'Audio Asset',
+        type: 'local-asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+    ],
+    process: (inputs, config) => {
+      const asset =
+        typeof inputs.asset === 'string' && inputs.asset.trim()
+          ? inputs.asset.trim()
+          : typeof (config as any).assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
+      const playRaw = inputs.play;
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      // Client runtime may override this for real playback. Manager-side stays as a simple gate.
+      return { ref: asset && play ? 1 : 0, ended: false };
+    },
+  };
+}
+
 function createLoadImageFromAssetsNode(): NodeDefinition {
   return {
     type: 'load-image-from-assets',
-    label: 'Load Image From Assets',
+    label: 'Load Image From Remote',
     category: 'Assets',
     inputs: [],
     outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
@@ -264,6 +436,56 @@ function createLoadImageFromAssetsNode(): NodeDefinition {
   };
 }
 
+function createLoadImageFromLocalNode(): NodeDefinition {
+  return {
+    type: 'load-image-from-local',
+    label: 'Load Image From Local(Display only)',
+    category: 'Assets',
+    inputs: [{ id: 'asset', label: 'Asset', type: 'string', defaultValue: '' }],
+    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
+    configSchema: [
+      {
+        key: 'assetPath',
+        label: 'Image Asset',
+        type: 'local-asset-picker',
+        assetKind: 'image',
+        defaultValue: '',
+      },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
+    ],
+    process: (inputs, config) => {
+      const baseUrl =
+        typeof inputs.asset === 'string' && inputs.asset.trim()
+          ? inputs.asset.trim()
+          : typeof (config as any).assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
+      const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
+      const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
+      if (!baseRef) return { ref: '' };
+      if (!fitHash) return { ref: baseRef };
+      const hashIndex = baseRef.indexOf('#');
+      if (hashIndex < 0) return { ref: `${baseRef}${fitHash}` };
+      const withoutHash = baseRef.slice(0, hashIndex);
+      const params = new URLSearchParams(baseRef.slice(hashIndex + 1));
+      params.set('fit', fit);
+      return { ref: `${withoutHash}#${params.toString()}` };
+    },
+  };
+}
+
 // Tracks playback progress for `load-video-from-assets` to emit a one-tick `ended` pulse.
 type LoadVideoTimelineState = {
   signature: string;
@@ -278,7 +500,7 @@ const loadVideoTimelineState = new Map<string, LoadVideoTimelineState>();
 function createLoadVideoFromAssetsNode(): NodeDefinition {
   return {
     type: 'load-video-from-assets',
-    label: 'Load Video From Assets',
+    label: 'Load Video From Remote',
     category: 'Assets',
     inputs: [
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
@@ -323,6 +545,7 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -331,7 +554,8 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
     process: (inputs, config, context) => {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
       const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const startSecRaw = inputs.startSec;
       const endSecRaw = inputs.endSec;
       const cursorSecRaw = inputs.cursorSec;
@@ -379,6 +603,198 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
       const qSec = (value: number): number => Math.round(value * 100) / 100;
       const signature = [
         assetId,
+        qSec(startClamped),
+        qSec(endClamped),
+        qSec(cursorForPlayback ?? -1),
+        loop ? 1 : 0,
+        reverse ? 1 : 0,
+      ].join('|');
+
+      const prevState = loadVideoTimelineState.get(context.nodeId);
+      const state: LoadVideoTimelineState = prevState ?? {
+        signature: '',
+        lastPlay: false,
+        accumulatedMs: 0,
+        ended: false,
+        endedPulsePending: false,
+      };
+
+      const settingsChanged = signature !== state.signature;
+      if (settingsChanged) {
+        state.signature = signature;
+        state.accumulatedMs = 0;
+        state.ended = false;
+        state.endedPulsePending = false;
+      }
+
+      const playActive = play;
+      const playRising = playActive && !state.lastPlay;
+
+      if (state.ended && playRising) {
+        state.accumulatedMs = 0;
+        state.ended = false;
+        state.endedPulsePending = false;
+      }
+
+      let durationSec: number | null = null;
+      if (!loop) {
+        if (reverse) {
+          const startPos = cursorForPlayback ?? (endClamped >= 0 ? endClamped : startClamped);
+          durationSec = Math.max(0, startPos - startClamped);
+        } else if (endClamped >= 0) {
+          const startPos = cursorForPlayback ?? startClamped;
+          durationSec = Math.max(0, endClamped - startPos);
+        }
+      }
+
+      const dtMs =
+        typeof context.deltaTime === 'number' && Number.isFinite(context.deltaTime)
+          ? Math.max(0, context.deltaTime)
+          : 0;
+
+      if (!loop && durationSec !== null && playActive && !state.ended) {
+        if (durationSec <= 0) {
+          state.ended = true;
+          state.endedPulsePending = true;
+        } else if (state.lastPlay) {
+          state.accumulatedMs += dtMs;
+          if (state.accumulatedMs >= durationSec * 1000) {
+            state.accumulatedMs = durationSec * 1000;
+            state.ended = true;
+            state.endedPulsePending = true;
+          }
+        }
+      }
+
+      const endedPulse = state.endedPulsePending;
+      state.endedPulsePending = false;
+      state.lastPlay = playActive;
+      loadVideoTimelineState.set(context.nodeId, state);
+
+      return { ref: refWithFit, ended: endedPulse };
+    },
+  };
+}
+
+function createLoadVideoFromLocalNode(): NodeDefinition {
+  return {
+    type: 'load-video-from-local',
+    label: 'Load Video From Local(Display only)',
+    category: 'Assets',
+    inputs: [
+      { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
+      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
+      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
+      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
+      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
+      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
+    ],
+    outputs: [
+      { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
+      { id: 'ended', label: 'Ended', type: 'boolean' },
+    ],
+    configSchema: [
+      {
+        key: 'assetPath',
+        label: 'Video Asset',
+        type: 'local-asset-picker',
+        assetKind: 'video',
+        defaultValue: '',
+      },
+      {
+        key: 'timeline',
+        label: 'Timeline',
+        type: 'time-range',
+        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
+        min: 0,
+        step: 0.01,
+      },
+      {
+        key: 'fit',
+        label: 'Fit',
+        type: 'select',
+        defaultValue: 'contain',
+        options: [
+          { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'fill', label: 'Fill' },
+        ],
+      },
+    ],
+    process: (inputs, config, context) => {
+      const assetUrl =
+        typeof inputs.asset === 'string' && inputs.asset.trim()
+          ? inputs.asset.trim()
+          : typeof (config as any).assetPath === 'string'
+            ? String((config as any).assetPath).trim()
+            : '';
+      const localRef = assetUrl ? normalizeLocalMediaRef(assetUrl, 'video') : '';
+      const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
+      const startSecRaw = inputs.startSec;
+      const endSecRaw = inputs.endSec;
+      const cursorSecRaw = inputs.cursorSec;
+      const startSec =
+        typeof startSecRaw === 'number' && Number.isFinite(startSecRaw) ? startSecRaw : 0;
+      const endSec = typeof endSecRaw === 'number' && Number.isFinite(endSecRaw) ? endSecRaw : -1;
+      const cursorSec =
+        typeof cursorSecRaw === 'number' && Number.isFinite(cursorSecRaw) ? cursorSecRaw : -1;
+
+      const loopRaw = inputs.loop;
+      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
+      const playRaw = inputs.play;
+      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
+      const reverseRaw = inputs.reverse;
+      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
+      const mutedRaw = inputs.muted;
+      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+
+      const startClamped = Math.max(0, startSec);
+      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
+      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
+
+      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
+      const cursorForPlayback =
+        cursorClamped >= 0
+          ? endClamped >= 0
+            ? Math.min(endClamped, cursorClamped)
+            : cursorClamped
+          : null;
+      const positionParam = cursorForPlayback !== null ? `&p=${cursorForPlayback}` : '';
+      const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+      const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
+
+      const baseUrl = (() => {
+        if (!localRef) return '';
+        const hashIndex = localRef.indexOf('#');
+        return hashIndex >= 0 ? localRef.slice(0, hashIndex) : localRef;
+      })();
+
+      const refBase = baseUrl
+        ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`
+        : '';
+
+      const refWithFit = fitParam ? `${refBase}${fitParam}` : refBase;
+
+      if (!baseUrl) {
+        loadVideoTimelineState.delete(context.nodeId);
+        return { ref: '', ended: false };
+      }
+
+      const qSec = (value: number): number => Math.round(value * 100) / 100;
+      const signature = [
+        baseUrl,
         qSec(startClamped),
         qSec(endClamped),
         qSec(cursorForPlayback ?? -1),
@@ -998,47 +1414,51 @@ function createLogicDivideNode(): NodeDefinition {
   };
 }
 
+// Logic: invert a boolean (NOT gate).
+function createLogicNotNode(): NodeDefinition {
+  return {
+    type: 'logic-not',
+    label: 'Not',
+    category: 'Logic',
+    inputs: [{ id: 'in', label: 'In', type: 'boolean', defaultValue: false }],
+    outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+    configSchema: [],
+    process: (inputs) => ({ out: !coerceBoolean(inputs.in) }),
+  };
+}
+
 function createLogicIfNode(): NodeDefinition {
   return {
     type: 'logic-if',
     label: 'if',
     category: 'Logic',
     inputs: [
-      { id: 'input', label: 'input', type: 'number', defaultValue: 0 },
-      { id: 'condition', label: 'condition', type: 'number', defaultValue: 0 },
+      { id: 'input', label: 'input', type: 'boolean', defaultValue: false },
+      { id: 'condition', label: 'condition', type: 'boolean', defaultValue: false },
     ],
     outputs: [
-      { id: 'false', label: 'false', type: 'number' },
-      { id: 'true', label: 'true', type: 'number' },
+      { id: 'false', label: 'false', type: 'boolean' },
+      { id: 'true', label: 'true', type: 'boolean' },
     ],
     configSchema: [],
     process: (inputs) => {
-      const inputRaw = inputs.input;
-      const conditionRaw = inputs.condition;
-
-      const inputValue =
-        typeof inputRaw === 'number' && Number.isFinite(inputRaw)
-          ? inputRaw
-          : Number(inputRaw ?? 0);
-      const conditionValue =
-        typeof conditionRaw === 'number' && Number.isFinite(conditionRaw)
-          ? conditionRaw
-          : Number(conditionRaw ?? 0);
-
-      const value = Number.isFinite(inputValue) ? inputValue : 0;
-      const condition = Number.isFinite(conditionValue) ? conditionValue : 0;
-
-      // Treat condition as a numeric boolean (>= 0.5 is true).
-      if (condition >= 0.5) return { true: value };
-      return { false: value };
+      const value = coerceBoolean(inputs.input);
+      const condition = coerceBoolean(inputs.condition);
+      return {
+        true: condition ? value : false,
+        false: condition ? false : value,
+      };
     },
   };
 }
 
 type LogicForState = {
+  running: boolean;
   current: number;
   start: number;
   end: number;
+  nextEmitAt: number;
+  lastRunSignal: boolean;
 };
 
 const logicForState = new Map<string, LogicForState>();
@@ -1049,14 +1469,22 @@ function createLogicForNode(): NodeDefinition {
     label: 'for',
     category: 'Logic',
     inputs: [
-      { id: 'start', label: 'start', type: 'number', defaultValue: 1 },
-      { id: 'end', label: 'end', type: 'number', defaultValue: 1 },
+      { id: 'run', label: 'start', type: 'boolean', defaultValue: false },
+      { id: 'start', label: 'from', type: 'number', defaultValue: 1, min: 1, step: 1 },
+      { id: 'end', label: 'to', type: 'number', defaultValue: 1, min: 1, step: 1 },
+      { id: 'wait', label: 'wait (ms)', type: 'number', defaultValue: 0, min: 0, step: 10 },
     ],
-    outputs: [{ id: 'index', label: 'index', type: 'number' }],
+    outputs: [
+      { id: 'index', label: 'index', type: 'number' },
+      { id: 'running', label: 'running', type: 'boolean' },
+      { id: 'loopEnd', label: 'loop end', type: 'boolean' },
+    ],
     configSchema: [],
     process: (inputs, _config, context) => {
+      const run = coerceBoolean(inputs.run);
       const startRaw = inputs.start;
       const endRaw = inputs.end;
+      const waitRaw = inputs.wait;
 
       const startValue =
         typeof startRaw === 'number' && Number.isFinite(startRaw)
@@ -1072,18 +1500,59 @@ function createLogicForNode(): NodeDefinition {
       const clampedEnd = Math.max(clampedStart, end);
 
       const prev = logicForState.get(context.nodeId);
-      if (!prev || prev.start !== clampedStart || prev.end !== clampedEnd) {
-        const initial = { current: clampedStart, start: clampedStart, end: clampedEnd };
-        const out = initial.current;
-        initial.current = out >= initial.end ? initial.start : out + 1;
-        logicForState.set(context.nodeId, initial);
-        return { index: out };
+      const state: LogicForState = prev ?? {
+        running: false,
+        current: clampedStart,
+        start: clampedStart,
+        end: clampedEnd,
+        nextEmitAt: context.time,
+        lastRunSignal: false,
+      };
+
+      const waitParsed = typeof waitRaw === 'number' ? waitRaw : Number(waitRaw ?? 0);
+      const waitMs = Number.isFinite(waitParsed) ? Math.max(0, waitParsed) : 0;
+
+      // Allow editing range while idle; keep running range stable once started.
+      if (!state.running && (state.start !== clampedStart || state.end !== clampedEnd)) {
+        state.start = clampedStart;
+        state.end = clampedEnd;
+        state.current = clampedStart;
       }
 
-      const out = prev.current;
-      prev.current = out >= prev.end ? prev.start : out + 1;
-      logicForState.set(context.nodeId, prev);
-      return { index: out };
+      const rising = run && !state.lastRunSignal;
+      state.lastRunSignal = run;
+
+      if (rising && !state.running) {
+        state.running = true;
+        state.start = clampedStart;
+        state.end = clampedEnd;
+        state.current = clampedStart;
+        state.nextEmitAt = context.time;
+      }
+
+      if (!state.running) {
+        logicForState.set(context.nodeId, state);
+        return { running: false, loopEnd: false };
+      }
+
+      if (context.time < state.nextEmitAt) {
+        logicForState.set(context.nodeId, state);
+        return { running: true, loopEnd: false };
+      }
+
+      const out = state.current;
+      const done = out >= state.end;
+      if (done) {
+        state.running = false;
+        state.current = state.start;
+        logicForState.set(context.nodeId, state);
+        return { index: out, running: false, loopEnd: true };
+      }
+
+      state.current = out + 1;
+      state.nextEmitAt = context.time + waitMs;
+      logicForState.set(context.nodeId, state);
+      return { index: out, running: true, loopEnd: false };
     },
   };
 }
@@ -1128,6 +1597,18 @@ function createLogicSleepNode(): NodeDefinition {
       logicSleepState.set(context.nodeId, state);
       return { output: state.lastOutput };
     },
+  };
+}
+
+function createShowAnythingNode(): NodeDefinition {
+  return {
+    type: 'show-anything',
+    label: 'Show Anything',
+    category: 'Logic',
+    inputs: [{ id: 'in', label: 'In', type: 'any' }],
+    outputs: [{ id: 'value', label: 'Value', type: 'string' }],
+    configSchema: [],
+    process: (inputs) => ({ value: formatAnyPreview(inputs.in) }),
   };
 }
 
@@ -1289,19 +1770,6 @@ function createStringNode(): NodeDefinition {
 }
 
 function createBoolNode(): NodeDefinition {
-  const coerce = (value: unknown): boolean => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return Number.isFinite(value) ? value >= 0.5 : false;
-    if (typeof value === 'string') {
-      const s = value.trim().toLowerCase();
-      if (!s) return false;
-      if (s === 'true' || s === '1' || s === 'yes' || s === 'y') return true;
-      if (s === 'false' || s === '0' || s === 'no' || s === 'n') return false;
-      return true;
-    }
-    return false;
-  };
-
   return {
     type: 'bool',
     label: 'Bool',
@@ -1310,8 +1778,8 @@ function createBoolNode(): NodeDefinition {
     outputs: [{ id: 'value', label: 'Value', type: 'boolean' }],
     configSchema: [{ key: 'value', label: 'Value', type: 'boolean', defaultValue: false }],
     process: (inputs, config) => {
-      if (inputs.value !== undefined) return { value: coerce(inputs.value) };
-      return { value: coerce(config.value) };
+      if (inputs.value !== undefined) return { value: coerceBoolean(inputs.value) };
+      return { value: coerceBoolean(config.value) };
     },
   };
 }

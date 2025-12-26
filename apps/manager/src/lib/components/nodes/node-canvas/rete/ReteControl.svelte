@@ -10,6 +10,7 @@
     state as managerState,
   } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
+  import { localMediaStore, type LocalMediaKind } from '$lib/stores/local-media';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
@@ -111,6 +112,12 @@
     void assetsStore.refresh();
   }
 
+  let didRefreshLocalMedia = false;
+  $: if (data?.controlType === 'local-asset-picker' && !didRefreshLocalMedia) {
+    didRefreshLocalMedia = true;
+    void localMediaStore.refresh();
+  }
+
   function buildAssetOptions(kind: string): { value: string; label: string }[] {
     const list = ($assetsStore?.assets ?? []) as any[];
     const k = kind && typeof kind === 'string' ? kind : 'any';
@@ -118,8 +125,99 @@
     return filtered.map((a) => ({
       value: String(a?.id ?? ''),
       label: `${String(a?.originalName ?? a?.id ?? '')}`,
+      }));
+  }
+
+  function buildLocalMediaOptions(kind: string): { value: string; label: string }[] {
+    const list = ($localMediaStore?.files ?? []) as any[];
+    const k = kind && typeof kind === 'string' ? kind : 'any';
+    const filtered = k === 'any' ? list : list.filter((f) => String(f?.kind ?? '') === k);
+    return filtered.map((f) => ({
+      value: String(f?.path ?? ''),
+      label: String(f?.label ?? f?.path ?? ''),
     }));
   }
+
+  function inferLocalKindFromPath(filePath: string): LocalMediaKind | null {
+    const lower = filePath.toLowerCase();
+    if (/\.(mp3|wav|ogg|m4a|aac|flac|aif|aiff|opus)$/.test(lower)) return 'audio';
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(lower)) return 'image';
+    if (/\.(mp4|webm|mov|m4v)$/.test(lower)) return 'video';
+    return null;
+  }
+
+  const localAssetKindFromControl = (kindRaw: unknown, fallbackPath: string): LocalMediaKind | null => {
+    const normalized = typeof kindRaw === 'string' ? kindRaw.trim().toLowerCase() : '';
+    if (normalized === 'audio' || normalized === 'image' || normalized === 'video') return normalized;
+    return inferLocalKindFromPath(fallbackPath);
+  };
+
+  let localAssetDraft = '';
+  let localAssetDraftDirty = false;
+  let localAssetError: string | null = null;
+  let localAssetValidating = false;
+
+  $: if (data?.controlType === 'local-asset-picker') {
+    const current = typeof data?.value === 'string' ? String(data.value) : '';
+    if (!localAssetDraftDirty) localAssetDraft = current;
+  }
+
+  const changeLocalAssetSelect = (event: Event) => {
+    const target = event.target as HTMLSelectElement;
+    const next = target.value;
+    localAssetDraftDirty = false;
+    localAssetDraft = next;
+    localAssetError = null;
+    data?.setValue?.(next);
+  };
+
+  const onLocalAssetDraftInput = (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    localAssetDraftDirty = true;
+    localAssetDraft = target.value;
+    localAssetError = null;
+  };
+
+  const validateLocalAssetDraft = async () => {
+    if (data?.readonly) return;
+    const draft = localAssetDraft.trim();
+    if (!draft) {
+      localAssetDraftDirty = false;
+      localAssetError = null;
+      data?.setValue?.('');
+      return;
+    }
+
+    const kind = localAssetKindFromControl((data as any)?.assetKind, draft);
+    if (!kind) {
+      localAssetError = 'Unsupported file type for this node.';
+      return;
+    }
+
+    localAssetValidating = true;
+    localAssetError = null;
+    try {
+      const validated = await localMediaStore.validatePath(draft, kind);
+      if (!validated?.path) throw new Error('Invalid path');
+      localAssetDraftDirty = false;
+      localAssetDraft = validated.path;
+      data?.setValue?.(validated.path);
+    } catch (err) {
+      localAssetError = err instanceof Error ? err.message : String(err);
+    } finally {
+      localAssetValidating = false;
+    }
+  };
+
+  const onLocalAssetDraftKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void validateLocalAssetDraft();
+  };
+
+  const onLocalAssetDraftBlur = () => {
+    void validateLocalAssetDraft();
+  };
 
   function clientLabel(c: ClientInfo): string {
     return String((c as any).clientId ?? '');
@@ -418,6 +516,27 @@
     }
   };
 
+  const buildLocalMediaContentUrl = (
+    serverUrl: string,
+    filePath: string,
+    kind: LocalMediaKind
+  ): string | null => {
+    const trimmed = serverUrl.trim();
+    const p = filePath.trim();
+    if (!trimmed || !p) return null;
+    try {
+      const base = trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+      const url = new URL('api/local-media/content', base);
+      url.searchParams.set('path', p);
+      url.searchParams.set('kind', kind);
+      const token = localStorage.getItem('shugu-asset-read-token') ?? '';
+      if (token.trim()) url.searchParams.set('token', token.trim());
+      return url.toString();
+    } catch {
+      return null;
+    }
+  };
+
   const resolveConnectedNumber = (nodeId: string, portId: string): number | null => {
     const conn = ($graphStateStore.connections ?? []).find(
       (c: any) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === portId
@@ -483,7 +602,9 @@
     if (!timeRangeNodeId) return;
     if (
       timeRangeNodeType !== 'load-audio-from-assets' &&
-      timeRangeNodeType !== 'load-video-from-assets'
+      timeRangeNodeType !== 'load-video-from-assets' &&
+      timeRangeNodeType !== 'load-audio-from-local' &&
+      timeRangeNodeType !== 'load-video-from-local'
     ) {
       return;
     }
@@ -640,26 +761,50 @@
     timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
 
     const runtimeNode = timeRangeNodeId ? nodeEngine.getNode(timeRangeNodeId) : null;
-    const assetId =
-      typeof (runtimeNode as any)?.config?.assetId === 'string'
-        ? String((runtimeNode as any).config.assetId)
+    const assetIdRaw = typeof (runtimeNode as any)?.config?.assetId === 'string' ? String((runtimeNode as any).config.assetId) : '';
+    const assetId = assetIdRaw.trim();
+
+    const localAssetPathRaw =
+      typeof (runtimeNode as any)?.config?.assetPath === 'string'
+        ? String((runtimeNode as any).config.assetPath)
         : '';
+    const localAssetPath = localAssetPathRaw.trim();
 
     // Refresh duration/backdrop when the asset changes.
-    if (assetId !== lastTimelineAssetId) {
-      lastTimelineAssetId = assetId;
+    const timelineAssetKey =
+      timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets'
+        ? assetId
+        : localAssetPath;
+
+    if (timelineAssetKey !== lastTimelineAssetId) {
+      lastTimelineAssetId = timelineAssetKey;
       timeRangeDurationSec = null;
       timeRangeBackdropUrl = null;
       lastTimelineUrl = '';
     }
 
     const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
-    const contentUrl = assetId ? buildAssetContentUrl(serverUrl, assetId) : null;
+    const contentUrl = (() => {
+      if (timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets') {
+        return assetId ? buildAssetContentUrl(serverUrl, assetId) : null;
+      }
+      const kind: LocalMediaKind | null =
+        timeRangeNodeType === 'load-video-from-local'
+          ? 'video'
+          : timeRangeNodeType === 'load-audio-from-local'
+            ? 'audio'
+            : null;
+      if (!kind) return null;
+      return localAssetPath ? buildLocalMediaContentUrl(serverUrl, localAssetPath, kind) : null;
+    })();
 
     if (contentUrl && contentUrl !== lastTimelineUrl) {
       lastTimelineUrl = contentUrl;
       void (async () => {
-        const kind: any = timeRangeNodeType === 'load-video-from-assets' ? 'video' : 'audio';
+        const kind: any =
+          timeRangeNodeType === 'load-video-from-assets' || timeRangeNodeType === 'load-video-from-local'
+            ? 'video'
+            : 'audio';
         const duration = await getMediaDurationSec(contentUrl, kind);
         if (duration !== null && contentUrl === lastTimelineUrl) {
           timeRangeDurationSec = duration;
@@ -706,9 +851,20 @@
     timeRangeReverseEnabled = Boolean(reverseRaw);
     if (
       timeRangeNodeType === 'load-audio-from-assets' ||
-      timeRangeNodeType === 'load-video-from-assets'
+      timeRangeNodeType === 'load-video-from-assets' ||
+      timeRangeNodeType === 'load-audio-from-local' ||
+      timeRangeNodeType === 'load-video-from-local'
     ) {
-      const hasAsset = Boolean(assetId && assetId.trim());
+      const inputHasAsset = ($graphStateStore.connections ?? []).some(
+        (c: any) => String(c.targetNodeId) === timeRangeNodeId && String(c.targetPortId) === 'asset'
+      );
+      const localInputValue =
+        typeof (runtimeNode as any)?.inputValues?.asset === 'string' ? String((runtimeNode as any).inputValues.asset).trim() : '';
+
+      const hasAsset =
+        timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets'
+          ? Boolean(assetId)
+          : Boolean(localAssetPath || localInputValue || inputHasAsset);
       // Require a client "started" signal so the cursor only advances when playback actually begins.
       const signal = $nodeMediaSignals.get(timeRangeNodeId);
       const startedSeq = typeof signal?.startedSeq === 'number' ? signal.startedSeq : 0;
@@ -861,17 +1017,6 @@
 
     <div class="time-range-row">
       <div class="time-range-kv" aria-hidden="true">
-        <div class="time-range-k">Duration</div>
-        <div class="time-range-v">
-          {#if timeRangeDurationSec !== null}
-            {formatSeconds(timeRangeDurationSec)}s
-          {:else}
-            —
-          {/if}
-        </div>
-      </div>
-
-      <div class="time-range-kv" aria-hidden="true">
         <div class="time-range-k">Start</div>
         <div class="time-range-v">{formatSeconds(timeRangeStartSec)}s</div>
       </div>
@@ -885,6 +1030,17 @@
             (end)
           {:else}
             {formatSeconds(timeRangeEndSec)}s
+          {/if}
+        </div>
+      </div>
+
+      <div class="time-range-kv" aria-hidden="true">
+        <div class="time-range-k">Duration</div>
+        <div class="time-range-v">
+          {#if timeRangeDurationSec !== null}
+            {formatSeconds(timeRangeDurationSec)}s
+          {:else}
+            —
           {/if}
         </div>
       </div>
@@ -1023,6 +1179,54 @@
       {/each}
     </select>
   </div>
+{:else if data?.controlType === 'local-asset-picker'}
+  <div class="local-asset-picker {isInline ? 'inline' : ''}">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+
+    <select
+      class="control-input {isInline ? 'inline' : ''}"
+      value={data.value}
+      disabled={data.readonly || localAssetValidating}
+      on:pointerdown|stopPropagation
+      on:change={changeLocalAssetSelect}
+    >
+      <option value="">(select local file)</option>
+      {#each buildLocalMediaOptions(data.assetKind) as opt (opt.value)}
+        <option value={opt.value}>{opt.label}</option>
+      {/each}
+    </select>
+
+    <div class="local-asset-path-row">
+      <input
+        class="control-input local-asset-path"
+        value={localAssetDraft}
+        placeholder="/Users/.../file.mp4"
+        disabled={data.readonly || localAssetValidating}
+        on:pointerdown|stopPropagation
+        on:input={onLocalAssetDraftInput}
+        on:keydown={onLocalAssetDraftKeyDown}
+        on:blur={onLocalAssetDraftBlur}
+      />
+      <button
+        type="button"
+        class="local-asset-btn"
+        disabled={data.readonly || localAssetValidating}
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={() => validateLocalAssetDraft()}
+      >
+        {localAssetValidating ? 'Checking…' : 'Check'}
+      </button>
+    </div>
+
+    {#if $localMediaStore?.status === 'error' && $localMediaStore?.error}
+      <div class="local-asset-hint">Local media list error: {$localMediaStore.error}</div>
+    {/if}
+    {#if localAssetError}
+      <div class="local-asset-error">{localAssetError}</div>
+    {/if}
+  </div>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
 {:else if data?.controlType === 'midi-learn'}
@@ -1120,6 +1324,57 @@
     cursor: not-allowed;
   }
 
+  .local-asset-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 6px 10px 10px;
+  }
+
+  .local-asset-path-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .local-asset-path {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .local-asset-btn {
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: rgba(2, 6, 23, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .local-asset-btn:hover:not(:disabled) {
+    border-color: rgba(99, 102, 241, 0.7);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  }
+
+  .local-asset-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .local-asset-error,
+  .local-asset-hint {
+    font-size: 11px;
+    line-height: 1.3;
+    color: rgba(248, 113, 113, 0.92);
+    overflow-wrap: anywhere;
+  }
+
+  .local-asset-hint {
+    color: rgba(148, 163, 184, 0.8);
+  }
+
   .control-input:disabled:focus,
   .control-input[readonly]:focus {
     border-color: rgba(255, 255, 255, 0.12);
@@ -1213,7 +1468,7 @@
 
   .time-range-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     align-items: end;
   }

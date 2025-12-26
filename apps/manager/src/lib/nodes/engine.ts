@@ -43,8 +43,11 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'proc-scene-switch') return 'visual';
   if (type === 'audio-out') return 'sound';
   if (type === 'load-audio-from-assets') return 'sound';
+  if (type === 'load-audio-from-local') return 'sound';
   if (type === 'load-image-from-assets') return 'visual';
+  if (type === 'load-image-from-local') return 'visual';
   if (type === 'load-video-from-assets') return 'visual';
+  if (type === 'load-video-from-local') return 'visual';
   if (type === 'image-out') return 'visual';
   if (type === 'video-out') return 'visual';
   return null;
@@ -253,6 +256,7 @@ class NodeEngineClass {
     const targetPort = targetDef?.inputs.find((p) => p.id === connection.targetPortId);
 
     if (!sourcePort || !targetPort) return false;
+
     let sourceType = (sourcePort.type ?? 'any') as PortType;
     const targetType = (targetPort.type ?? 'any') as PortType;
 
@@ -315,6 +319,140 @@ class NodeEngineClass {
       nodes: snapshot.nodes,
       connections: [...snapshot.connections, connection],
     });
+
+    const localOnlyNodeTypes = new Set([
+      'load-audio-from-local',
+      'load-image-from-local',
+      'load-video-from-local',
+    ]);
+
+    const validateLocalOnlyPatchRouting = (): string | null => {
+      const nodes = Array.isArray(next.nodes) ? next.nodes : [];
+      const connections = Array.isArray(next.connections) ? next.connections : [];
+
+      const nodeById = new Map(nodes.map((n) => [String(n.id), n]));
+      const typeById = new Map(nodes.map((n) => [String(n.id), String(n.type)]));
+
+      const patchRoots = nodes.filter((n) =>
+        ['audio-out', 'image-out', 'video-out'].includes(String(n.type))
+      );
+      if (patchRoots.length === 0) return null;
+
+      const incomingByTarget = new Map<string, { sourceNodeId: string; targetPortId: string }[]>();
+      const outgoingBySourceKey = new Map<string, { targetNodeId: string; targetPortId: string }[]>();
+      for (const c of connections) {
+        const targetNodeId = String(c.targetNodeId);
+        const sourceNodeId = String(c.sourceNodeId);
+        const targetPortId = String(c.targetPortId);
+        const sourcePortId = String(c.sourcePortId);
+
+        const incoming = incomingByTarget.get(targetNodeId) ?? [];
+        incoming.push({ sourceNodeId, targetPortId });
+        incomingByTarget.set(targetNodeId, incoming);
+
+        const sourceKey = `${sourceNodeId}:${sourcePortId}`;
+        const outgoing = outgoingBySourceKey.get(sourceKey) ?? [];
+        outgoing.push({ targetNodeId, targetPortId });
+        outgoingBySourceKey.set(sourceKey, outgoing);
+      }
+
+      const shouldTraverseComputeDependency = (targetNodeId: string, targetPortId: string): boolean => {
+        const node = nodeById.get(String(targetNodeId));
+        if (!node) return true;
+        const def = nodeRegistry.get(String(node.type));
+        const port = def?.inputs?.find((p) => String(p.id) === String(targetPortId));
+        const portType = (port?.type ?? 'any') as PortType;
+        if (portType === 'client' || portType === 'command') return false;
+        return true;
+      };
+
+      const rootContainsLocalOnlyNodes = (rootNodeId: string): boolean => {
+        const keep = new Set<string>();
+        const visit = (nodeId: string) => {
+          const id = String(nodeId);
+          if (!id || keep.has(id)) return;
+          const node = nodeById.get(id);
+          if (!node) return;
+          keep.add(id);
+          const incoming = incomingByTarget.get(id) ?? [];
+          for (const inc of incoming) {
+            if (!shouldTraverseComputeDependency(id, inc.targetPortId)) continue;
+            visit(inc.sourceNodeId);
+          }
+        };
+        visit(rootNodeId);
+        for (const id of keep) {
+          const type = String(typeById.get(id) ?? '');
+          if (localOnlyNodeTypes.has(type)) return true;
+        }
+        return false;
+      };
+
+      const getCommandOutputPorts = (type: string): string[] => {
+        const def = nodeRegistry.get(String(type));
+        return (def?.outputs ?? [])
+          .filter((p) => String(p.type) === 'command')
+          .map((p) => String(p.id));
+      };
+
+      const isCommandInputPort = (type: string, portId: string): boolean => {
+        const def = nodeRegistry.get(String(type));
+        const port = (def?.inputs ?? []).find((p) => String(p.id) === String(portId));
+        return Boolean(port) && String(port?.type) === 'command';
+      };
+
+      const rootRoutesToClientObject = (rootNodeId: string): boolean => {
+        const rootType = String(typeById.get(rootNodeId) ?? '');
+        if (!rootType) return false;
+
+        const queue: { nodeId: string; portId: string }[] = getCommandOutputPorts(rootType).map(
+          (portId) => ({ nodeId: rootNodeId, portId })
+        );
+        const visited = new Set<string>();
+
+        while (queue.length > 0) {
+          const nextHop = queue.shift()!;
+          const key = `${nextHop.nodeId}:${nextHop.portId}`;
+          if (visited.has(key)) continue;
+          visited.add(key);
+
+          const outgoing = outgoingBySourceKey.get(key) ?? [];
+          for (const c of outgoing) {
+            const targetNodeId = String(c.targetNodeId);
+            if (!targetNodeId) continue;
+            const targetPortId = String(c.targetPortId);
+            const targetType = String(typeById.get(targetNodeId) ?? '');
+            if (!targetType) continue;
+            if (!isCommandInputPort(targetType, targetPortId)) continue;
+
+            if (targetType === 'client-object') return true;
+            if (targetType === 'display-object') continue;
+
+            const outPorts = getCommandOutputPorts(targetType);
+            for (const outPortId of outPorts) queue.push({ nodeId: targetNodeId, portId: outPortId });
+          }
+        }
+
+        return false;
+      };
+
+      for (const root of patchRoots) {
+        const rootId = String(root.id);
+        if (!rootId) continue;
+        if (!rootContainsLocalOnlyNodes(rootId)) continue;
+        if (rootRoutesToClientObject(rootId)) {
+          return 'Load * From Local(Display only) can only connect Deploy to Display (not Client).';
+        }
+      }
+
+      return null;
+    };
+
+    const localOnlyError = validateLocalOnlyPatchRouting();
+    if (localOnlyError) {
+      this.lastError.set(localOnlyError);
+      return false;
+    }
 
     // Validate cycles without mutating the live runtime first.
     try {
@@ -386,18 +524,36 @@ class NodeEngineClass {
   }
 
   loadGraph(state: GraphState): void {
-    const nodes: GraphState['nodes'] = (state.nodes ?? []).map((node) => ({
-      ...node,
-      config: { ...(node.config ?? {}) },
-      inputValues: { ...(node.inputValues ?? {}) },
-      outputValues: {}, // reset runtime outputs
-    }));
+    const rawNodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const rawConnections = Array.isArray(state.connections) ? state.connections : [];
+
+    // Defensive loading: skip unknown node types so older graphs (or plugins removed from manager)
+    // don't brick the whole canvas.
+    const keptNodeIds = new Set<string>();
+    const nodes: GraphState['nodes'] = [];
+    for (const node of rawNodes) {
+      const id = String((node as any)?.id ?? '');
+      const type = String((node as any)?.type ?? '');
+      if (!id || !type) continue;
+      if (!nodeRegistry.get(type)) continue;
+      keptNodeIds.add(id);
+      nodes.push({
+        ...node,
+        config: { ...(node.config ?? {}) },
+        inputValues: { ...(node.inputValues ?? {}) },
+        outputValues: {}, // reset runtime outputs
+      });
+    }
 
     // Enforce node system rule: every input port accepts at most one connection.
     // If a loaded graph violates this (older files), keep the first connection deterministically.
     const connections: GraphState['connections'] = [];
     const connectedInputs = new Set<string>();
-    for (const c of state.connections ?? []) {
+    for (const c of rawConnections) {
+      const src = String((c as any)?.sourceNodeId ?? '');
+      const dst = String((c as any)?.targetNodeId ?? '');
+      if (!src || !dst) continue;
+      if (!keptNodeIds.has(src) || !keptNodeIds.has(dst)) continue;
       const key = `${String(c.targetNodeId)}:${String(c.targetPortId)}`;
       if (connectedInputs.has(key)) continue;
       connectedInputs.add(key);
@@ -775,8 +931,11 @@ class NodeEngineClass {
       'number-stabilizer',
       // Audio sources/effects
       'load-audio-from-assets',
+      'load-audio-from-local',
       'load-image-from-assets',
+      'load-image-from-local',
       'load-video-from-assets',
+      'load-video-from-local',
       'tone-osc',
       'tone-delay',
       'tone-resonator',

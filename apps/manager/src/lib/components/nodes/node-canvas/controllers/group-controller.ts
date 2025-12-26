@@ -13,6 +13,8 @@ export type NodeGroup = {
   name: string;
   nodeIds: string[];
   disabled: boolean;
+  /** Runtime gate from Group Activate node; defaults to true when unset. */
+  runtimeActive?: boolean;
 };
 export type GroupFrame = {
   group: NodeGroup;
@@ -49,6 +51,9 @@ export type GroupController = {
   groupDisabledNodeIds: Writable<Set<string>>;
   marqueeRect: Writable<{ left: number; top: number; width: number; height: number } | null>;
   requestFramesUpdate: () => void;
+  setGroups: (groups: NodeGroup[]) => void;
+  appendGroups: (groups: NodeGroup[]) => void;
+  setRuntimeActiveByGroupId: (activeById: Map<string, boolean>) => void;
   applyHighlights: () => Promise<void>;
   scheduleHighlight: () => void;
   clearSelection: () => void;
@@ -172,10 +177,20 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   const recomputeDisabledNodes = (nextGroups: NodeGroup[] = get(nodeGroups)) => {
     const prev = get(groupDisabledNodeIds);
     const next = new Set<string>();
+    const graph = opts.getGraphState();
+    const typeByNodeId = new Map((graph.nodes ?? []).map((node) => [String(node.id), String(node.type ?? '')]));
 
     for (const g of nextGroups) {
-      if (!g.disabled) continue;
-      for (const nodeId of g.nodeIds ?? []) next.add(String(nodeId));
+      const runtimeActive = g.runtimeActive ?? true;
+      if (!g.disabled && runtimeActive) continue;
+      for (const nodeId of g.nodeIds ?? []) {
+        const id = String(nodeId);
+        if (!id) continue;
+        const type = typeByNodeId.get(id) ?? '';
+        // Group Activate is a UI-only edge port and should stay enabled even when the group is gated.
+        if (type === 'group-activate') continue;
+        next.add(id);
+      }
     }
 
     groupDisabledNodeIds.set(next);
@@ -300,9 +315,17 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const adapter = opts.getAdapter();
     if (!adapter) return null;
 
+    const graph = opts.getGraphState();
+    const typeByNodeId = new Map((graph.nodes ?? []).map((node) => [String(node.id), String(node.type ?? '')]));
+    const isDecorationNodeId = (nodeId: string): boolean => {
+      const type = typeByNodeId.get(String(nodeId)) ?? '';
+      return type === 'group-activate';
+    };
+
     const unionBoundsGraph = (nodeIds: string[]): NodeBounds | null => {
       let merged: NodeBounds | null = null;
       for (const nodeId of nodeIds) {
+        if (isDecorationNodeId(nodeId)) continue;
         const b = adapter.getNodeBounds(String(nodeId));
         merged = mergeBounds(merged, b);
       }
@@ -475,6 +498,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       const id = String(node.id ?? '');
       if (!id) continue;
       if (skipNodeIds.has(id)) continue;
+      const type = String((node as any).type ?? '');
+      if (type === 'group-activate') continue;
       const b = adapter.getNodeBounds(id);
       if (!b) continue;
 
@@ -654,11 +679,15 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         const bounds: NodeBounds = { ...editModeGroupBounds };
 
         const nextSet = new Set((group.nodeIds ?? []).map((id) => String(id)));
+        const typeByNodeId = new Map(
+          opts.getGraphState().nodes.map((node) => [String(node.id), String(node.type ?? '')])
+        );
         const added: string[] = [];
         const removed: string[] = [];
 
         for (const movedId of nodeIds) {
           const id = String(movedId);
+          if (typeByNodeId.get(id) === 'group-activate') continue;
           const c = getNodeCenter(id);
           if (!c) continue;
           const inside = c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom;
@@ -717,7 +746,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
             for (const childId of children) stack.push(childId);
           }
 
-          const effectiveDisabled = Array.from(targetAndAncestors).some((id) => Boolean(byId.get(id)?.disabled));
+          const effectiveDisabled = Array.from(targetAndAncestors).some((id) => {
+            const g = byId.get(id);
+            const runtimeActive = g?.runtimeActive ?? true;
+            return Boolean(g?.disabled) || !runtimeActive;
+          });
 
           nodeGroups.update((groups) =>
             groups.map((g) => {
@@ -818,6 +851,9 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const createdId = String(nodeId ?? '');
     if (!rootId || !createdId) return;
 
+    const createdType = String(opts.getGraphState().nodes.find((n) => String(n.id) === createdId)?.type ?? '');
+    if (createdType === 'group-activate') return;
+
     const groupsSnapshot = get(nodeGroups);
     const byId = new Map<string, NodeGroup>();
     for (const g of groupsSnapshot) byId.set(String(g.id), g);
@@ -834,7 +870,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       cursor = parentId && byId.has(parentId) ? parentId : null;
     }
 
-    const effectiveDisabled = Array.from(targetAndAncestors).some((id) => Boolean(byId.get(id)?.disabled));
+    const effectiveDisabled = Array.from(targetAndAncestors).some((id) => {
+      const g = byId.get(id);
+      const runtimeActive = g?.runtimeActive ?? true;
+      return Boolean(g?.disabled) || !runtimeActive;
+    });
 
     let didAdd = false;
     nodeGroups.update((groups) =>
@@ -897,7 +937,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const createGroupFromSelection = () => {
-    const selected = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
+    const selectedRaw = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
+    const graph = opts.getGraphState();
+    const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
+    const selected = selectedRaw.filter((id) => {
+      const type = String(nodeById.get(id)?.type ?? '');
+      return type !== 'group-activate';
+    });
     if (selected.length === 0) return;
 
     const groups = get(nodeGroups);
@@ -1014,6 +1060,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       name: nextName,
       nodeIds: Array.from(ids),
       disabled: false,
+      runtimeActive: true,
     };
 
     nodeGroups.set([...groups, group]);
@@ -1158,7 +1205,9 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
       const g = byId.get(groupId);
       const parentId = g?.parentId && byId.has(String(g.parentId)) ? String(g.parentId) : null;
-      const effective = Boolean(g?.disabled) || (parentId ? getEffectiveDisabled(parentId, visiting) : false);
+      const runtimeActive = g?.runtimeActive ?? true;
+      const effective =
+        Boolean(g?.disabled) || !runtimeActive || (parentId ? getEffectiveDisabled(parentId, visiting) : false);
 
       visiting.delete(groupId);
       effectiveDisabledCache.set(groupId, effective);
@@ -1261,6 +1310,49 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       computeGroupFrames();
       computeSelectionBounds();
     });
+  };
+
+  const setGroups = (groups: NodeGroup[]) => {
+    const next = Array.isArray(groups) ? groups : [];
+    nodeGroups.set(next);
+    recomputeDisabledNodes(next);
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+  };
+
+  const appendGroups = (groups: NodeGroup[]) => {
+    const incoming = Array.isArray(groups) ? groups : [];
+    if (incoming.length === 0) return;
+    nodeGroups.set([...get(nodeGroups), ...incoming]);
+    recomputeDisabledNodes();
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+  };
+
+  const setRuntimeActiveByGroupId = (activeById: Map<string, boolean>) => {
+    if (!(activeById instanceof Map)) return;
+    const prevGroups = get(nodeGroups);
+    if (prevGroups.length === 0) return;
+
+    let changed = false;
+    const nextGroups = prevGroups.map((group) => {
+      const desired = activeById.has(String(group.id)) ? Boolean(activeById.get(String(group.id))) : true;
+      const current = group.runtimeActive ?? true;
+      if (current === desired) return group;
+      changed = true;
+      return { ...group, runtimeActive: desired };
+    });
+
+    if (!changed) return;
+    nodeGroups.set(nextGroups);
+    recomputeDisabledNodes(nextGroups);
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
   };
 
   const clearSelection = () => {
@@ -1380,6 +1472,9 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     groupDisabledNodeIds,
     marqueeRect,
     requestFramesUpdate,
+    setGroups,
+    appendGroups,
+    setRuntimeActiveByGroupId,
     applyHighlights,
     scheduleHighlight,
     clearSelection,

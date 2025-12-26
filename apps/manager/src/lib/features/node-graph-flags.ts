@@ -5,7 +5,7 @@
  * Allows switching between renderers and controlling performance optimizations.
  *
  * Usage:
- *   - URL params: ?ng_renderer=xyflow&ng_shadows=off&ng_perf=on（XYFlow 已弃用，需要删除）
+ *   - URL params: ?ng_renderer=xyflow&ng_shadows=off&ng_perf=on（XYFlow 已弃用，需要删除；ng_perf 会将性能信息输出到 console）
  *   - Or toggle via the DEV UI in NodeCanvasToolbar
  */
 import { writable, derived, get } from 'svelte/store';
@@ -20,15 +20,15 @@ interface NodeGraphFlags {
   edgeShadows: boolean;
   /** Whether to show live port values (can impact performance) */
   liveValues: boolean;
-  /** Whether to show the performance debug overlay */
-  perfOverlay: boolean;
+  /** Whether to log performance info to the console */
+  perfConsole: boolean;
 }
 
 const DEFAULT_FLAGS: NodeGraphFlags = {
   renderer: 'rete',
   edgeShadows: false,  // OFF by default for performance (Step 1.1 - shadows removed)
   liveValues: true,
-  perfOverlay: false,
+  perfConsole: false,
 };
 
 /**
@@ -54,8 +54,8 @@ function parseUrlFlags(): Partial<NodeGraphFlags> {
   if (live === 'off') flags.liveValues = false;
 
   const perf = params.get('ng_perf');
-  if (perf === 'on') flags.perfOverlay = true;
-  if (perf === 'off') flags.perfOverlay = false;
+  if (perf === 'on') flags.perfConsole = true;
+  if (perf === 'off') flags.perfConsole = false;
 
   return flags;
 }
@@ -81,8 +81,11 @@ function loadStoredFlags(): Partial<NodeGraphFlags> {
     if (typeof parsed.liveValues === 'boolean') {
       flags.liveValues = parsed.liveValues;
     }
-    if (typeof parsed.perfOverlay === 'boolean') {
-      flags.perfOverlay = parsed.perfOverlay;
+    if (typeof parsed.perfConsole === 'boolean') {
+      flags.perfConsole = parsed.perfConsole;
+    } else if (typeof parsed.perfOverlay === 'boolean') {
+      // Back-compat: perfOverlay was the old key used by the debug overlay.
+      flags.perfConsole = parsed.perfOverlay;
     }
 
     return flags;
@@ -133,7 +136,7 @@ if (browser) {
 export const nodeGraphRenderer = derived(flagsStore, ($flags) => $flags.renderer);
 export const nodeGraphEdgeShadows = derived(flagsStore, ($flags) => $flags.edgeShadows);
 export const nodeGraphLiveValues = derived(flagsStore, ($flags) => $flags.liveValues);
-export const nodeGraphPerfOverlay = derived(flagsStore, ($flags) => $flags.perfOverlay);
+export const nodeGraphPerfConsole = derived(flagsStore, ($flags) => $flags.perfConsole);
 
 // Update functions
 export function setRenderer(renderer: RendererType): void {
@@ -148,12 +151,12 @@ export function setLiveValues(enabled: boolean): void {
   flagsStore.update((flags) => ({ ...flags, liveValues: enabled }));
 }
 
-export function setPerfOverlay(visible: boolean): void {
-  flagsStore.update((flags) => ({ ...flags, perfOverlay: visible }));
+export function setPerfConsole(enabled: boolean): void {
+  flagsStore.update((flags) => ({ ...flags, perfConsole: enabled }));
 }
 
-export function togglePerfOverlay(): void {
-  flagsStore.update((flags) => ({ ...flags, perfOverlay: !flags.perfOverlay }));
+export function togglePerfConsole(): void {
+  flagsStore.update((flags) => ({ ...flags, perfConsole: !flags.perfConsole }));
 }
 
 export function toggleEdgeShadows(): void {
