@@ -70,15 +70,48 @@
     const byId = new Map<string, GroupIndexNode>();
     for (const g of normalized) byId.set(g.id, { group: g, children: [] });
 
-    const roots: GroupIndexNode[] = [];
+    // Build parent pointers (ignore missing/invalid parent IDs).
+    const parentOf = new Map<string, string | null>();
+    for (const g of normalized) {
+      const pid = g.parentId ? String(g.parentId) : null;
+      if (!pid || pid === g.id || !byId.has(pid)) parentOf.set(g.id, null);
+      else parentOf.set(g.id, pid);
+    }
+
+    const wouldCreateCycle = (childId: string, parentId: string): boolean => {
+      if (!childId || !parentId) return false;
+      if (childId === parentId) return true;
+      const visited = new Set<string>();
+      let cursor: string | null = parentId;
+      while (cursor) {
+        if (cursor === childId) return true;
+        if (visited.has(cursor)) return true; // cycle upstream
+        visited.add(cursor);
+        cursor = parentOf.get(cursor) ?? null;
+      }
+      return false;
+    };
+
+    const attached = new Set<string>();
     for (const g of normalized) {
       const node = byId.get(g.id);
       if (!node) continue;
-      const pid = g.parentId ? String(g.parentId) : null;
-      const parent = pid ? byId.get(pid) : null;
-      if (parent) parent.children.push(node);
-      else roots.push(node);
+      const pid = parentOf.get(g.id);
+      if (!pid) continue;
+      const parent = byId.get(pid) ?? null;
+      if (!parent) continue;
+      if (wouldCreateCycle(g.id, pid)) continue;
+      parent.children.push(node);
+      attached.add(g.id);
     }
+
+    const roots: GroupIndexNode[] = [];
+    for (const g of normalized) {
+      if (!attached.has(g.id)) roots.push(byId.get(g.id)!);
+    }
+
+    // Fallback: if something is corrupted (e.g. cycles), never "hide" the index.
+    if (roots.length === 0) return normalized.map((g) => byId.get(g.id)!).filter(Boolean);
 
     return roots;
   };

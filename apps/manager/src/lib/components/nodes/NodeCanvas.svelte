@@ -402,6 +402,12 @@
   const clientIdsInOrder = () =>
     (get(managerState).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
 
+  const audienceClientIdsInOrder = () =>
+    (get(managerState).clients ?? [])
+      .filter((c: any) => String(c?.group ?? '') !== 'display')
+      .map((c: any) => String(c?.clientId ?? ''))
+      .filter(Boolean);
+
   let patchPendingCommitByKey = new Map<string, ReturnType<typeof setTimeout>>();
 
   // ===== Patch Deployment (Graph-driven, no toolbar controls) =====
@@ -925,7 +931,8 @@
       .filter((n) => Boolean(n.id));
     if (roots.length === 0) return [];
 
-    const connected = new Set(clientIdsInOrder());
+    const connectedAll = new Set(clientIdsInOrder());
+    const connectedAudience = new Set(audienceClientIdsInOrder());
 
     const connections = graphState.connections ?? [];
 
@@ -1044,6 +1051,11 @@
     const out: string[] = [];
     const seen = new Set<string>();
 
+    const toFiniteNumber = (value: unknown, fallback: number): number => {
+      const n = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
     const resolveClientId = (nodeId: string, outputPortId: string) => {
       const runtimeNode = nodeEngine.getNode(nodeId);
       const runtimeOut = runtimeNode?.outputValues?.[outputPortId] as any;
@@ -1056,11 +1068,47 @@
       return fromOut || fromConfig;
     };
 
+    // Patch deployment treats `client-object` as a selection (index/range/random), so expand it to all target ids.
+    const resolveClientNodeTargets = (nodeId: string): string[] => {
+      const runtimeNode = nodeEngine.getNode(nodeId);
+      if (!runtimeNode) return [];
+
+      const clients = audienceClientIdsInOrder();
+      const total = clients.length;
+      if (total === 0) return [];
+
+      const randomRaw = (runtimeNode.inputValues as any)?.random;
+      const random = coerceBoolean(randomRaw, false);
+      const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
+
+      const primaryId = resolveClientId(nodeId, 'out');
+      const indexRaw = (runtimeNode.inputValues as any)?.index;
+      const indexCandidate = toFiniteNumber(indexRaw, Number.NaN);
+      const indexFromInput = Number.isFinite(indexCandidate)
+        ? clampInt(indexCandidate, 1, total)
+        : null;
+      const indexFromPrimary = primaryId ? ordered.indexOf(primaryId) + 1 : 0;
+      const index = indexFromInput ?? (indexFromPrimary > 0 ? indexFromPrimary : 1);
+
+      const rangeRaw = (runtimeNode.inputValues as any)?.range;
+      const rangeCandidate = toFiniteNumber(rangeRaw, 1);
+      const range = clampInt(rangeCandidate, 1, total);
+
+      const ids: string[] = [];
+      const start = index - 1;
+      for (let i = 0; i < range; i += 1) {
+        ids.push(ordered[(start + i) % total]);
+      }
+      return ids;
+    };
+
     for (const nodeId of routedClientNodeIds) {
-      const id = resolveClientId(nodeId, 'out');
-      if (!id || !connected.has(id) || seen.has(id)) continue;
-      seen.add(id);
-      out.push(id);
+      const ids = resolveClientNodeTargets(nodeId);
+      for (const id of ids) {
+        if (!id || !connectedAudience.has(id) || seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
     }
 
     if (hasDisplayTarget) {
@@ -1073,7 +1121,7 @@
       const displayIds = (get(managerState).clients ?? [])
         .filter((c: any) => String(c?.group ?? '') === 'display')
         .map((c: any) => String(c?.clientId ?? ''))
-        .filter((id) => Boolean(id) && connected.has(id));
+        .filter((id) => Boolean(id) && connectedAll.has(id));
 
       for (const id of displayIds) {
         if (seen.has(id)) continue;
@@ -1306,7 +1354,7 @@
     rangeRaw: number,
     randomRaw: unknown
   ) => {
-    const clients = clientIdsInOrder();
+    const clients = audienceClientIdsInOrder();
     if (clients.length === 0) return null;
 
     const total = clients.length;
@@ -1401,7 +1449,7 @@
     nodeId: string,
     next: { index?: number; range?: number; clientId?: string; random?: boolean }
   ) => {
-    const clients = clientIdsInOrder();
+    const clients = audienceClientIdsInOrder();
     if (clients.length === 0) return;
 
     const node = nodeEngine.getNode(nodeId);
@@ -2453,6 +2501,16 @@
       const clients = ($state.clients ?? [])
         .map((c: any) => String(c?.clientId ?? ''))
         .filter(Boolean);
+      const audience = ($state.clients ?? [])
+        .filter((c: any) => String(c?.group ?? '') !== 'display')
+        .map((c: any) => String(c?.clientId ?? ''))
+        .filter(Boolean);
+      const displayIdSet = new Set(
+        ($state.clients ?? [])
+          .filter((c: any) => String(c?.group ?? '') === 'display')
+          .map((c: any) => String(c?.clientId ?? ''))
+          .filter(Boolean)
+      );
       const selected = ($state.selectedClientIds ?? []).map(String);
       const nextClientKey = clients.join('|');
       const nextSelectedKey = selected.join('|');
@@ -2462,25 +2520,45 @@
 
       schedulePatchReconcile('manager-state');
 
-      if (clients.length === 0) return;
+      const engineState = get(graphStateStore);
+      // If a project ever ended up with a Display clientId inside a Client node, clear it.
+      if (displayIdSet.size > 0) {
+        for (const node of engineState.nodes ?? []) {
+          if (String(node.type) !== 'client-object') continue;
+          const nodeId = String(node.id);
+          const nodeInstance = nodeEngine.getNode(nodeId);
+          const configuredClientId =
+            typeof (nodeInstance?.config as any)?.clientId === 'string'
+              ? String((nodeInstance?.config as any).clientId)
+              : '';
+          if (configuredClientId && displayIdSet.has(configuredClientId)) {
+            nodeEngine.updateNodeConfig(nodeId, { clientId: '' });
+            if (nodeInstance?.outputValues) {
+              (nodeInstance.outputValues as any).out = { clientId: '', sensors: null };
+              nodeEngine.tickTime.set(Date.now());
+            }
+          }
+        }
+      }
 
-      const selectedInOrder = selected.filter((id) => clients.includes(id));
-      const range = Math.max(1, Math.min(clients.length, selectedInOrder.length || 1));
-      const firstId = selectedInOrder[0] ?? clients[0] ?? '';
-      const index = Math.max(1, clients.indexOf(firstId) + 1);
+      if (audience.length === 0) {
+        return;
+      }
+
+      const selectedInOrder = selected.filter((id) => audience.includes(id));
+      const range = Math.max(1, Math.min(audience.length, selectedInOrder.length || 1));
+      const firstId = selectedInOrder[0] ?? audience[0] ?? '';
+      const index = Math.max(1, audience.indexOf(firstId) + 1);
       const ids = selectedInOrder.length > 0 ? selectedInOrder : firstId ? [firstId] : [];
       const slice = {
         index,
         range,
-        total: clients.length,
-        maxIndex: clients.length,
+        total: audience.length,
+        maxIndex: audience.length,
         ids,
         firstId,
         random: false,
       };
-      if (!slice) return;
-
-      const engineState = get(graphStateStore);
       for (const node of engineState.nodes ?? []) {
         if (String(node.type) !== 'client-object') continue;
         const nodeId = String(node.id);
