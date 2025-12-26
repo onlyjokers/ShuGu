@@ -3,7 +3,7 @@
  */
 import type { Connection, NodeInstance, NodeRegistry, ProcessContext } from '@shugu/node-core';
 import type { ClientSDK } from './client-sdk.js';
-import { toneAudioEngine } from '@shugu/multimedia-core';
+import { consumeNodeMediaFinishPulse, toneAudioEngine } from '@shugu/multimedia-core';
 
 type ToneModule = typeof import('tone');
 
@@ -58,6 +58,7 @@ type ToneEffectKind = 'tone-delay' | 'tone-reverb' | 'tone-pitch' | 'tone-resona
 type ToneNodeKind =
   | ToneEffectKind
   | 'tone-osc'
+  | 'audio-data'
   | 'tone-granular'
   | 'load-audio-from-assets'
   | 'load-audio-from-local';
@@ -112,11 +113,18 @@ type TonePlayerInstance = {
   lastTrigger: boolean;
   loading: boolean;
   ended: boolean;
-  // One-tick pulse consumed by the node graph when playback naturally stops (reaches End).
-  endedPulsePending: boolean;
   // Set before calling `player.stop()` so `onstop` can distinguish manual stops from natural ends.
   manualStopPending: boolean;
+  // Latest desired URL for this player (resolved asset URL). Used to detect config changes.
   lastUrl: string | null;
+  // URL that `player.buffer` currently corresponds to (when known).
+  loadedUrl: string | null;
+  // URL that most recently failed to load (avoid retrying every tick).
+  failedUrl: string | null;
+  // Async loading state for the *current* load attempt. See `requestTonePlayerLoad`.
+  loadSeq: number;
+  loadController: AbortController | null;
+  loadingUrl: string | null;
   lastClip: { startSec: number; endSec: number; loop: boolean; reverse: boolean } | null;
   lastCursorSec: number | null;
   lastParams: Record<string, number | string | boolean | null>;
@@ -130,11 +138,33 @@ type ToneLfoInstance = {
   lastParams: Record<string, number | string | boolean | null>;
 };
 
+type AudioDataInstance = {
+  nodeId: string;
+  input: any;
+  output: any;
+  analyser: AnalyserNode;
+  timeData: Float32Array<ArrayBuffer>;
+  freqData: Uint8Array;
+  energyHistory: { t: number; e: number }[];
+  lastBeatAt: number;
+  beatIntervals: number[];
+  bpm: number;
+  lastConfig: {
+    enabled: boolean;
+    fftSize: number;
+    smoothing: number;
+    lowCutoffHz: number;
+    highCutoffHz: number;
+    detectBPM: boolean;
+  };
+};
+
 const DEFAULT_RAMP_SECONDS = 0.05;
 const DEFAULT_STEP_SECONDS = 0.25;
 const DEFAULT_BUS = 'main';
 const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
   'tone-osc',
+  'audio-data',
   'tone-delay',
   'tone-resonator',
   'tone-pitch',
@@ -144,6 +174,7 @@ const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
   'load-audio-from-local',
 ]);
 const AUDIO_INPUT_PORTS = new Map<ToneNodeKind, string[]>([
+  ['audio-data', ['in']],
   ['tone-delay', ['in']],
   ['tone-resonator', ['in']],
   ['tone-pitch', ['in']],
@@ -151,6 +182,7 @@ const AUDIO_INPUT_PORTS = new Map<ToneNodeKind, string[]>([
 ]);
 const AUDIO_OUTPUT_PORTS = new Map<ToneNodeKind, string[]>([
   ['tone-osc', ['value']],
+  ['audio-data', ['out']],
   ['tone-delay', ['out']],
   ['tone-resonator', ['out']],
   ['tone-pitch', ['out']],
@@ -169,6 +201,7 @@ const effectInstances = new Map<string, ToneEffectInstance>();
 const granularInstances = new Map<string, ToneGranularInstance>();
 const playerInstances = new Map<string, TonePlayerInstance>();
 const lfoInstances = new Map<string, ToneLfoInstance>();
+const audioDataInstances = new Map<string, AudioDataInstance>();
 const buses = new Map<string, ToneBus>();
 let latestGraphNodesById = new Map<string, NodeInstance>();
 let latestAudioConnections: Connection[] = [];
@@ -177,6 +210,44 @@ let latestExplicitEffectIds = new Set<string>();
 let latestToneLfoConnections: Connection[] = [];
 let latestToneLfoDesiredTargets = new Set<string>();
 let latestToneLfoActiveTargets = new Set<string>();
+
+type VideoFinishState = {
+  signature: string;
+  lastPlay: boolean;
+  finished: boolean;
+  updatedAt: number;
+};
+
+const videoFinishStates = new Map<string, VideoFinishState>();
+const VIDEO_FINISH_MAX_AGE_MS = 10 * 60 * 1000;
+
+function pruneVideoFinishStates(now: number): void {
+  for (const [nodeId, entry] of videoFinishStates.entries()) {
+    if (now - entry.updatedAt > VIDEO_FINISH_MAX_AGE_MS) videoFinishStates.delete(nodeId);
+  }
+}
+
+function videoFinishSignatureFromRef(ref: unknown): string {
+  if (typeof ref !== 'string') return '';
+  const trimmed = ref.trim();
+  if (!trimmed) return '';
+
+  const hashIndex = trimmed.indexOf('#');
+  const baseUrl = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+  const paramsRaw = hashIndex >= 0 ? trimmed.slice(hashIndex + 1) : '';
+  if (!paramsRaw) return baseUrl;
+
+  try {
+    const params = new URLSearchParams(paramsRaw);
+    const t = params.get('t') ?? '';
+    const p = params.get('p') ?? '';
+    const loop = params.get('loop') ?? '';
+    const rev = params.get('rev') ?? '';
+    return `${baseUrl}#t=${t}&p=${p}&loop=${loop}&rev=${rev}`;
+  } catch {
+    return baseUrl;
+  }
+}
 
 function toneLfoTargetKey(nodeId: string, portId: string): string {
   return `${nodeId}|${portId}`;
@@ -269,6 +340,16 @@ function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(min)) return value;
   if (!Number.isFinite(max)) return value;
   return Math.max(min, Math.min(max, value));
+}
+
+function toAssetVolumeGain(value: unknown): number {
+  // UI Volume is a relative control in [-1, 2]:
+  // -1 => mute, 0 => normal (gain=1), 2 => max (gain=2), >2 => linear gain up to 100.
+  const v = clamp(toNumber(value, 0), -1, 100);
+  if (v <= -1) return 0;
+  if (v < 0) return 1 + v;
+  if (v <= 2) return 1 + v / 2;
+  return v;
 }
 
 function loopKeyOf(raw: unknown): string | null {
@@ -368,6 +449,8 @@ function updateAudioGraphSnapshot(
 function getAudioOutputNode(nodeId: string): any | null {
   const osc = oscInstances.get(nodeId);
   if (osc?.gain) return osc.gain;
+  const audioData = audioDataInstances.get(nodeId);
+  if (audioData?.output) return audioData.output;
   const granular = granularInstances.get(nodeId);
   if (granular?.gain) return granular.gain;
   const player = playerInstances.get(nodeId);
@@ -378,6 +461,8 @@ function getAudioOutputNode(nodeId: string): any | null {
 }
 
 function getAudioInputNode(nodeId: string): any | null {
+  const audioData = audioDataInstances.get(nodeId);
+  if (audioData?.input) return audioData.input;
   const effect = effectInstances.get(nodeId);
   if (effect?.wrapper?.input) return effect.wrapper.input;
   return null;
@@ -639,11 +724,9 @@ function rebuildBusChain(busName: string): void {
 
   let tail = bus.input;
   for (const effect of effects) {
-    try {
-      effect.wrapper.input.disconnect();
-    } catch {
-      // ignore
-    }
+    // Important: don't disconnect `wrapper.input` here. Some wrappers (e.g. tone-resonator) use an input
+    // Gain node that is internally wired to dry/wet paths; disconnecting it would tear down that internal
+    // wiring and silence the effect chain.
     try {
       effect.wrapper.output.disconnect();
     } catch {
@@ -1421,25 +1504,102 @@ function createGranularInstance(
   return instance;
 }
 
+function isAbortError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError';
+  }
+  if (error instanceof Error) return error.name === 'AbortError' || error.message.includes('AbortError');
+  return String(error).includes('AbortError');
+}
+
+/**
+ * Ensure Tone.Player loads are serialized and cancelable.
+ *
+ * ToneAudioBuffer.load (used by Tone.Player.load) does `fetch(url)` without AbortSignal support,
+ * so rapid URL switching can accumulate concurrent downloads/decodes and stall the main thread.
+ *
+ * Strategy:
+ * - Keep a single in-flight load per nodeId.
+ * - Abort the fetch stage when a newer URL arrives (best-effort).
+ * - Never apply stale load results (URL/seq checks).
+ */
+function requestTonePlayerLoad(instance: TonePlayerInstance): void {
+  if (!toneModule) return;
+  if (instance.loading) return;
+  const url = instance.lastUrl;
+  if (!url) return;
+  if (instance.loadedUrl === url) return;
+  if (instance.failedUrl === url) return;
+  void startTonePlayerLoad(instance, url);
+}
+
+async function startTonePlayerLoad(instance: TonePlayerInstance, url: string): Promise<void> {
+  if (!toneModule) return;
+
+  const seq = instance.loadSeq + 1;
+  instance.loadSeq = seq;
+  instance.loading = true;
+  instance.loadingUrl = url;
+  instance.failedUrl = null;
+
+  try {
+    instance.loadController?.abort();
+  } catch {
+    // ignore
+  }
+  const controller = new AbortController();
+  instance.loadController = controller;
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`GET failed (${res.status})`);
+
+    const arrayBuffer = await res.arrayBuffer();
+    if (controller.signal.aborted) return;
+
+    const audioBuffer = await toneModule.getContext().decodeAudioData(arrayBuffer);
+    if (controller.signal.aborted) return;
+
+    const current = playerInstances.get(instance.nodeId);
+    if (!current || current.loadSeq !== seq) return;
+    if (current.lastUrl !== url) return;
+
+    current.player.buffer = audioBuffer;
+    current.loadedUrl = url;
+    current.failedUrl = null;
+  } catch (error: unknown) {
+    if (isAbortError(error)) return;
+    const current = playerInstances.get(instance.nodeId);
+    if (current && current.loadSeq === seq && current.lastUrl === url) {
+      current.failedUrl = url;
+    }
+    console.warn('[tone-adapter] player load failed', { url }, error);
+  } finally {
+    const current = playerInstances.get(instance.nodeId);
+    if (current && current.loadSeq === seq) {
+      current.loading = false;
+      current.loadingUrl = null;
+      current.loadController = null;
+
+      // If URL changed while we were loading, kick the next load (no concurrency).
+      requestTonePlayerLoad(current);
+    }
+  }
+}
+
 function createPlayerInstance(
   nodeId: string,
-  url: string,
   busName: string,
   params: Record<string, number | boolean>
 ): TonePlayerInstance {
   const bus = getOrCreateBus(busName);
   const gain = new toneModule!.Gain({ gain: params.volume as number });
   const player = new toneModule!.Player({
-    url,
     loop: params.loop as boolean,
     playbackRate: params.playbackRate as number,
     detune: params.detune as number,
     autostart: false,
-    onload: () => {
-      const inst = playerInstances.get(nodeId);
-      if (!inst) return;
-      inst.loading = false;
-    },
   } as any);
 
   player.connect(gain);
@@ -1458,11 +1618,15 @@ function createPlayerInstance(
     pausedOffsetSec: null,
     autostarted: false,
     lastTrigger: false,
-    loading: true,
+    loading: false,
+    loadingUrl: null,
+    loadSeq: 0,
+    loadController: null,
     ended: false,
-    endedPulsePending: false,
     manualStopPending: false,
-    lastUrl: url,
+    lastUrl: null,
+    loadedUrl: null,
+    failedUrl: null,
     lastClip: null,
     lastCursorSec: null,
     lastParams: { ...params },
@@ -1480,7 +1644,6 @@ function createPlayerInstance(
     if (!inst.enabled) return;
 
     inst.ended = true;
-    inst.endedPulsePending = true;
     inst.started = false;
     inst.startedAt = 0;
 
@@ -1504,6 +1667,243 @@ function createPlayerInstance(
   rebuildBusChain(bus.name);
   scheduleGraphWiring();
   return instance;
+}
+
+// Audio analysis tap for patch audio connections (rms/peak/bands/centroid/bpm).
+const AUDIO_DATA_FFT_SIZES = [512, 1024, 2048, 4096, 8192] as const;
+
+function normalizeAudioDataConfig(config: Record<string, unknown>): AudioDataInstance['lastConfig'] {
+  const enabled = toBoolean(config.enabled, true);
+  const requestedFftSize = toNumber(config.fftSize, 2048);
+  const fftSize = (() => {
+    let best: number = AUDIO_DATA_FFT_SIZES[0];
+    let bestDiff = Math.abs(best - requestedFftSize);
+    for (const size of AUDIO_DATA_FFT_SIZES) {
+      const diff = Math.abs(size - requestedFftSize);
+      if (diff < bestDiff) {
+        best = size;
+        bestDiff = diff;
+      }
+    }
+    return best;
+  })();
+  const smoothing = clamp(toNumber(config.smoothing, 0.2), 0, 0.99);
+  const lowRaw = clamp(toNumber(config.lowCutoffHz, 300), 20, 20000);
+  const highRaw = clamp(toNumber(config.highCutoffHz, 3000), 20, 20000);
+  const lowCutoffHz = Math.min(lowRaw, highRaw);
+  const highCutoffHz = Math.max(lowRaw, highRaw);
+  const detectBPM = toBoolean(config.detectBPM, true);
+  return { enabled, fftSize, smoothing, lowCutoffHz, highCutoffHz, detectBPM };
+}
+
+function createAudioDataInstance(
+  nodeId: string,
+  config: AudioDataInstance['lastConfig']
+): AudioDataInstance | null {
+  if (!toneModule) return null;
+  const raw: AudioContext | null = (toneModule as any).getContext?.().rawContext ?? null;
+  if (!raw) return null;
+
+  const input = new toneModule.Gain({ gain: 1 });
+  const output = new toneModule.Gain({ gain: 1 });
+  input.connect(output);
+
+  const analyser = raw.createAnalyser();
+  analyser.fftSize = config.fftSize;
+  analyser.smoothingTimeConstant = config.smoothing;
+  try {
+    input.connect(analyser as any);
+  } catch {
+    // ignore
+  }
+
+  const instance: AudioDataInstance = {
+    nodeId,
+    input,
+    output,
+    analyser,
+    timeData: new Float32Array(analyser.fftSize) as unknown as Float32Array<ArrayBuffer>,
+    freqData: new Uint8Array(analyser.frequencyBinCount),
+    energyHistory: [],
+    lastBeatAt: 0,
+    beatIntervals: [],
+    bpm: 0,
+    lastConfig: { ...config },
+  };
+
+  audioDataInstances.set(nodeId, instance);
+  scheduleGraphWiring();
+  return instance;
+}
+
+function updateAudioDataInstance(instance: AudioDataInstance, config: AudioDataInstance['lastConfig']): void {
+  const prev = instance.lastConfig;
+  instance.lastConfig = { ...config };
+
+  if (prev.fftSize !== config.fftSize) {
+    try {
+      instance.analyser.fftSize = config.fftSize;
+      instance.timeData = new Float32Array(instance.analyser.fftSize) as unknown as Float32Array<ArrayBuffer>;
+      instance.freqData = new Uint8Array(instance.analyser.frequencyBinCount);
+    } catch {
+      // ignore
+    }
+  }
+
+  if (prev.smoothing !== config.smoothing) {
+    try {
+      instance.analyser.smoothingTimeConstant = config.smoothing;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (prev.detectBPM !== config.detectBPM || (!prev.enabled && config.enabled)) {
+    instance.energyHistory = [];
+    instance.beatIntervals = [];
+    instance.lastBeatAt = 0;
+    instance.bpm = 0;
+  }
+
+  if (!config.enabled) {
+    instance.energyHistory = [];
+    instance.beatIntervals = [];
+    instance.lastBeatAt = 0;
+    instance.bpm = 0;
+  }
+}
+
+function analyzeAudioDataInstance(
+  instance: AudioDataInstance,
+  nowMs: number
+): {
+  rms: number;
+  peak: number;
+  low: number;
+  mid: number;
+  high: number;
+  centroidHz: number;
+  bpm: number;
+  beat: boolean;
+} {
+  let rms = 0;
+  let peak = 0;
+
+  try {
+    instance.analyser.getFloatTimeDomainData(instance.timeData);
+    let sumSquares = 0;
+    for (let i = 0; i < instance.timeData.length; i += 1) {
+      const v = instance.timeData[i] ?? 0;
+      sumSquares += v * v;
+      const abs = Math.abs(v);
+      if (abs > peak) peak = abs;
+    }
+    rms = instance.timeData.length > 0 ? Math.sqrt(sumSquares / instance.timeData.length) : 0;
+  } catch {
+    // ignore
+  }
+
+  let low = 0;
+  let mid = 0;
+  let high = 0;
+  let centroidHz = 0;
+
+  try {
+    instance.analyser.getByteFrequencyData(instance.freqData as any);
+    const binCount = instance.freqData.length;
+    const sampleRate = instance.analyser.context?.sampleRate ?? 44100;
+    const nyquist = sampleRate / 2;
+    const binWidth = binCount > 0 ? nyquist / binCount : 0;
+
+    const lowBinEnd = binWidth > 0 ? Math.floor(instance.lastConfig.lowCutoffHz / binWidth) : 0;
+    const highBinStart =
+      binWidth > 0 ? Math.floor(instance.lastConfig.highCutoffHz / binWidth) : binCount;
+
+    const lowEnd = Math.max(0, Math.min(binCount, lowBinEnd));
+    const highStart = Math.max(0, Math.min(binCount, highBinStart));
+
+    let lowSum = 0;
+    let midSum = 0;
+    let highSum = 0;
+    let lowCount = 0;
+    let midCount = 0;
+    let highCount = 0;
+
+    let weightedSum = 0;
+    let totalMag = 0;
+
+    for (let i = 0; i < binCount; i += 1) {
+      const mag = (instance.freqData[i] ?? 0) / 255;
+      const freq = i * binWidth;
+      weightedSum += freq * mag;
+      totalMag += mag;
+
+      if (i < lowEnd) {
+        lowSum += mag;
+        lowCount += 1;
+      } else if (i >= highStart) {
+        highSum += mag;
+        highCount += 1;
+      } else {
+        midSum += mag;
+        midCount += 1;
+      }
+    }
+
+    low = lowCount > 0 ? lowSum / lowCount : 0;
+    mid = midCount > 0 ? midSum / midCount : 0;
+    high = highCount > 0 ? highSum / highCount : 0;
+    centroidHz = totalMag > 0 ? weightedSum / totalMag : 0;
+  } catch {
+    // ignore
+  }
+
+  let beat = false;
+  let bpm = instance.lastConfig.detectBPM ? instance.bpm : 0;
+
+  if (instance.lastConfig.enabled && instance.lastConfig.detectBPM) {
+    const windowMs = 1000;
+    instance.energyHistory.push({ t: nowMs, e: low });
+    while (instance.energyHistory.length > 0 && instance.energyHistory[0]!.t < nowMs - windowMs) {
+      instance.energyHistory.shift();
+    }
+
+    if (instance.energyHistory.length >= 10) {
+      const avg =
+        instance.energyHistory.reduce((sum, item) => sum + item.e, 0) / instance.energyHistory.length;
+      const variance =
+        instance.energyHistory.reduce((sum, item) => sum + (item.e - avg) ** 2, 0) /
+        instance.energyHistory.length;
+      const std = Math.sqrt(variance);
+
+      const threshold = avg + 1.3 * std;
+      const minBeatInterval = 250; // Max 240 BPM.
+
+      if (low > threshold && nowMs - instance.lastBeatAt > minBeatInterval) {
+        beat = true;
+        const interval = instance.lastBeatAt > 0 ? nowMs - instance.lastBeatAt : 0;
+        instance.lastBeatAt = nowMs;
+
+        if (interval > 0 && interval < 2000) {
+          instance.beatIntervals.push(interval);
+          if (instance.beatIntervals.length > 8) instance.beatIntervals.shift();
+
+          if (instance.beatIntervals.length >= 3) {
+            const avgInterval =
+              instance.beatIntervals.reduce((sum, v) => sum + v, 0) / instance.beatIntervals.length;
+            let nextBpm = Math.round(60000 / avgInterval);
+            if (nextBpm < 60) nextBpm *= 2;
+            if (nextBpm > 180) nextBpm = Math.round(nextBpm / 2);
+            instance.bpm = nextBpm;
+          }
+        }
+      }
+    }
+
+    bpm = instance.bpm;
+  }
+
+  return { rms, peak, low, mid, high, centroidHz, bpm, beat };
 }
 
 export async function enableToneAudio(): Promise<{ enabled: boolean; error?: string } | null> {
@@ -1587,6 +1987,12 @@ function disposePlayerInstance(nodeId: string): void {
   const inst = playerInstances.get(nodeId);
   if (!inst) return;
   try {
+    inst.loadController?.abort();
+  } catch {
+    // ignore
+  }
+  inst.loadController = null;
+  try {
     inst.manualStopPending = true;
     inst.player?.stop();
   } catch {
@@ -1622,8 +2028,41 @@ function disposeToneLfoInstance(nodeId: string): void {
   scheduleGraphWiring();
 }
 
+function disposeAudioDataInstance(nodeId: string): void {
+  const inst = audioDataInstances.get(nodeId);
+  if (!inst) return;
+  try {
+    inst.output?.disconnect();
+  } catch {
+    // ignore
+  }
+  try {
+    inst.input?.disconnect();
+  } catch {
+    // ignore
+  }
+  try {
+    inst.analyser?.disconnect();
+  } catch {
+    // ignore
+  }
+  try {
+    inst.output?.dispose();
+  } catch {
+    // ignore
+  }
+  try {
+    inst.input?.dispose();
+  } catch {
+    // ignore
+  }
+  audioDataInstances.delete(nodeId);
+  scheduleGraphWiring();
+}
+
 function disposeNodeById(nodeId: string): void {
   disposeOscInstance(nodeId);
+  disposeAudioDataInstance(nodeId);
   disposeEffectInstance(nodeId);
   disposeGranularInstance(nodeId);
   disposePlayerInstance(nodeId);
@@ -1768,6 +2207,7 @@ export function registerToneClientDefinitions(
     label: 'Tone LFO (client)',
     category: 'Audio',
     inputs: [
+      { id: 'in', label: 'In', type: 'number', defaultValue: 1 },
       { id: 'frequencyHz', label: 'Freq (Hz)', type: 'number', defaultValue: 1 },
       { id: 'min', label: 'Min', type: 'number', defaultValue: 0 },
       { id: 'max', label: 'Max', type: 'number', defaultValue: 1 },
@@ -1811,6 +2251,7 @@ export function registerToneClientDefinitions(
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
     ],
     process: (inputs, config, context) => {
+      const scale = toNumber(inputs.in, 1);
       const frequencyHz = Math.max(0, toNumber(inputs.frequencyHz ?? config.frequencyHz, 1));
       const min = toNumber(inputs.min ?? config.min, 0);
       const max = toNumber(inputs.max ?? config.max, 1);
@@ -1825,9 +2266,12 @@ export function registerToneClientDefinitions(
           ? toBoolean(inputs.enabled, true)
           : toBoolean(config.enabled, true);
 
+      const scaledMin = min * scale;
+      const scaledMax = max * scale;
+
       if (!enabled) {
         if (lfoInstances.has(context.nodeId)) disposeToneLfoInstance(context.nodeId);
-        return { value: min };
+        return { value: scaledMin };
       }
 
       const phase = (context.time / 1000) * frequencyHz * 2 * Math.PI;
@@ -1851,7 +2295,7 @@ export function registerToneClientDefinitions(
       }
 
       const centered = 0.5 + (normalized - 0.5) * depth;
-      const value = min + centered * (max - min);
+      const value = scaledMin + centered * (scaledMax - scaledMin);
 
       if (!toneAudioEngine.isEnabled()) {
         return { value };
@@ -1872,13 +2316,20 @@ export function registerToneClientDefinitions(
         return { value };
       }
 
-      const params = { frequencyHz, min, max, amplitude: depth, waveform, enabled: true };
+      const params = {
+        frequencyHz,
+        min: scaledMin,
+        max: scaledMax,
+        amplitude: depth,
+        waveform,
+        enabled: true,
+      };
       const instance = lfoInstances.get(context.nodeId);
       if (!instance) {
         createToneLfoInstance(context.nodeId, {
           frequencyHz,
-          min,
-          max,
+          min: scaledMin,
+          max: scaledMax,
           amplitude: depth,
           waveform,
         });
@@ -1887,6 +2338,112 @@ export function registerToneClientDefinitions(
       }
 
       return { value };
+    },
+  });
+
+  registry.register({
+    type: 'audio-data',
+    label: 'Audio Data (client)',
+    category: 'Audio',
+    inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
+    outputs: [
+      { id: 'out', label: 'Out', type: 'audio', kind: 'sink' },
+      { id: 'rms', label: 'RMS', type: 'number' },
+      { id: 'peak', label: 'Peak', type: 'number' },
+      { id: 'low', label: 'Low', type: 'number' },
+      { id: 'mid', label: 'Mid', type: 'number' },
+      { id: 'high', label: 'High', type: 'number' },
+      { id: 'centroidHz', label: 'Centroid (Hz)', type: 'number' },
+      { id: 'bpm', label: 'BPM', type: 'number' },
+      { id: 'beat', label: 'Beat', type: 'boolean' },
+    ],
+    configSchema: [
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+      {
+        key: 'fftSize',
+        label: 'FFT Size',
+        type: 'select',
+        defaultValue: '2048',
+        options: [
+          { value: '512', label: '512' },
+          { value: '1024', label: '1024' },
+          { value: '2048', label: '2048' },
+          { value: '4096', label: '4096' },
+          { value: '8192', label: '8192' },
+        ],
+      },
+      {
+        key: 'smoothing',
+        label: 'Smoothing',
+        type: 'number',
+        defaultValue: 0.2,
+        min: 0,
+        max: 0.99,
+        step: 0.01,
+      },
+      {
+        key: 'lowCutoffHz',
+        label: 'Low Cutoff (Hz)',
+        type: 'number',
+        defaultValue: 300,
+        min: 20,
+        max: 20000,
+        step: 10,
+      },
+      {
+        key: 'highCutoffHz',
+        label: 'High Cutoff (Hz)',
+        type: 'number',
+        defaultValue: 3000,
+        min: 20,
+        max: 20000,
+        step: 10,
+      },
+      { key: 'detectBPM', label: 'Detect BPM', type: 'boolean', defaultValue: true },
+    ],
+    process: (_inputs, config, context) => {
+      const empty = {
+        out: 0,
+        rms: 0,
+        peak: 0,
+        low: 0,
+        mid: 0,
+        high: 0,
+        centroidHz: 0,
+        bpm: 0,
+        beat: false,
+      };
+
+      if (!toneAudioEngine.isEnabled()) {
+        if (audioDataInstances.has(context.nodeId)) disposeAudioDataInstance(context.nodeId);
+        return empty;
+      }
+
+      if (!toneModule) {
+        void ensureTone().catch((error) => console.warn('[tone-adapter] Tone.js load failed', error));
+        return empty;
+      }
+
+      const hasAudioConnections = latestAudioConnections.some(
+        (conn) => conn.sourceNodeId === context.nodeId || conn.targetNodeId === context.nodeId
+      );
+      if (!hasAudioConnections) {
+        if (audioDataInstances.has(context.nodeId)) disposeAudioDataInstance(context.nodeId);
+        return empty;
+      }
+
+      const nextConfig = normalizeAudioDataConfig(config as Record<string, unknown>);
+      let instance = audioDataInstances.get(context.nodeId) ?? null;
+      if (!instance) {
+        instance = createAudioDataInstance(context.nodeId, nextConfig);
+      } else {
+        updateAudioDataInstance(instance, nextConfig);
+      }
+
+      if (!instance || !nextConfig.enabled) return empty;
+
+      const analyzed = analyzeAudioDataInstance(instance, context.time);
+      return { ...empty, ...analyzed };
     },
   });
 
@@ -2231,7 +2788,7 @@ export function registerToneClientDefinitions(
       inputs: opts.inputs as any,
       outputs: [
         { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-        { id: 'ended', label: 'Ended', type: 'boolean' },
+        { id: 'ended', label: 'Finish', type: 'boolean' },
       ],
       configSchema: opts.configSchema as any,
       process: (inputs, config, context) => {
@@ -2240,7 +2797,7 @@ export function registerToneClientDefinitions(
 
         const playbackRate = toNumber(inputs.playbackRate ?? config.playbackRate, 1);
         const detune = toNumber(inputs.detune ?? config.detune, 0);
-        const volume = 1;
+        const volume = toAssetVolumeGain(inputs.volume ?? config.volume);
         const loop = toBoolean(inputs.loop, false);
         const enabled = toBoolean(inputs.play, true);
         const reverse = toBoolean(inputs.reverse, false);
@@ -2259,7 +2816,6 @@ export function registerToneClientDefinitions(
         })();
 
         const outValue = baseUrlRaw ? (enabled ? 1 : 0) : 0;
-        let endedPulse = false;
 
         if (!toneAudioEngine.isEnabled()) {
           return { ref: outValue, ended: false };
@@ -2287,18 +2843,14 @@ export function registerToneClientDefinitions(
         };
 
         if (!instance) {
-          instance = createPlayerInstance(context.nodeId, url, busName, params);
-        }
-
-        if (instance.endedPulsePending) {
-          endedPulse = true;
-          instance.endedPulsePending = false;
+          instance = createPlayerInstance(context.nodeId, busName, params);
         }
 
         if (instance.lastUrl !== url && url) {
           const wasStarted = instance.started;
           instance.lastUrl = url;
-          instance.loading = true;
+          instance.loadedUrl = null;
+          instance.failedUrl = null;
           instance.autostarted = false;
           instance.started = false;
           instance.startedAt = 0;
@@ -2308,24 +2860,23 @@ export function registerToneClientDefinitions(
           instance.lastClip = null;
           instance.lastCursorSec = null;
           instance.ended = false;
-          instance.endedPulsePending = false;
           instance.manualStopPending = false;
+          try {
+            instance.loadController?.abort();
+          } catch {
+            // ignore
+          }
+          instance.loadController = null;
+          instance.loadingUrl = null;
           try {
             if (wasStarted) instance.manualStopPending = true;
             instance.player.stop();
           } catch {
             instance.manualStopPending = false;
           }
-          void instance.player
-            .load(url)
-            .then(() => {
-              instance.loading = false;
-            })
-            .catch((error: unknown) => {
-              instance.loading = false;
-              console.warn('[tone-adapter] player load failed', error);
-            });
         }
+
+        requestTonePlayerLoad(instance);
 
         if (instance.bus !== busName) {
           instance.bus = busName;
@@ -2361,14 +2912,65 @@ export function registerToneClientDefinitions(
           }
         })();
 
-        const clipStart =
+        const nowToneSec = toneModule!.now();
+
+        const playbackPositionSec = (opts: {
+          clipStart: number;
+          resolvedClipEnd: number | null;
+          loop: boolean;
+          reverse: boolean;
+        }): number | null => {
+          if (!instance.started) return null;
+          const elapsed = instance.startedAt > 0 ? Math.max(0, nowToneSec - instance.startedAt) : 0;
+          const direction = opts.reverse ? -1 : 1;
+          const rawPos = instance.startOffsetSec + direction * elapsed * playbackRate;
+          let position = rawPos;
+          const duration =
+            opts.resolvedClipEnd !== null ? Math.max(0, opts.resolvedClipEnd - opts.clipStart) : null;
+          if (opts.loop && duration !== null && duration > 0 && opts.resolvedClipEnd !== null) {
+            if (opts.reverse) {
+              const rel = opts.resolvedClipEnd - rawPos;
+              const wrapped = ((rel % duration) + duration) % duration;
+              position = opts.resolvedClipEnd - wrapped;
+            } else {
+              const rel = rawPos - opts.clipStart;
+              const wrapped = ((rel % duration) + duration) % duration;
+              position = opts.clipStart + wrapped;
+            }
+          } else if (opts.resolvedClipEnd !== null) {
+            position = clamp(position, opts.clipStart, opts.resolvedClipEnd);
+          } else {
+            position = Math.max(opts.clipStart, position);
+          }
+          return position;
+        };
+
+        const activeClip = instance.lastClip;
+        const activeResolvedClipEnd =
+          activeClip && activeClip.endSec >= 0
+            ? activeClip.endSec
+            : activeClip && bufferDuration !== null
+              ? bufferDuration
+              : null;
+        const activePlaybackPosSec = activeClip
+          ? playbackPositionSec({
+              clipStart: activeClip.startSec,
+              resolvedClipEnd: activeResolvedClipEnd,
+              loop: activeClip.loop,
+              reverse: activeClip.reverse,
+            })
+          : null;
+
+        let clipStart =
           bufferDuration !== null ? clamp(clipStartRaw, 0, bufferDuration) : clipStartRaw;
-        const clipEnd =
+        let clipEnd =
           clipEndCandidate >= 0
             ? bufferDuration !== null
               ? clamp(clipEndCandidate, clipStart, bufferDuration)
               : Math.max(clipStart, clipEndCandidate)
             : -1;
+
+        if (clipEnd >= 0 && clipEnd < clipStart) clipEnd = clipStart;
 
         const resolvedClipEnd =
           clipEnd >= 0 ? clipEnd : bufferDuration !== null ? bufferDuration : null;
@@ -2487,19 +3089,21 @@ export function registerToneClientDefinitions(
           if (!canStartNow) return;
           const wasStarted = instance.started;
           instance.ended = false;
-          instance.endedPulsePending = false;
           applyClipToPlayer();
           const nextPos =
             resolvedClipEnd !== null
               ? clamp(Math.max(0, pos), clipStart, resolvedClipEnd)
               : Math.max(clipStart, pos);
-          const dur =
-            !loop && resolvedClipEnd !== null
-              ? reverse
-                ? Math.max(0, nextPos - clipStart)
-                : Math.max(0, resolvedClipEnd - nextPos)
-              : null;
-          if (dur !== null && dur <= 0) {
+          const nearEdge = 0.002;
+          const noRange =
+            !loop &&
+            resolvedClipEnd !== null &&
+            (resolvedClipDuration !== null && resolvedClipDuration <= nearEdge
+              ? true
+              : reverse
+                ? nextPos <= clipStart + nearEdge
+                : nextPos >= resolvedClipEnd - nearEdge);
+          if (noRange) {
             try {
               instance.manualStopPending = false;
               if (instance.started) instance.manualStopPending = true;
@@ -2527,12 +3131,11 @@ export function registerToneClientDefinitions(
           }
 
           try {
-            if (dur !== null) instance.player.start(undefined, offset, dur);
-            else instance.player.start(undefined, offset);
+            instance.player.start(undefined, offset);
             instance.started = true;
             instance.startedAt = toneModule!.now();
             instance.startOffsetSec = nextPos;
-            instance.startDurationSec = dur;
+            instance.startDurationSec = null;
             instance.pausedOffsetSec = null;
 
             if (!wasStarted && deps.sdk) {
@@ -2564,7 +3167,6 @@ export function registerToneClientDefinitions(
         if (!enabled) {
           stopAndMaybePause();
           instance.ended = false;
-          instance.endedPulsePending = false;
           if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
         } else {
           if (clipChanged && instance.started) {
@@ -2576,7 +3178,16 @@ export function registerToneClientDefinitions(
               startFromPosition(resume, 'reverse-change');
             } else {
               instance.pausedOffsetSec = null;
-              startFromPosition(segmentStart, 'clip-change');
+              if (activePlaybackPosSec !== null) {
+                if (activePlaybackPosSec < clipStart) {
+                  startFromPosition(clipStart, 'clip-range');
+                } else if (resolvedClipEnd !== null && activePlaybackPosSec > resolvedClipEnd) {
+                  if (loop) startFromPosition(segmentStart, 'clip-range');
+                } else {
+                  instance.startOffsetSec = activePlaybackPosSec;
+                  instance.startedAt = nowToneSec;
+                }
+              }
             }
           } else if (cursorChanged) {
             instance.pausedOffsetSec = null;
@@ -2587,13 +3198,26 @@ export function registerToneClientDefinitions(
               instance.lastParams = { ...instance.lastParams, ...params, reverse };
               instance.lastCursorSec = cursorClamped;
               instance.enabled = enabled;
-              return { ref: outValue, ended: endedPulse };
+              return { ref: outValue, ended: true };
             }
-            const resumeOffset = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
-            startFromPosition(
-              resumeOffset,
-              instance.pausedOffsetSec ? 'resume' : cursorClamped ? 'seek-start' : 'start'
-            );
+            const resumeOffsetRaw = instance.pausedOffsetSec ?? cursorClamped ?? segmentStart;
+            // When resuming from a stopped state, `pausedOffsetSec` may be clamped to the range edge (e.g. End).
+            // Starting exactly at the edge results in an immediate stop, which feels like "Play doesn't work".
+            const resumeOffset = (() => {
+              if (loop || resolvedClipEnd === null) return resumeOffsetRaw;
+              const nearEdge = 0.002;
+              if (reverse) {
+                return resumeOffsetRaw <= clipStart + nearEdge ? segmentStart : resumeOffsetRaw;
+              }
+              return resumeOffsetRaw >= resolvedClipEnd - nearEdge ? segmentStart : resumeOffsetRaw;
+            })();
+            const resumeReason =
+              instance.pausedOffsetSec !== null
+                ? 'resume'
+                : cursorClamped !== null
+                  ? 'seek-start'
+                  : 'start';
+            startFromPosition(resumeOffset, resumeReason);
           }
         }
 
@@ -2602,7 +3226,40 @@ export function registerToneClientDefinitions(
         instance.lastParams = { ...instance.lastParams, ...params, reverse };
         instance.lastCursorSec = cursorClamped;
 
-        return { ref: outValue, ended: endedPulse };
+        if (
+          enabled &&
+          instance.started &&
+          !loop &&
+          resolvedClipEnd !== null &&
+          !instance.manualStopPending
+        ) {
+          const nowPos = playbackPositionSec({
+            clipStart,
+            resolvedClipEnd,
+            loop: false,
+            reverse,
+          });
+          if (nowPos !== null) {
+            const nearEdge = 0.002;
+            const reachedEnd = reverse
+              ? nowPos <= clipStart + nearEdge
+              : nowPos >= resolvedClipEnd - nearEdge;
+            if (reachedEnd) {
+              instance.pausedOffsetSec = reverse ? clipStart : resolvedClipEnd;
+              try {
+                instance.player.stop();
+              } catch {
+                // ignore
+              }
+              instance.started = false;
+              instance.startedAt = 0;
+              instance.startOffsetSec = 0;
+              instance.startDurationSec = null;
+            }
+          }
+        }
+
+        return { ref: outValue, ended: instance.ended };
       },
     });
   };
@@ -2626,6 +3283,7 @@ export function registerToneClientDefinitions(
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
     configSchema: [
@@ -2638,6 +3296,7 @@ export function registerToneClientDefinitions(
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
@@ -2678,6 +3337,7 @@ export function registerToneClientDefinitions(
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
     configSchema: [
@@ -2690,6 +3350,7 @@ export function registerToneClientDefinitions(
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
@@ -2708,12 +3369,67 @@ export function registerToneClientDefinitions(
     sensorNodeType: 'load-audio-from-local',
   });
 
+  const overrideVideoFinishOutput = (type: 'load-video-from-assets' | 'load-video-from-local') => {
+    const base = registry.get(type);
+    if (!base) return;
+    registry.register({
+      ...base,
+      outputs: base.outputs.map((port) =>
+        port.id === 'ended' ? { ...port, label: 'Finish' } : port
+      ),
+      process: (inputs, config, context) => {
+        const baseOut = base.process(inputs, config, context) as Record<string, unknown>;
+        const nodeId = context.nodeId;
+        const now = Date.now();
+        pruneVideoFinishStates(now);
+
+        const signature = videoFinishSignatureFromRef(baseOut?.ref);
+        if (!signature) {
+          videoFinishStates.delete(nodeId);
+          // Drain any pending finish pulses so stale ends don't apply after reloads.
+          consumeNodeMediaFinishPulse(nodeId);
+          return { ...baseOut, ended: false };
+        }
+
+        const existing = videoFinishStates.get(nodeId) ?? {
+          signature: '',
+          lastPlay: false,
+          finished: false,
+          updatedAt: now,
+        };
+
+        const playActive = toBoolean((inputs as any).play, true);
+        const playRising = playActive && !existing.lastPlay;
+
+        const finished = (() => {
+          if (signature !== existing.signature) return false;
+          if (!playActive || playRising) return false;
+          if (consumeNodeMediaFinishPulse(nodeId)) return true;
+          return existing.finished;
+        })();
+
+        videoFinishStates.set(nodeId, {
+          signature,
+          lastPlay: playActive,
+          finished,
+          updatedAt: now,
+        });
+
+        return { ...baseOut, ended: finished };
+      },
+    });
+  };
+
+  overrideVideoFinishOutput('load-video-from-assets');
+  overrideVideoFinishOutput('load-video-from-local');
+
   const handle: ToneAdapterHandle = {
     disposeNode: (nodeId: string) => {
       disposeNodeById(nodeId);
     },
     disposeAll: () => {
       for (const nodeId of Array.from(oscInstances.keys())) disposeOscInstance(nodeId);
+      for (const nodeId of Array.from(audioDataInstances.keys())) disposeAudioDataInstance(nodeId);
       for (const nodeId of Array.from(effectInstances.keys())) disposeEffectInstance(nodeId);
       for (const nodeId of Array.from(granularInstances.keys())) disposeGranularInstance(nodeId);
       for (const nodeId of Array.from(playerInstances.keys())) disposePlayerInstance(nodeId);
@@ -2746,8 +3462,36 @@ export function registerToneClientDefinitions(
       connections: Connection[]
     ) => {
       updateAudioGraphSnapshot(registry, nodes ?? [], connections ?? []);
+
+      // Best-effort: reset per-node video Finish state on each deploy.
+      const now = Date.now();
+      pruneVideoFinishStates(now);
+      const activeVideoNodeIds = new Set(
+        (nodes ?? [])
+          .filter(
+            (node) =>
+              node.type === 'load-video-from-assets' || node.type === 'load-video-from-local'
+          )
+          .map((node) => node.id)
+      );
+      for (const nodeId of Array.from(videoFinishStates.keys())) {
+        if (!activeVideoNodeIds.has(nodeId)) videoFinishStates.delete(nodeId);
+      }
+      for (const nodeId of activeVideoNodeIds) {
+        consumeNodeMediaFinishPulse(nodeId);
+        videoFinishStates.set(nodeId, {
+          signature: '',
+          lastPlay: false,
+          finished: false,
+          updatedAt: now,
+        });
+      }
+
       for (const nodeId of Array.from(oscInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposeOscInstance(nodeId);
+      }
+      for (const nodeId of Array.from(audioDataInstances.keys())) {
+        if (!activeNodeIds.has(nodeId)) disposeAudioDataInstance(nodeId);
       }
       for (const nodeId of Array.from(effectInstances.keys())) {
         if (!activeNodeIds.has(nodeId)) disposeEffectInstance(nodeId);

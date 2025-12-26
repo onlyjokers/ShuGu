@@ -30,6 +30,19 @@ function coerceBoolean(value) {
     }
     return false;
 }
+function coerceAssetVolumeGain(value) {
+    // UI Volume is a relative control in [-1, 2]:
+    // -1 => mute, 0 => normal (gain=1), 2 => max (gain=2), >2 => linear gain up to 100.
+    const raw = typeof value === 'string' ? Number(value) : Number(value);
+    const v = Number.isFinite(raw) ? Math.max(-1, Math.min(100, raw)) : 0;
+    if (v <= -1)
+        return 0;
+    if (v < 0)
+        return 1 + v;
+    if (v <= 2)
+        return 1 + v / 2;
+    return v;
+}
 function ensureLocalMediaKindQuery(ref, kind) {
     const hashIndex = ref.indexOf('#');
     const hash = hashIndex >= 0 ? ref.slice(hashIndex) : '';
@@ -173,6 +186,11 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createLogicSubtractNode());
     registry.register(createLogicDivideNode());
     registry.register(createLogicNotNode());
+    registry.register(createLogicAndNode());
+    registry.register(createLogicOrNode());
+    registry.register(createLogicNandNode());
+    registry.register(createLogicNorNode());
+    registry.register(createLogicXorNode());
     registry.register(createLogicIfNode());
     registry.register(createLogicForNode());
     registry.register(createLogicSleepNode());
@@ -189,6 +207,7 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createTonePitchNode());
     registry.register(createToneReverbNode());
     registry.register(createToneGranularNode());
+    registry.register(createAudioDataNode());
     // Media playback helpers.
     registry.register(createLoadAudioFromAssetsNode());
     registry.register(createLoadAudioFromLocalNode());
@@ -205,6 +224,57 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createScreenColorProcessorNode());
     registry.register(createSynthUpdateProcessorNode());
     registry.register(createSceneSwitchProcessorNode());
+}
+// Audio tap: passes audio through while exposing real-time analysis data on the client runtime.
+function createAudioDataNode() {
+    return {
+        type: 'audio-data',
+        label: 'Audio Data',
+        category: 'Audio',
+        inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
+        outputs: [
+            { id: 'out', label: 'Out', type: 'audio', kind: 'sink' },
+            { id: 'rms', label: 'RMS', type: 'number' },
+            { id: 'peak', label: 'Peak', type: 'number' },
+            { id: 'low', label: 'Low', type: 'number' },
+            { id: 'mid', label: 'Mid', type: 'number' },
+            { id: 'high', label: 'High', type: 'number' },
+            { id: 'centroidHz', label: 'Centroid (Hz)', type: 'number' },
+            { id: 'bpm', label: 'BPM', type: 'number' },
+            { id: 'beat', label: 'Beat', type: 'boolean' },
+        ],
+        configSchema: [
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+            {
+                key: 'fftSize',
+                label: 'FFT Size',
+                type: 'select',
+                defaultValue: '2048',
+                options: [
+                    { value: '512', label: '512' },
+                    { value: '1024', label: '1024' },
+                    { value: '2048', label: '2048' },
+                    { value: '4096', label: '4096' },
+                    { value: '8192', label: '8192' },
+                ],
+            },
+            { key: 'smoothing', label: 'Smoothing', type: 'number', defaultValue: 0.2, min: 0, max: 0.99, step: 0.01 },
+            { key: 'lowCutoffHz', label: 'Low Cutoff (Hz)', type: 'number', defaultValue: 300, min: 20, max: 20000, step: 10 },
+            { key: 'highCutoffHz', label: 'High Cutoff (Hz)', type: 'number', defaultValue: 3000, min: 20, max: 20000, step: 10 },
+            { key: 'detectBPM', label: 'Detect BPM', type: 'boolean', defaultValue: true },
+        ],
+        process: (inputs) => ({
+            out: inputs.in ?? 0,
+            rms: 0,
+            peak: 0,
+            low: 0,
+            mid: 0,
+            high: 0,
+            centroidHz: 0,
+            bpm: 0,
+            beat: false,
+        }),
+    };
 }
 function createLoadAudioFromAssetsNode() {
     return {
@@ -227,11 +297,20 @@ function createLoadAudioFromAssetsNode() {
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
             { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            {
+                id: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [
             { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-            { id: 'ended', label: 'Ended', type: 'boolean' },
+            { id: 'ended', label: 'Finish', type: 'boolean' },
         ],
         configSchema: [
             {
@@ -243,6 +322,7 @@ function createLoadAudioFromAssetsNode() {
             },
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             {
                 key: 'timeline',
@@ -285,11 +365,20 @@ function createLoadAudioFromLocalNode() {
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
             { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            {
+                id: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [
             { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-            { id: 'ended', label: 'Ended', type: 'boolean' },
+            { id: 'ended', label: 'Finish', type: 'boolean' },
         ],
         configSchema: [
             {
@@ -301,6 +390,7 @@ function createLoadAudioFromLocalNode() {
             },
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+            { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             {
                 key: 'timeline',
@@ -431,11 +521,12 @@ function createLoadVideoFromAssetsNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
         ],
         outputs: [
             { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
-            { id: 'ended', label: 'Ended', type: 'boolean' },
+            { id: 'ended', label: 'Finish', type: 'boolean' },
         ],
         configSchema: [
             {
@@ -484,6 +575,8 @@ function createLoadVideoFromAssetsNode() {
             const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
             const mutedRaw = inputs.muted;
             const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+            const volumeGain = Math.round(coerceAssetVolumeGain(inputs.volume) * 100) / 100;
+            const mutedEffective = muted || volumeGain <= 0;
             const startClamped = Math.max(0, startSec);
             const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
             const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
@@ -497,7 +590,7 @@ function createLoadVideoFromAssetsNode() {
             const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
             const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
             const refBase = assetId
-                ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`
+                ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeGain}&muted=${mutedEffective ? 1 : 0}${positionParam}${nodeParam}`
                 : '';
             const refWithFit = fitParam ? `${refBase}${fitParam}` : refBase;
             if (!assetId) {
@@ -591,11 +684,12 @@ function createLoadVideoFromLocalNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
         ],
         outputs: [
             { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
-            { id: 'ended', label: 'Ended', type: 'boolean' },
+            { id: 'ended', label: 'Finish', type: 'boolean' },
         ],
         configSchema: [
             {
@@ -649,6 +743,8 @@ function createLoadVideoFromLocalNode() {
             const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
             const mutedRaw = inputs.muted;
             const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+            const volumeGain = Math.round(coerceAssetVolumeGain(inputs.volume) * 100) / 100;
+            const mutedEffective = muted || volumeGain <= 0;
             const startClamped = Math.max(0, startSec);
             const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
             const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
@@ -668,7 +764,7 @@ function createLoadVideoFromLocalNode() {
                 return hashIndex >= 0 ? localRef.slice(0, hashIndex) : localRef;
             })();
             const refBase = baseUrl
-                ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}`
+                ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeGain}&muted=${mutedEffective ? 1 : 0}${positionParam}${nodeParam}`
                 : '';
             const refWithFit = fitParam ? `${refBase}${fitParam}` : refBase;
             if (!baseUrl) {
@@ -851,6 +947,23 @@ function createVideoOutNode(deps) {
             return n >= 0.5;
         return null;
     };
+    const parseVolumeFromUrl = (url) => {
+        const trimmed = url.trim();
+        if (!trimmed)
+            return null;
+        const index = trimmed.indexOf('#');
+        const paramsRaw = index >= 0 ? trimmed.slice(index + 1) : '';
+        if (!paramsRaw)
+            return null;
+        const params = new URLSearchParams(paramsRaw);
+        const value = params.get('vol') ?? params.get('volume');
+        if (value === null)
+            return null;
+        const n = Number(value);
+        if (!Number.isFinite(n))
+            return null;
+        return Math.max(0, Math.min(100, n));
+    };
     const stop = () => {
         deps.executeCommand({ action: 'stopMedia', payload: {} });
     };
@@ -873,11 +986,13 @@ function createVideoOutNode(deps) {
                 return;
             }
             const muted = parseMutedFromUrl(url);
+            const volume = parseVolumeFromUrl(url);
             deps.executeCommand({
                 action: 'playMedia',
                 payload: {
                     url,
                     mediaType: 'video',
+                    ...(volume === null ? {} : { volume }),
                     ...(muted === null ? {} : { muted }),
                 },
             });
@@ -1274,16 +1389,86 @@ function createLogicDivideNode() {
         },
     };
 }
-// Logic: invert a boolean (NOT gate).
+// Gate: invert a boolean (NOT gate).
 function createLogicNotNode() {
     return {
         type: 'logic-not',
-        label: 'Not',
-        category: 'Logic',
+        label: 'NOT',
+        category: 'Gate',
         inputs: [{ id: 'in', label: 'In', type: 'boolean', defaultValue: false }],
         outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
         configSchema: [],
         process: (inputs) => ({ out: !coerceBoolean(inputs.in) }),
+    };
+}
+function createLogicAndNode() {
+    return {
+        type: 'logic-and',
+        label: 'AND',
+        category: 'Gate',
+        inputs: [
+            { id: 'a', label: 'A', type: 'boolean', defaultValue: false },
+            { id: 'b', label: 'B', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: coerceBoolean(inputs.a) && coerceBoolean(inputs.b) }),
+    };
+}
+function createLogicOrNode() {
+    return {
+        type: 'logic-or',
+        label: 'OR',
+        category: 'Gate',
+        inputs: [
+            { id: 'a', label: 'A', type: 'boolean', defaultValue: false },
+            { id: 'b', label: 'B', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: coerceBoolean(inputs.a) || coerceBoolean(inputs.b) }),
+    };
+}
+function createLogicXorNode() {
+    return {
+        type: 'logic-xor',
+        label: 'XOR',
+        category: 'Gate',
+        inputs: [
+            { id: 'a', label: 'A', type: 'boolean', defaultValue: false },
+            { id: 'b', label: 'B', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: coerceBoolean(inputs.a) !== coerceBoolean(inputs.b) }),
+    };
+}
+function createLogicNandNode() {
+    return {
+        type: 'logic-nand',
+        label: 'NAND',
+        category: 'Gate',
+        inputs: [
+            { id: 'a', label: 'A', type: 'boolean', defaultValue: false },
+            { id: 'b', label: 'B', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: !(coerceBoolean(inputs.a) && coerceBoolean(inputs.b)) }),
+    };
+}
+function createLogicNorNode() {
+    return {
+        type: 'logic-nor',
+        label: 'NOR',
+        category: 'Gate',
+        inputs: [
+            { id: 'a', label: 'A', type: 'boolean', defaultValue: false },
+            { id: 'b', label: 'B', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+        configSchema: [],
+        process: (inputs) => ({ out: !(coerceBoolean(inputs.a) || coerceBoolean(inputs.b)) }),
     };
 }
 function createLogicIfNode() {
@@ -1446,6 +1631,7 @@ function createToneLFONode() {
         label: 'Tone LFO',
         category: 'Audio',
         inputs: [
+            { id: 'in', label: 'In', type: 'number', defaultValue: 1 },
             {
                 id: 'frequencyHz',
                 label: 'Freq (Hz)',
@@ -1499,6 +1685,8 @@ function createToneLFONode() {
             { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs, config, context) => {
+            const scaleRaw = inputs.in;
+            const scale = typeof scaleRaw === 'number' && Number.isFinite(scaleRaw) ? scaleRaw : 1;
             const frequencyHz = typeof inputs.frequencyHz === 'number'
                 ? inputs.frequencyHz
                 : Number(config.frequencyHz ?? 1);
@@ -1520,8 +1708,10 @@ function createToneLFONode() {
                     return v.trim();
                 return String(config.waveform ?? 'sine');
             })();
+            const scaledMin = min * scale;
+            const scaledMax = max * scale;
             if (!enabled)
-                return { value: min };
+                return { value: scaledMin };
             const freq = Number.isFinite(frequencyHz) ? Math.max(0, frequencyHz) : 1;
             const phase = (context.time / 1000) * freq * 2 * Math.PI;
             let normalized;
@@ -1542,7 +1732,7 @@ function createToneLFONode() {
                     normalized = (Math.sin(phase) + 1) / 2;
             }
             const centered = 0.5 + (normalized - 0.5) * amplitude;
-            const value = min + centered * (max - min);
+            const value = scaledMin + centered * (scaledMax - scaledMin);
             return { value };
         },
     };

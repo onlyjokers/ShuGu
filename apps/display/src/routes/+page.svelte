@@ -7,6 +7,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
   import { onMount, onDestroy } from 'svelte';
   import VideoPlayer from '$components/VideoPlayer.svelte';
   import ImageDisplay from '$components/ImageDisplay.svelte';
+  import { toneAudioEngine } from '@shugu/multimedia-core';
   import {
     coreState,
     audioState,
@@ -42,6 +43,9 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     serverUrl = urlParam?.trim() ? urlParam.trim() : serverUrl;
     assetReadToken = assetReadTokenParam?.trim() ? assetReadTokenParam.trim() : '';
     pairToken = pairTokenParam?.trim() ? pairTokenParam.trim() : '';
+
+    // Preload Tone.js early so `toneAudioEngine.start()` can run inside a user gesture later.
+    void toneAudioEngine.ensureLoaded().catch(() => undefined);
 
     initializeDisplay({ serverUrl, assetReadToken, pairToken });
 

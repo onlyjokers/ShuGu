@@ -3,7 +3,9 @@ Purpose: Display video overlay (full-screen) for the Display app.
 -->
 
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { fade } from 'svelte/transition';
+  import { reportNodeMediaFinish, toneAudioEngine } from '@shugu/multimedia-core';
 
   export let url: string;
   export let playing = true;
@@ -30,8 +32,46 @@ Purpose: Display video overlay (full-screen) for the Display app.
   let rafId: number | null = null;
   let rafLastTs = 0;
   let startedReportKey = '';
+  let finishReportKey = '';
+  let autoplayForcedMute = false;
+
+  let webAudioSource: MediaElementAudioSourceNode | null = null;
+  let webAudioGain: GainNode | null = null;
+  let webAudioTarget: HTMLVideoElement | null = null;
+  let ownedAudioContext: AudioContext | null = null;
 
   const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+  const resetWebAudio = () => {
+    try {
+      webAudioSource?.disconnect();
+    } catch {
+      // ignore
+    }
+    try {
+      webAudioGain?.disconnect();
+    } catch {
+      // ignore
+    }
+    webAudioSource = null;
+    webAudioGain = null;
+    webAudioTarget = null;
+  };
+
+  const disposeOwnedAudioContext = () => {
+    if (!ownedAudioContext) return;
+    try {
+      ownedAudioContext.close();
+    } catch {
+      // ignore
+    }
+    ownedAudioContext = null;
+  };
+
+  onDestroy(() => {
+    resetWebAudio();
+    disposeOwnedAudioContext();
+  });
 
   const getRange = () => {
     const start = Math.max(0, Number(startSec) || 0);
@@ -42,9 +82,97 @@ Purpose: Display video overlay (full-screen) for the Display app.
     return { start, end: effectiveEnd };
   };
 
+  const getEffectiveVolume = (): number => {
+    const raw = typeof volume === 'number' && Number.isFinite(volume) ? volume : Number(volume) || 0;
+    return clamp(raw, 0, 100);
+  };
+
+  const getWebAudioContext = async (): Promise<AudioContext | null> => {
+    if (toneAudioEngine.isEnabled()) {
+      try {
+        const mod = await toneAudioEngine.ensureLoaded();
+        const Tone: any = (mod as any).default ?? mod;
+        const ctx: AudioContext | null = Tone.getContext?.().rawContext ?? null;
+        return ctx;
+      } catch {
+        return null;
+      }
+    }
+
+    if (typeof window === 'undefined') return null;
+    const Ctor = (window as any).AudioContext ?? (window as any).webkitAudioContext;
+    if (!Ctor) return null;
+
+    let ctx = ownedAudioContext;
+    if (!ctx) {
+      try {
+        ctx = new Ctor();
+      } catch {
+        ownedAudioContext = null;
+        return null;
+      }
+      ownedAudioContext = ctx;
+    }
+
+    if (!ctx) return null;
+
+    try {
+      if (ctx.state === 'suspended') await ctx.resume();
+    } catch {
+      // ignore
+    }
+
+    return ctx.state === 'running' ? ctx : null;
+  };
+
+  const ensureWebAudio = async (): Promise<boolean> => {
+    if (!videoElement) return false;
+    if (webAudioGain && webAudioTarget === videoElement) return true;
+
+    if (webAudioTarget && webAudioTarget !== videoElement) resetWebAudio();
+
+    const ctx = await getWebAudioContext();
+    if (!ctx) return false;
+
+    try {
+      const source = ctx.createMediaElementSource(videoElement);
+      const gain = ctx.createGain();
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      webAudioSource = source;
+      webAudioGain = gain;
+      webAudioTarget = videoElement;
+      return true;
+    } catch {
+      resetWebAudio();
+      return false;
+    }
+  };
+
+  const applyAudioParams = () => {
+    if (!videoElement) return;
+    const vol = getEffectiveVolume();
+    const mute = muted || vol <= 0 || autoplayForcedMute;
+    const gain = mute ? 0 : vol;
+    videoElement.muted = mute;
+
+    if (webAudioGain && webAudioTarget === videoElement) {
+      webAudioGain.gain.value = gain;
+      videoElement.volume = 1;
+      return;
+    }
+
+    videoElement.volume = clamp(gain, 0, 1);
+    if (!mute && vol > 1) {
+      void ensureWebAudio().then((ok) => {
+        if (!ok) return;
+        applyAudioParams();
+      });
+    }
+  };
+
   $: if (videoElement && loaded) {
-    videoElement.volume = Math.max(0, Math.min(1, volume));
-    videoElement.muted = muted;
+    applyAudioParams();
   }
 
   function stopRaf() {
@@ -67,7 +195,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
       const endValue = hasEnd ? end! : null;
       const epsilon = 0.03;
 
-      if (reverse) {
+        if (reverse) {
         // Manual reverse stepping: keep video paused and move `currentTime` backwards.
         try {
           if (!videoElement.paused) videoElement.pause();
@@ -83,22 +211,22 @@ Purpose: Display video overlay (full-screen) for the Display app.
         }
 
         const next = videoElement.currentTime - dt;
-        if (next <= start + epsilon) {
-          if (loop && endValue !== null) {
-            videoElement.currentTime = endValue;
-          } else {
-            try {
-              videoElement.pause();
-            } catch {
-              // ignore
+          if (next <= start + epsilon) {
+            if (loop && endValue !== null) {
+              videoElement.currentTime = endValue;
+            } else {
+              try {
+                videoElement.pause();
+              } catch {
+                // ignore
+              }
+              visible = false;
+              handleFinish();
+              stopRaf();
             }
-            visible = false;
-            onEnded?.();
-            stopRaf();
+          } else {
+            videoElement.currentTime = next;
           }
-        } else {
-          videoElement.currentTime = next;
-        }
 
         return;
       }
@@ -114,7 +242,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
             // ignore
           }
           visible = false;
-          onEnded?.();
+          handleFinish();
           stopRaf();
         }
       } else if (videoElement.currentTime < start) {
@@ -133,11 +261,33 @@ Purpose: Display video overlay (full-screen) for the Display app.
     const key = `${nodeId}|${url}`;
     if (startedReportKey === key) return;
     startedReportKey = key;
+    finishReportKey = '';
     onStarted?.(nodeId);
   }
 
   function handlePlaying(): void {
     maybeReportStarted();
+  }
+
+  function reportFinishOnce(): void {
+    const nodeId = typeof sourceNodeId === 'string' ? sourceNodeId.trim() : '';
+    if (!nodeId) return;
+    const key = `${nodeId}|${url}`;
+    if (finishReportKey === key) return;
+    finishReportKey = key;
+    reportNodeMediaFinish(nodeId);
+  }
+
+  function handleFinish(): void {
+    reportFinishOnce();
+    onEnded?.();
+  }
+
+  function handleNativeEnded(): void {
+    if (loop) return;
+    visible = false;
+    stopRaf();
+    handleFinish();
   }
 
   export function stop() {
@@ -166,6 +316,8 @@ Purpose: Display video overlay (full-screen) for the Display app.
     durationSec = null;
     lastCursorApplied = null;
     startedReportKey = '';
+    finishReportKey = '';
+    autoplayForcedMute = false;
     visible = Boolean(playing);
     stopRaf();
   }
@@ -201,7 +353,17 @@ Purpose: Display video overlay (full-screen) for the Display app.
     if (playing && url) {
       visible = true;
       if (!reverse) {
-        videoElement.play().catch(() => undefined);
+        const attempt = videoElement.play();
+        if (attempt && typeof (attempt as any).catch === 'function') {
+          attempt.catch((err: any) => {
+            const name = typeof err?.name === 'string' ? err.name : '';
+            if (!autoplayForcedMute && (name === 'NotAllowedError' || name === 'SecurityError')) {
+              autoplayForcedMute = true;
+              applyAudioParams();
+              videoElement.play().catch(() => undefined);
+            }
+          });
+        }
       }
       startRaf();
       if (reverse) maybeReportStarted();
@@ -214,6 +376,8 @@ Purpose: Display video overlay (full-screen) for the Display app.
       visible = false;
       stopRaf();
       startedReportKey = '';
+      finishReportKey = '';
+      autoplayForcedMute = false;
     }
   }
 </script>
@@ -236,6 +400,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
       crossorigin="anonymous"
       playsinline
       on:playing={handlePlaying}
+      on:ended={handleNativeEnded}
       on:loadedmetadata={handleLoadedMetadata}
     />
   </div>

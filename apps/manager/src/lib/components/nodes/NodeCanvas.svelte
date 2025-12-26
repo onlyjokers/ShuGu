@@ -80,6 +80,9 @@
   let loopHeaderDragPointerId: number | null = null;
   let loopHeaderDragMoveHandler: ((event: PointerEvent) => void) | null = null;
   let loopHeaderDragUpHandler: ((event: PointerEvent) => void) | null = null;
+  let altDuplicateDragPointerId: number | null = null;
+  let altDuplicateDragMoveHandler: ((event: PointerEvent) => void) | null = null;
+  let altDuplicateDragUpHandler: ((event: PointerEvent) => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
@@ -521,14 +524,16 @@
 
   let deployedPatchByClientId = new Map<string, DeployedPatch>();
   let patchDeployTimer: ReturnType<typeof setTimeout> | null = null;
-  let patchLastTopologySignature: string | null = null;
-  let patchLastTargetsKey = '';
+  let patchLastPlanKey = '';
   let patchRuntimeTargetsLastCheckAt = 0;
   const PATCH_RUNTIME_TARGETS_CHECK_INTERVAL_MS = 200;
 
-  const getDeployedPatch = (): DeployedPatch | null => {
-    const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
-    return first ?? null;
+  const getDeployedPatchNodeIds = (): Set<string> => {
+    const out = new Set<string>();
+    for (const patch of deployedPatchByClientId.values()) {
+      for (const id of patch.nodeIds) out.add(id);
+    }
+    return out;
   };
 
   const applyStoppedHighlights = async (running: boolean) => {
@@ -969,6 +974,56 @@
     return JSON.stringify({ nodes, connections });
   };
 
+  const isBypassableWhenDisabled = (nodeId: string): boolean => {
+    const node = nodeEngine.getNode(String(nodeId));
+    if (!node) return false;
+
+    const def = nodeRegistry.get(String(node.type));
+    if (!def) return false;
+
+    const inputs = Array.isArray(def.inputs) ? def.inputs : [];
+    const outputs = Array.isArray(def.outputs) ? def.outputs : [];
+
+    const isSafeType = (type: any) => type !== 'command' && type !== 'client';
+
+    const inPort = inputs.find((p: any) => String(p?.id ?? '') === 'in') ?? null;
+    const outPort = outputs.find((p: any) => String(p?.id ?? '') === 'out') ?? null;
+    if (
+      inPort &&
+      outPort &&
+      String(inPort.type) === String(outPort.type) &&
+      isSafeType(inPort.type)
+    ) {
+      return true;
+    }
+
+    if (inputs.length === 1 && outputs.length === 1) {
+      const onlyIn: any = inputs[0];
+      const onlyOut: any = outputs[0];
+      if (
+        String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') &&
+        isSafeType(onlyIn?.type)
+      ) {
+        return true;
+      }
+    }
+
+    const sinkInputs = inputs.filter((p: any) => p?.kind === 'sink');
+    const sinkOutputs = outputs.filter((p: any) => p?.kind === 'sink');
+    if (sinkInputs.length === 1 && sinkOutputs.length === 1) {
+      const onlyIn: any = sinkInputs[0];
+      const onlyOut: any = sinkOutputs[0];
+      if (
+        String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') &&
+        isSafeType(onlyIn?.type)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
   const applyTimeRangePlayheadsToPatchPayload = (payload: any) => {
     const nodes = payload?.graph?.nodes;
     if (!Array.isArray(nodes) || nodes.length === 0) return;
@@ -985,13 +1040,22 @@
     }
   };
 
-  const resolvePatchTargetClientIds = (): string[] => {
+  type PatchRoot = { id: string; type: string };
+
+  type PatchDeploymentPlan = {
+    selectedRoots: PatchRoot[];
+    rootIdsByClientId: Map<string, string[]>;
+    targetClientIds: string[];
+    planKey: string;
+  };
+
+  const resolvePatchDeploymentPlan = (): PatchDeploymentPlan | null => {
     const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
     const roots = (graphState.nodes ?? [])
       .filter((n) => patchRootTypes.includes(String(n.type) as any))
       .map((n) => ({ id: String(n.id ?? ''), type: String(n.type ?? '') }))
       .filter((n) => Boolean(n.id));
-    if (roots.length === 0) return [];
+    if (roots.length === 0) return null;
 
     const connectedAll = new Set(clientIdsInOrder());
     const connectedAudience = new Set(audienceClientIdsInOrder());
@@ -1019,7 +1083,7 @@
       return null;
     })();
 
-    if (!selectedRoots) return [];
+    if (!selectedRoots) return null;
 
     const outgoingBySourceKey = new Map<string, (typeof connections)[number][]>();
     for (const c of connections) {
@@ -1188,22 +1252,43 @@
       return out;
     };
 
-    const targetsByRoot = selectedRoots.map((root) => ({
-      root,
-      targets: resolveTargetsForRoot(root.id),
-    }));
-
-    const stableKey = (targets: string[]) => Array.from(new Set(targets)).sort().join('|');
-    const keys = targetsByRoot.map((t) => stableKey(t.targets));
-
-    if (keys.length > 1) {
-      const first = keys[0];
-      if (keys.some((k) => k !== first)) {
-        nodeEngine.lastError.set(
-          `Multiple active patch roots have different targets (${formatRootList(selectedRoots)}). Ensure they route to the same client(s), or deploy only one root.`
-        );
-        return [];
+    const rootIdSetByClientId = new Map<string, Set<string>>();
+    for (const root of selectedRoots) {
+      const targets = resolveTargetsForRoot(root.id);
+      for (const targetId of targets) {
+        const set = rootIdSetByClientId.get(targetId) ?? new Set<string>();
+        set.add(root.id);
+        rootIdSetByClientId.set(targetId, set);
       }
+    }
+
+    if (rootIdSetByClientId.size === 0) return null;
+
+    const rootIdsByClientId = new Map<string, string[]>();
+    for (const [clientId, set] of rootIdSetByClientId.entries()) {
+      rootIdsByClientId.set(clientId, Array.from(set).sort());
+    }
+
+    const targetClientIds: string[] = [];
+    const seenTargets = new Set<string>();
+
+    if (rootIdsByClientId.has(LOCAL_DISPLAY_TARGET_ID)) {
+      targetClientIds.push(LOCAL_DISPLAY_TARGET_ID);
+      seenTargets.add(LOCAL_DISPLAY_TARGET_ID);
+    }
+
+    for (const id of clientIdsInOrder()) {
+      if (!rootIdsByClientId.has(id) || seenTargets.has(id)) continue;
+      seenTargets.add(id);
+      targetClientIds.push(id);
+    }
+
+    const leftovers = Array.from(rootIdsByClientId.keys())
+      .filter((id) => !seenTargets.has(id))
+      .sort();
+    for (const id of leftovers) {
+      seenTargets.add(id);
+      targetClientIds.push(id);
     }
 
     const prevError = get(nodeEngine.lastError);
@@ -1216,8 +1301,16 @@
       nodeEngine.lastError.set(null);
     }
 
-    return targetsByRoot[0]?.targets ?? [];
+    const planKey = Array.from(rootIdsByClientId.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([clientId, rootIds]) => `${clientId}=${rootIds.join(',')}`)
+      .join('|');
+
+    return { selectedRoots, rootIdsByClientId, targetClientIds, planKey };
   };
+
+  const resolvePatchTargetClientIds = (): string[] =>
+    resolvePatchDeploymentPlan()?.targetClientIds ?? [];
 
   const stopAndRemovePatchOnClient = (clientId: string, patchId: string) => {
     const id = String(clientId ?? '');
@@ -1232,8 +1325,7 @@
       stopAndRemovePatchOnClient(clientId, patch.patchId);
     }
     deployedPatchByClientId = new Map();
-    patchLastTopologySignature = null;
-    patchLastTargetsKey = '';
+    patchLastPlanKey = '';
     clearMidiBridgeState();
     syncPatchOffloadState(new Set());
     void applyPatchHighlights(new Set());
@@ -1248,17 +1340,10 @@
     const sdk = getSDK();
     if (!sdk) return;
 
-    let targets = resolvePatchTargetClientIds();
-    if (targets.length === 0) {
+    const plan = resolvePatchDeploymentPlan();
+    patchLastPlanKey = plan?.planKey ?? '';
+    if (!plan || plan.targetClientIds.length === 0) {
       if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
-      return;
-    }
-
-    let payload: any;
-    try {
-      payload = nodeEngine.exportGraphForPatch();
-    } catch (err) {
-      nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
       return;
     }
 
@@ -1267,100 +1352,142 @@
       'load-image-from-local',
       'load-video-from-local',
     ]);
-    const isLocalOnlyPatch = (payload?.graph?.nodes ?? []).some((n: any) =>
-      localOnlyNodeTypes.has(String(n?.type ?? ''))
-    );
+    const disabled = get(groupController.groupDisabledNodeIds);
+    const statusMap = get(executorStatusByClient);
 
-    if (isLocalOnlyPatch) {
-      const displayTargets = targets.filter((id) => isDisplayTarget(id));
-      if (displayTargets.length === 0) {
-        nodeEngine.lastError.set(
-          'Load * From Local(Display only) requires a Display target (connect Deploy to Display).'
-        );
+    const desiredByClientId = new Map<
+      string,
+      {
+        patchId: string;
+        nodeIds: Set<string>;
+        topologySignature: string;
+        payload: any;
+      }
+    >();
+    const desiredNodeIds = new Set<string>();
+
+    const groupsByRootKey = new Map<string, { rootIds: string[]; clientIds: string[] }>();
+    for (const [clientId, rootIds] of plan.rootIdsByClientId.entries()) {
+      const key = rootIds.join('|');
+      const group = groupsByRootKey.get(key) ?? { rootIds, clientIds: [] };
+      group.clientIds.push(String(clientId));
+      groupsByRootKey.set(key, group);
+    }
+
+    for (const group of groupsByRootKey.values()) {
+      let payload: any;
+      try {
+        payload = nodeEngine.exportGraphForPatchFromRootNodeIds(group.rootIds);
+      } catch (err) {
+        nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
+        return;
+      }
+
+      const isLocalOnlyPatch = (payload?.graph?.nodes ?? []).some((n: any) =>
+        localOnlyNodeTypes.has(String(n?.type ?? ''))
+      );
+
+      let targets = group.clientIds.slice();
+      if (isLocalOnlyPatch) {
+        const displayTargets = targets.filter((id) => isDisplayTarget(id));
+        if (displayTargets.length === 0) {
+          nodeEngine.lastError.set(
+            'Load * From Local(Display only) requires a Display target (connect Deploy to Display).'
+          );
+          stopAllDeployedPatches();
+          return;
+        }
+        targets = displayTargets;
+      }
+
+      if (targets.length === 0) continue;
+
+      const topologySignature = computeTopologySignature(payload.graph ?? {});
+      const patchId = String(payload?.meta?.loopId ?? '');
+      const nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
+
+      const hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
+      if (hasDisabledNodes) {
         stopAllDeployedPatches();
         return;
       }
-      targets = displayTargets;
+
+      applyTimeRangePlayheadsToPatchPayload(payload);
+
+      for (const nodeId of nodeIds) desiredNodeIds.add(nodeId);
+      for (const clientId of targets) {
+        desiredByClientId.set(String(clientId), { patchId, nodeIds, topologySignature, payload });
+      }
     }
 
-    const targetsKey = targets.join('|');
-
-    const topologySignature = computeTopologySignature(payload.graph ?? {});
-    const patchId = String(payload?.meta?.loopId ?? '');
-    const nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
-
-    const disabled = get(groupController.groupDisabledNodeIds);
-    const hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
-    if (hasDisabledNodes) {
-      stopAllDeployedPatches();
+    if (desiredByClientId.size === 0) {
+      if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
       return;
     }
 
-    let needRedeployAll =
-      patchLastTopologySignature !== topologySignature || patchLastTargetsKey !== targetsKey;
-
-    const statusMap = get(executorStatusByClient);
-    for (const clientId of targets) {
-      const deployed = deployedPatchByClientId.get(clientId) ?? null;
-      const status = statusMap.get(clientId) ?? null;
-      if (!deployed || deployed.patchId !== patchId) {
-        needRedeployAll = true;
-        break;
-      }
-      if (status?.loopId && status.loopId !== patchId) {
-        needRedeployAll = true;
-        break;
-      }
-    }
-
-    patchLastTopologySignature = topologySignature;
-    patchLastTargetsKey = targetsKey;
-
     // Stop/remove patches on clients that are no longer targeted.
     for (const [clientId, patch] of deployedPatchByClientId.entries()) {
-      if (targets.includes(clientId)) continue;
+      if (desiredByClientId.has(clientId)) continue;
       stopAndRemovePatchOnClient(clientId, patch.patchId);
       deployedPatchByClientId.delete(clientId);
     }
 
-    if (!needRedeployAll) {
-      // Best-effort: if the patch is targeted but was stopped on the client, restart it.
-      for (const clientId of targets) {
-        const status = statusMap.get(clientId) ?? null;
-        if (status?.loopId === patchId && status.running === false) {
-          sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
+    let didDeploy = false;
+    for (const [clientId, desired] of desiredByClientId.entries()) {
+      const deployed = deployedPatchByClientId.get(clientId) ?? null;
+      const status = statusMap.get(clientId) ?? null;
+
+      const needDeploy =
+        !deployed ||
+        deployed.patchId !== desired.patchId ||
+        deployed.topologySignature !== desired.topologySignature ||
+        (status?.loopId && status.loopId !== desired.patchId);
+
+      if (!needDeploy) {
+        // Best-effort: if the patch is targeted but was stopped on the client, restart it.
+        if (status?.loopId === desired.patchId && status.running === false) {
+          sendNodeExecutorPluginControl(String(clientId), 'start', {
+            loopId: desired.patchId,
+          } as any);
         }
+
+        // Keep nodeId membership up to date for per-node override routing.
+        deployedPatchByClientId.set(String(clientId), {
+          patchId: desired.patchId,
+          nodeIds: desired.nodeIds,
+          topologySignature: desired.topologySignature,
+          deployedAt: deployed?.deployedAt ?? Date.now(),
+        });
+        continue;
       }
 
-      // MIDI wiring is manager-only; keep bridge routes in sync even when the deploy graph is unchanged.
-      syncMidiBridgeRoutes(patchId, nodeIds);
-      syncPatchOffloadState(nodeIds);
-      void applyPatchHighlights(nodeIds);
-      return;
-    }
+      if (!didDeploy) {
+        // A deploy resets client overrides; ensure MIDI bridge resend starts fresh.
+        midiBridgeLastSignatureByClientKey = new Map();
+        midiBridgeActiveKeysByClientId = new Map();
+        didDeploy = true;
+      }
 
-    // A deploy resets client overrides; ensure MIDI bridge resend starts fresh.
-    midiBridgeLastSignatureByClientKey = new Map();
-    midiBridgeActiveKeysByClientId = new Map();
-
-    applyTimeRangePlayheadsToPatchPayload(payload);
-
-    for (const clientId of targets) {
-      sendNodeExecutorPluginControl(String(clientId), 'deploy', payload);
-      sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: patchId } as any);
+      sendNodeExecutorPluginControl(String(clientId), 'deploy', desired.payload);
+      sendNodeExecutorPluginControl(String(clientId), 'start', { loopId: desired.patchId } as any);
 
       deployedPatchByClientId.set(String(clientId), {
-        patchId,
-        nodeIds,
-        topologySignature,
+        patchId: desired.patchId,
+        nodeIds: desired.nodeIds,
+        topologySignature: desired.topologySignature,
         deployedAt: Date.now(),
       });
     }
 
-    syncPatchOffloadState(nodeIds);
-    void applyPatchHighlights(nodeIds);
-    syncMidiBridgeRoutes(patchId, nodeIds);
-    console.log('[patch] deployed', { reason, patchId, targets });
+    // MIDI wiring is manager-only; keep bridge routes in sync even when the deploy graph is unchanged.
+    const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
+    syncPatchOffloadState(desiredNodeIds);
+    void applyPatchHighlights(desiredNodeIds);
+    if (first) syncMidiBridgeRoutes(first.patchId, desiredNodeIds);
+    console.log('[patch] reconciled', {
+      reason,
+      targets: Array.from(desiredByClientId.keys()).sort(),
+    });
   };
 
   const schedulePatchReconcile = (reason: string) => {
@@ -2049,10 +2176,16 @@
   }
 
   // Clipboard helpers for node copy/paste.
-  const cloneNodeInstance = (node: NodeInstance): NodeInstance => ({
+  const cloneNodeInstance = (
+    node: NodeInstance,
+    positionOverride?: { x: number; y: number } | null
+  ): NodeInstance => ({
     id: String(node.id),
     type: node.type,
-    position: { x: Number(node.position?.x ?? 0), y: Number(node.position?.y ?? 0) },
+    position: {
+      x: Number(positionOverride?.x ?? node.position?.x ?? 0),
+      y: Number(positionOverride?.y ?? node.position?.y ?? 0),
+    },
     config: { ...(node.config ?? {}) },
     inputValues: { ...(node.inputValues ?? {}) },
     outputValues: { ...(node.outputValues ?? {}) },
@@ -2070,7 +2203,10 @@
 
     const nodeById = new Map(graphState.nodes.map((node) => [String(node.id), node]));
     const nodes = ids.map((id) => nodeById.get(id)).filter(Boolean) as NodeInstance[];
-    return { nodes: nodes.map((node) => cloneNodeInstance(node)), ids };
+    return {
+      nodes: nodes.map((node) => cloneNodeInstance(node, viewAdapter.getNodePosition(String(node.id)))),
+      ids,
+    };
   };
 
   const collectCopyConnections = (ids: string[]): EngineConnection[] => {
@@ -2378,6 +2514,7 @@
 
   const fileActions = createFileActions({
     nodeEngine,
+    getNodePosition: (nodeId) => viewAdapter.getNodePosition(String(nodeId)),
     getImportGraphInput: () => importGraphInputEl,
     getImportTemplatesInput: () => importTemplatesInputEl,
     getNodeGroups: () => get(groupController.nodeGroups),
@@ -2436,8 +2573,8 @@
       if (now - patchRuntimeTargetsLastCheckAt < PATCH_RUNTIME_TARGETS_CHECK_INTERVAL_MS) return;
       patchRuntimeTargetsLastCheckAt = now;
 
-      const targetsKey = resolvePatchTargetClientIds().join('|');
-      if (targetsKey !== patchLastTargetsKey) schedulePatchReconcile('runtime-target-change');
+      const planKey = resolvePatchDeploymentPlan()?.planKey ?? '';
+      if (planKey !== patchLastPlanKey) schedulePatchReconcile('runtime-target-change');
     });
 
     runningUnsub = isRunningStore.subscribe((running) => {
@@ -2458,10 +2595,16 @@
     });
 
     groupDisabledUnsub = groupController.groupDisabledNodeIds.subscribe((disabled) => {
-      const patch = getDeployedPatch();
-      if (patch) {
-        const hasDisabledNodes = Array.from(patch.nodeIds).some((id) => disabled.has(id));
-        if (hasDisabledNodes) stopAllDeployedPatches();
+      const nodeIds = getDeployedPatchNodeIds();
+      if (nodeIds.size > 0) {
+        const disabledInPatch = Array.from(nodeIds).filter((id) => disabled.has(id));
+        // Avoid hard-stopping patches when the disabled nodes can be bypassed on the next reconcile.
+        // This prevents audible restarts when toggling audio FX groups (e.g. Tone Delay).
+        const shouldStop =
+          disabledInPatch.length > 0 && !disabledInPatch.every((id) => isBypassableWhenDisabled(id));
+        if (shouldStop) {
+          stopAllDeployedPatches();
+        }
       }
       schedulePatchReconcile('group-gate');
     });
@@ -2561,14 +2704,9 @@
         void midiController.applyHighlights();
         void applyStoppedHighlights(get(isRunningStore));
 
-        const patch = getDeployedPatch();
-        if (patch) {
-          syncPatchOffloadState(patch.nodeIds);
-          void applyPatchHighlights(patch.nodeIds);
-        } else {
-          syncPatchOffloadState(new Set());
-          void applyPatchHighlights(new Set());
-        }
+        const nodeIds = getDeployedPatchNodeIds();
+        syncPatchOffloadState(nodeIds);
+        void applyPatchHighlights(nodeIds);
 
         if (pendingFocusNodeIds && pendingFocusNodeIds.length > 0) {
           const ids = pendingFocusNodeIds;
@@ -2596,7 +2734,7 @@
 
       // Keep MIDI bridge wiring responsive (MIDI nodes are excluded from deploy topology).
       const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
-      if (first) syncMidiBridgeRoutes(first.patchId, first.nodeIds);
+      if (first) syncMidiBridgeRoutes(first.patchId, getDeployedPatchNodeIds());
     });
 
     groupNodesUnsub = groupController.nodeGroups.subscribe(() => {
@@ -2782,6 +2920,145 @@
     contextMenuHandler = onContextMenu;
 
     const onPointerDown = (event: PointerEvent) => {
+      // New UX: Alt/Option + drag on a node duplicates it and drags the clone.
+      if (event.button === 0 && event.altKey && altDuplicateDragPointerId === null) {
+        const target = event.target as HTMLElement | null;
+        const nodeEl = (target?.closest?.('.node') as HTMLElement | null) ?? null;
+        const nodeId = String(nodeEl?.dataset?.reteNodeId ?? '');
+
+        const tag = target?.tagName?.toLowerCase?.() ?? '';
+        const isEditing =
+          tag === 'input' ||
+          tag === 'textarea' ||
+          tag === 'select' ||
+          tag === 'button' ||
+          Boolean((target as any)?.isContentEditable) ||
+          Boolean(target?.closest?.('input, textarea, select, button')) ||
+          Boolean(target?.closest?.('.port-control')) ||
+          Boolean(target?.closest?.('.cmd-aggregator-controls'));
+
+        if (nodeEl && nodeId && !isEditing) {
+          // Prevent the default Rete drag so the original node stays put.
+          event.preventDefault();
+          event.stopPropagation();
+
+          const initialNode = nodeEngine.getNode(nodeId);
+          if (!initialNode) return;
+
+          groupController.clearSelection();
+          setSelectedNode(nodeId);
+
+          const startClient = { x: event.clientX, y: event.clientY };
+          const startGraph = computeGraphPosition(event.clientX, event.clientY);
+          const startPos =
+            viewAdapter.getNodePosition(nodeId) ??
+            ({
+              x: Number(initialNode.position?.x ?? 0),
+              y: Number(initialNode.position?.y ?? 0),
+            } as const);
+
+          let didDuplicate = false;
+          let duplicatedId: string | null = null;
+          let dragOffset = { x: startGraph.x - startPos.x, y: startGraph.y - startPos.y };
+
+          const MIN_DRAG_PX = 4;
+
+          const cleanup = () => {
+            if (altDuplicateDragMoveHandler)
+              window.removeEventListener('pointermove', altDuplicateDragMoveHandler, {
+                capture: true,
+              } as any);
+            if (altDuplicateDragUpHandler) {
+              window.removeEventListener('pointerup', altDuplicateDragUpHandler, { capture: true } as any);
+              window.removeEventListener('pointercancel', altDuplicateDragUpHandler, {
+                capture: true,
+              } as any);
+            }
+            altDuplicateDragPointerId = null;
+            altDuplicateDragMoveHandler = null;
+            altDuplicateDragUpHandler = null;
+          };
+
+          const onMove = (moveEvent: PointerEvent) => {
+            if (altDuplicateDragPointerId === null) return;
+            if (moveEvent.pointerId !== altDuplicateDragPointerId) return;
+
+            const dx = moveEvent.clientX - startClient.x;
+            const dy = moveEvent.clientY - startClient.y;
+            const dist = Math.hypot(dx, dy);
+
+            if (!didDuplicate) {
+              if (dist < MIN_DRAG_PX) return;
+
+              const source = nodeEngine.getNode(nodeId);
+              if (!source) {
+                cleanup();
+                return;
+              }
+
+              const basePos =
+                viewAdapter.getNodePosition(nodeId) ??
+                ({
+                  x: Number(source.position?.x ?? 0),
+                  y: Number(source.position?.y ?? 0),
+                } as const);
+
+              const newId = generateId();
+              const clone: NodeInstance = {
+                id: newId,
+                type: String(source.type ?? ''),
+                position: { x: basePos.x, y: basePos.y },
+                config: { ...(source.config ?? {}) },
+                inputValues: { ...(source.inputValues ?? {}) },
+                outputValues: {},
+              };
+
+              nodeEngine.addNode(clone);
+
+              didDuplicate = true;
+              duplicatedId = newId;
+              dragOffset = { x: startGraph.x - basePos.x, y: startGraph.y - basePos.y };
+
+              groupController.clearSelection();
+              setSelectedNode(newId);
+            }
+
+            if (!duplicatedId) return;
+
+            const graphPos = computeGraphPosition(moveEvent.clientX, moveEvent.clientY);
+            const desiredX = graphPos.x - dragOffset.x;
+            const desiredY = graphPos.y - dragOffset.y;
+            viewAdapter.setNodePosition(duplicatedId, desiredX, desiredY);
+
+            moveEvent.preventDefault();
+            moveEvent.stopPropagation();
+          };
+
+          const onUp = (upEvent: PointerEvent) => {
+            if (altDuplicateDragPointerId === null) return;
+            if (upEvent.pointerId !== altDuplicateDragPointerId) return;
+
+            const finalId = duplicatedId;
+            cleanup();
+
+            if (finalId) {
+              const pos = viewAdapter.getNodePosition(finalId);
+              if (pos) nodeEngine.updateNodePosition(finalId, { x: pos.x, y: pos.y });
+              groupController.handleDroppedNodesAfterDrag([finalId]);
+            }
+          };
+
+          altDuplicateDragPointerId = event.pointerId;
+          altDuplicateDragMoveHandler = onMove;
+          altDuplicateDragUpHandler = onUp;
+          window.addEventListener('pointermove', onMove, { capture: true });
+          window.addEventListener('pointerup', onUp, { capture: true });
+          window.addEventListener('pointercancel', onUp, { capture: true });
+
+          return;
+        }
+      }
+
       groupController.onPointerDown(event);
     };
     container.addEventListener('pointerdown', onPointerDown, { capture: true });
@@ -2994,6 +3271,17 @@
         capture: true,
       } as any);
     }
+    if (altDuplicateDragMoveHandler)
+      window.removeEventListener('pointermove', altDuplicateDragMoveHandler, { capture: true } as any);
+    if (altDuplicateDragUpHandler) {
+      window.removeEventListener('pointerup', altDuplicateDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', altDuplicateDragUpHandler, {
+        capture: true,
+      } as any);
+    }
+    altDuplicateDragPointerId = null;
+    altDuplicateDragMoveHandler = null;
+    altDuplicateDragUpHandler = null;
     if (loopHeaderDragPointerId !== null) groupController.endProgrammaticTranslate();
     loopHeaderDragPointerId = null;
     loopHeaderDragMoveHandler = null;

@@ -18,6 +18,7 @@
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
   import PermissionWarning from '$lib/components/PermissionWarning.svelte';
   import GeoGateOverlay from '$lib/components/GeoGateOverlay.svelte';
+  import { toneAudioEngine } from '@shugu/multimedia-core';
 
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
@@ -138,6 +139,8 @@
     window.addEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
     // Try immediately (may be ignored without gesture but cheap to attempt)
     tryFullscreen('auto');
+    // Preload Tone.js early so `toneAudioEngine.start()` can run inside a user gesture later.
+    void toneAudioEngine.ensureLoaded().catch(() => undefined);
 
     // Get server URL from query params or localStorage
     const params = new URLSearchParams(window.location.search);

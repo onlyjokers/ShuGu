@@ -125,6 +125,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     'MIDI',
     'Values',
     'Generators',
+    'Gate',
     'Logic',
     'Parameters',
     'Processors',

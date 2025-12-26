@@ -140,7 +140,7 @@ export class MediaEngine {
         playing,
         muted: Boolean(payload.muted ?? true),
         loop: Boolean(payload.loop ?? false),
-        volume: Math.max(0, Math.min(1, Number(payload.volume ?? 1) || 0)),
+        volume: Math.max(0, Math.min(100, Number(payload.volume ?? 1) || 0)),
         startSec,
         endSec,
         cursorSec,

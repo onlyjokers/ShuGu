@@ -1061,11 +1061,12 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [
       { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-      { id: 'ended', label: 'Ended', type: 'boolean' },
+      { id: 'ended', label: 'Finish', type: 'boolean' },
     ],
     configSchema: [
       {
@@ -1077,6 +1078,7 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
@@ -1147,11 +1149,12 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
     outputs: [
       { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
-      { id: 'ended', label: 'Ended', type: 'boolean' },
+      { id: 'ended', label: 'Finish', type: 'boolean' },
     ],
     configSchema: [
       {
@@ -1207,6 +1210,19 @@ if (!nodeRegistry.get('load-video-from-assets')) {
       const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
       const mutedRaw = (inputs as any)?.muted;
       const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+      const volumeRaw = (inputs as any)?.volume;
+      const volumeParam = typeof volumeRaw === 'string' ? Number(volumeRaw) : Number(volumeRaw);
+      const volumeValue = Number.isFinite(volumeParam) ? Math.max(-1, Math.min(100, volumeParam)) : 0;
+      const volumeGain =
+        volumeValue <= -1
+          ? 0
+          : volumeValue < 0
+            ? 1 + volumeValue
+            : volumeValue <= 2
+              ? 1 + volumeValue / 2
+              : volumeValue;
+      const volumeRounded = Math.round(volumeGain * 100) / 100;
+      const mutedEffective = muted || volumeRounded <= 0;
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
@@ -1219,7 +1235,7 @@ if (!nodeRegistry.get('load-video-from-assets')) {
 
       return {
         ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${fitParam}`
+          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeRounded}&muted=${mutedEffective ? 1 : 0}${positionParam}${fitParam}`
           : '',
         ended: false,
       };
@@ -1289,11 +1305,12 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [
       { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-      { id: 'ended', label: 'Ended', type: 'boolean' },
+      { id: 'ended', label: 'Finish', type: 'boolean' },
     ],
     configSchema: [
       {
@@ -1305,6 +1322,7 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
+      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
@@ -1392,11 +1410,12 @@ if (!nodeRegistry.get('load-video-from-local')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
+      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
     outputs: [
       { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
-      { id: 'ended', label: 'Ended', type: 'boolean' },
+      { id: 'ended', label: 'Finish', type: 'boolean' },
     ],
     configSchema: [
       {
@@ -1459,6 +1478,19 @@ if (!nodeRegistry.get('load-video-from-local')) {
       const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
       const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
       const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
+      const volumeRaw = (inputs as any)?.volume;
+      const volumeParam = typeof volumeRaw === 'string' ? Number(volumeRaw) : Number(volumeRaw);
+      const volumeValue = Number.isFinite(volumeParam) ? Math.max(-1, Math.min(100, volumeParam)) : 0;
+      const volumeGain =
+        volumeValue <= -1
+          ? 0
+          : volumeValue < 0
+            ? 1 + volumeValue
+            : volumeValue <= 2
+              ? 1 + volumeValue / 2
+              : volumeValue;
+      const volumeRounded = Math.round(volumeGain * 100) / 100;
+      const mutedEffective = muted || volumeRounded <= 0;
 
       const startClamped = Math.max(0, startSec);
       const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
@@ -1478,7 +1510,7 @@ if (!nodeRegistry.get('load-video-from-local')) {
 
       return {
         ref: baseUrl
-          ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&muted=${muted ? 1 : 0}${positionParam}${nodeParam}${fitParam}`
+          ? `${baseUrl}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeRounded}&muted=${mutedEffective ? 1 : 0}${positionParam}${nodeParam}${fitParam}`
           : '',
         ended: false,
       };

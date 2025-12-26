@@ -17,6 +17,8 @@ export interface TimeSyncState {
     offset: number;
     /** Array of recent offset samples for averaging */
     samples: number[];
+    /** Optional RTT sample history aligned with `samples` (same indexing). */
+    rttSamples?: number[];
     /** Maximum number of samples to keep */
     maxSamples: number;
     /** Is sync initialized */
@@ -52,6 +54,7 @@ export function createTimeSyncState(maxSamples: number = 10): TimeSyncState {
     return {
         offset: 0,
         samples: [],
+        rttSamples: [],
         maxSamples,
         initialized: false,
         lastSyncTime: 0,
@@ -60,19 +63,67 @@ export function createTimeSyncState(maxSamples: number = 10): TimeSyncState {
 
 /**
  * Update time sync state with new sample
- * Uses median filtering to be robust against outliers
+ * Uses RTT-aware median filtering to reduce bias from asymmetric network delay.
  */
 export function updateTimeSyncState(state: TimeSyncState, result: TimeSyncResult): TimeSyncState {
-    const newSamples = [...state.samples, result.offset].slice(-state.maxSamples);
+    const maxSamples = Math.max(1, state.maxSamples);
+    const newSamples = [...state.samples, result.offset].slice(-maxSamples);
 
-    // Use median for robustness against outliers
-    const sortedSamples = [...newSamples].sort((a, b) => a - b);
-    const median = sortedSamples[Math.floor(sortedSamples.length / 2)];
+    const prevRtts = Array.isArray(state.rttSamples) ? state.rttSamples : [];
+    const combinedRtts = [...prevRtts, result.rtt];
+    const trimmedRtts = combinedRtts.slice(-newSamples.length);
+    const newRttSamples =
+        trimmedRtts.length === newSamples.length
+            ? trimmedRtts
+            : [
+                ...Array(Math.max(0, newSamples.length - trimmedRtts.length)).fill(Number.POSITIVE_INFINITY),
+                ...trimmedRtts,
+            ];
+
+    const median = (values: number[]): number => {
+        if (values.length === 0) return 0;
+        const sorted = [...values].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        if (sorted.length % 2 === 0) {
+            return (sorted[mid - 1] + sorted[mid]) / 2;
+        }
+        return sorted[mid];
+    };
+
+    // If we have enough RTT history, prefer the offsets from the lowest-RTT samples.
+    // This follows the intuition behind NTP: smaller delay is more likely to be symmetric and accurate.
+    const MIN_RTT_SAMPLES = 3;
+    const pairs: Array<{ offset: number; rtt: number }> = [];
+    for (let i = 0; i < newSamples.length; i++) {
+        const rtt = newRttSamples[i];
+        if (!Number.isFinite(rtt) || rtt < 0) continue;
+        pairs.push({ offset: newSamples[i], rtt });
+    }
+
+    const estimateOffset = (): number => {
+        if (pairs.length < MIN_RTT_SAMPLES) {
+            return median(newSamples);
+        }
+
+        const sortedByRtt = [...pairs].sort((a, b) => a.rtt - b.rtt);
+        const bestCount = Math.min(sortedByRtt.length, Math.max(3, Math.ceil(sortedByRtt.length * 0.25)));
+        const bestOffsets = sortedByRtt.slice(0, bestCount).map((p) => p.offset);
+        return median(bestOffsets);
+    };
+
+    const targetOffset = estimateOffset();
+    const MAX_OFFSET_STEP_MS = 100;
+    const nextOffset =
+        state.initialized && Number.isFinite(state.offset)
+            ? state.offset +
+            Math.max(-MAX_OFFSET_STEP_MS, Math.min(MAX_OFFSET_STEP_MS, targetOffset - state.offset))
+            : targetOffset;
 
     return {
         ...state,
-        offset: median,
+        offset: nextOffset,
         samples: newSamples,
+        rttSamples: newRttSamples,
         initialized: true,
         lastSyncTime: Date.now(),
     };

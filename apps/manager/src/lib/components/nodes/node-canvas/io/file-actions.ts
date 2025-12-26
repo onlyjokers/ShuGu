@@ -17,6 +17,7 @@ type FileActionsOptions = {
     addConnection: (connection: Connection) => boolean;
     updateNodeConfig: (nodeId: string, config: Record<string, unknown>) => void;
   };
+  getNodePosition?: (nodeId: string) => { x: number; y: number } | null;
   getImportGraphInput: () => HTMLInputElement | null;
   getImportTemplatesInput: () => HTMLInputElement | null;
   getNodeGroups: () => NodeGroup[];
@@ -185,7 +186,13 @@ export function createFileActions(opts: FileActionsOptions) {
   const exportGraph = () => {
     const raw = opts.nodeEngine.exportGraph();
     const graph: GraphState = {
-      nodes: (raw.nodes ?? []).map((n) => ({ ...n, outputValues: {} })),
+      nodes: (raw.nodes ?? []).map((n) => {
+        const nodeId = String((n as any)?.id ?? '');
+        const viewPos = nodeId ? opts.getNodePosition?.(nodeId) : null;
+        const x = coerceGraphNumber(viewPos?.x, coerceGraphNumber((n as any)?.position?.x, 0));
+        const y = coerceGraphNumber(viewPos?.y, coerceGraphNumber((n as any)?.position?.y, 0));
+        return { ...n, position: { x, y }, outputValues: {} };
+      }),
       connections: (raw.connections ?? []).map((c) => ({ ...c })),
     };
     const groups = (opts.getNodeGroups?.() ?? []).map((g) => ({
