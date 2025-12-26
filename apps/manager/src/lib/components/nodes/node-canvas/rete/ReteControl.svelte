@@ -2,13 +2,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { ClassicPreset } from 'rete';
-  import {
-    audienceClients,
-    clientReadiness,
-    nodeMediaSignals,
-    sensorData,
-    state as managerState,
-  } from '$lib/stores/manager';
+	  import {
+	    audienceClients,
+	    clientReadiness,
+	    nodeMediaSignals,
+	    sensorData,
+	  } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
   import { localMediaStore, type LocalMediaKind } from '$lib/stores/local-media';
   import { nodeEngine } from '$lib/nodes';
@@ -234,21 +233,89 @@
     }
   }
 
-  function readinessClass(clientId: string): string {
-    const info = $clientReadiness.get(clientId);
-    if (!info) return 'connected';
-    if (info.status === 'assets-ready') return 'ready';
-    if (info.status === 'assets-error') return 'error';
-    if (info.status === 'assets-loading') return 'loading';
-    return 'connected';
-  }
+	  function readinessClass(clientId: string): string {
+	    const info = $clientReadiness.get(clientId);
+	    if (!info) return 'connected';
+	    if (info.status === 'assets-ready') return 'ready';
+	    if (info.status === 'assets-error') return 'error';
+	    if (info.status === 'assets-loading') return 'loading';
+	    return 'connected';
+	  }
 
-  $: hasLabel = Boolean(data?.label) && !isInline;
-  $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
+	  $: hasLabel = Boolean(data?.label) && !isInline;
+	  $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
 
-  $: selectedClientIds = ($managerState.selectedClientIds ?? []).map(String);
-  $: primarySelectedClientId = selectedClientIds[0] ?? '';
-  $: selectedClientIdSet = new Set(selectedClientIds);
+	  const clampInt = (value: number, min: number, max: number) => {
+	    const next = Math.floor(value);
+	    return Math.max(min, Math.min(max, next));
+	  };
+
+	  const toFiniteNumber = (value: unknown, fallback: number): number => {
+	    const n = typeof value === 'number' ? value : Number(value);
+	    return Number.isFinite(n) ? n : fallback;
+	  };
+
+	  const coerceBoolean = (value: unknown, fallback = false): boolean => {
+	    if (typeof value === 'boolean') return value;
+	    if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+	    return fallback;
+	  };
+
+	  const hashStringDjb2 = (value: string): number => {
+	    let hash = 5381;
+	    for (let i = 0; i < value.length; i += 1) {
+	      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+	    }
+	    return hash >>> 0;
+	  };
+
+	  const buildStableRandomOrder = (nodeId: string, clients: string[]) => {
+	    const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
+	    keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
+	    return keyed.map((k) => k.id);
+	  };
+
+	  $: clientPickerSelectedIds = (() => {
+	    if (data?.controlType !== 'client-picker') return [];
+	    const _tick = $tickTimeStore;
+	    void _tick;
+
+	    const nodeId = String(data?.nodeId ?? '');
+	    if (!nodeId) return [];
+
+	    const clients = ($audienceClients ?? [])
+	      .map((c: any) => String(c?.clientId ?? ''))
+	      .filter(Boolean);
+	    if (clients.length === 0) return [];
+
+	    const node = nodeEngine.getNode(nodeId);
+	    if (!node) return [];
+	    const computed = nodeEngine.getLastComputedInputs(nodeId);
+	    const getComputedOrStoredInput = (portId: string): unknown => {
+	      if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+	        return (computed as any)[portId];
+	      }
+	      return (node.inputValues as any)?.[portId];
+	    };
+
+	    const total = clients.length;
+	    const indexRaw = toFiniteNumber(getComputedOrStoredInput('index'), 1);
+	    const rangeRaw = toFiniteNumber(getComputedOrStoredInput('range'), 1);
+	    const random = coerceBoolean(getComputedOrStoredInput('random'), false);
+
+	    const index = clampInt(indexRaw, 1, total);
+	    const range = clampInt(rangeRaw, 1, total);
+	    const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
+
+	    const ids: string[] = [];
+	    const start = index - 1;
+	    for (let i = 0; i < range; i += 1) {
+	      ids.push(ordered[(start + i) % total]);
+	    }
+	    return ids;
+	  })();
+	  $: clientPickerPrimaryClientId = clientPickerSelectedIds[0] ?? '';
+	  $: clientPickerSelectedIdSet = new Set(clientPickerSelectedIds);
 
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '0.00';
@@ -1142,11 +1209,11 @@
         {#each $audienceClients as c (c.clientId)}
           <button
             type="button"
-            class="client-item {c.clientId === primarySelectedClientId
-              ? 'selected'
-              : selectedClientIdSet.has(c.clientId)
-                ? 'in-range'
-                : ''}"
+	            class="client-item {c.clientId === clientPickerPrimaryClientId
+	              ? 'selected'
+	              : clientPickerSelectedIdSet.has(c.clientId)
+	                ? 'in-range'
+	                : ''}"
             disabled={data.readonly}
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}

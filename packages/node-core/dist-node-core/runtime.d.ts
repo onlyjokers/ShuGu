@@ -57,6 +57,13 @@ export declare class NodeRuntime {
     setTickIntervalMs(ms: number): void;
     loadGraph(state: Pick<GraphState, 'nodes' | 'connections'>): void;
     getNode(nodeId: string): NodeInstance | undefined;
+    /**
+     * Returns the latest computed non-sink input values for a node.
+     *
+     * Note: connected (non-sink) inputs are not stored in `node.inputValues`, so UIs that need
+     * to reflect live connected inputs should use this accessor.
+     */
+    getLastComputedInputs(nodeId: string): Record<string, unknown> | null;
     getGraphRef(): GraphState;
     exportGraph(): GraphState;
     compileNow(): void;

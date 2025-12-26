@@ -18,10 +18,11 @@
   export let onFocus: (groupId: string) => void = () => undefined;
 
   const sizeForDepth = (d: number) => {
-    // Keep them "small squares" but still able to nest a few levels.
-    const base = 24;
-    const step = 6;
-    return Math.max(12, base - step * Math.max(0, d));
+    // Keep them "small squares" but ensure children are visibly nested inside parents.
+    // (Previously child size matched the parent's inner box, making sub-groups look "missing".)
+    if (d <= 0) return 40;
+    if (d === 1) return 16;
+    return 10;
   };
 
   $: size = sizeForDepth(depth);
@@ -95,12 +96,11 @@
 
   .group-index-children {
     position: absolute;
-    inset: 3px;
+    inset: 2px;
     display: flex;
     flex-wrap: wrap;
     align-content: flex-start;
     justify-content: flex-start;
-    gap: 3px;
+    gap: 2px;
   }
 </style>
-

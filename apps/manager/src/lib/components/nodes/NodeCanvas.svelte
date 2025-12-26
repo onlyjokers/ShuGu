@@ -24,7 +24,7 @@
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { getSDK, selectClients, sensorData, state as managerState } from '$lib/stores/manager';
+  import { getSDK, sensorData, state as managerState } from '$lib/stores/manager';
   import {
     displayBridgeState,
     sendPlugin as sendLocalDisplayPlugin,
@@ -216,7 +216,8 @@
     isSyncingGraph: () => isSyncingRef.value,
   });
 
-  const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+  const clampNumber = (value: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, value));
 
   const mergeBounds = (
     base: { left: number; top: number; right: number; bottom: number } | null,
@@ -234,43 +235,11 @@
 
   let pendingFocusNodeIds: string[] | null = null;
 
-  const focusNodeIds = (nodeIdsRaw: string[], opts: { force?: boolean } = {}) => {
+  const focusBounds = (
+    bounds: { left: number; top: number; right: number; bottom: number } | null,
+    opts: { force?: boolean } = {}
+  ) => {
     if (!container) return;
-
-    const nodeById = new Map((graphState.nodes ?? []).map((n) => [String(n.id), n]));
-    const typeByNodeId = new Map((graphState.nodes ?? []).map((n) => [String(n.id), String(n.type ?? '')]));
-
-    const ids = (nodeIdsRaw ?? []).map((id) => String(id)).filter(Boolean);
-    const nodeIds = ids.filter((id) => {
-      const type = typeByNodeId.get(id) ?? '';
-      return Boolean(type) && type !== GROUP_ACTIVATE_NODE_TYPE;
-    });
-    if (nodeIds.length === 0) return;
-
-    const getNodeBoundsApprox = (nodeId: string) => {
-      const node = nodeById.get(String(nodeId));
-      const pos = node?.position as any;
-      const x = Number(pos?.x ?? 0);
-      const y = Number(pos?.y ?? 0);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-      const w = 230;
-      const h = 100;
-      return { left: x, top: y, right: x + w, bottom: y + h };
-    };
-
-    let bounds: { left: number; top: number; right: number; bottom: number } | null = null;
-    for (const id of nodeIds) {
-      const raw = viewAdapter.getNodeBounds(id);
-      const usable = (() => {
-        if (!raw) return null;
-        const bw = raw.right - raw.left;
-        const bh = raw.bottom - raw.top;
-        if (!Number.isFinite(bw) || !Number.isFinite(bh)) return null;
-        if (bw < 40 || bh < 30) return null;
-        return raw;
-      })();
-      bounds = mergeBounds(bounds, usable ?? getNodeBoundsApprox(id));
-    }
     if (!bounds) return;
 
     const w = bounds.right - bounds.left;
@@ -283,8 +252,8 @@
       const tx = Number(t?.tx ?? 0) || 0;
       const ty = Number(t?.ty ?? 0) || 0;
 
-      const visibleLeft = (-tx) / k;
-      const visibleTop = (-ty) / k;
+      const visibleLeft = -tx / k;
+      const visibleTop = -ty / k;
       const visibleRight = (container.clientWidth - tx) / k;
       const visibleBottom = (container.clientHeight - ty) / k;
 
@@ -318,6 +287,48 @@
     requestFramesUpdate();
   };
 
+  const focusNodeIds = (nodeIdsRaw: string[], opts: { force?: boolean } = {}) => {
+    if (!container) return;
+
+    const nodeById = new Map((graphState.nodes ?? []).map((n) => [String(n.id), n]));
+    const typeByNodeId = new Map(
+      (graphState.nodes ?? []).map((n) => [String(n.id), String(n.type ?? '')])
+    );
+
+    const ids = (nodeIdsRaw ?? []).map((id) => String(id)).filter(Boolean);
+    const nodeIds = ids.filter((id) => {
+      const type = typeByNodeId.get(id) ?? '';
+      return Boolean(type) && type !== GROUP_ACTIVATE_NODE_TYPE;
+    });
+    if (nodeIds.length === 0) return;
+
+    const getNodeBoundsApprox = (nodeId: string) => {
+      const node = nodeById.get(String(nodeId));
+      const pos = node?.position as any;
+      const x = Number(pos?.x ?? 0);
+      const y = Number(pos?.y ?? 0);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const w = 230;
+      const h = 100;
+      return { left: x, top: y, right: x + w, bottom: y + h };
+    };
+
+    let bounds: { left: number; top: number; right: number; bottom: number } | null = null;
+    for (const id of nodeIds) {
+      const raw = viewAdapter.getNodeBounds(id);
+      const usable = (() => {
+        if (!raw) return null;
+        const bw = raw.right - raw.left;
+        const bh = raw.bottom - raw.top;
+        if (!Number.isFinite(bw) || !Number.isFinite(bh)) return null;
+        if (bw < 40 || bh < 30) return null;
+        return raw;
+      })();
+      bounds = mergeBounds(bounds, usable ?? getNodeBoundsApprox(id));
+    }
+    focusBounds(bounds, opts);
+  };
+
   const focusGroupById = (groupId: string) => {
     const targetId = String(groupId ?? '');
     if (!targetId) return;
@@ -349,6 +360,50 @@
       for (const childId of childrenByParentId.get(id) ?? []) stack.push(childId);
     }
 
+    // Prefer frame-based focus (accounts for group padding + child groups), then include Group Activate port nodes.
+    let bounds: { left: number; top: number; right: number; bottom: number } | null = null;
+    const frames = get(groupFrames) as any[];
+    if (Array.isArray(frames) && frames.length > 0) {
+      const frame = frames.find((f) => String(f?.group?.id ?? '') === targetId) ?? null;
+      const left = Number(frame?.left);
+      const top = Number(frame?.top);
+      const width = Number(frame?.width);
+      const height = Number(frame?.height);
+      if (
+        Number.isFinite(left) &&
+        Number.isFinite(top) &&
+        Number.isFinite(width) &&
+        Number.isFinite(height)
+      ) {
+        bounds = { left, top, right: left + width, bottom: top + height };
+      }
+    }
+
+    if (groupIds.size > 0) {
+      const state = nodeEngine.exportGraph();
+      const index = buildGroupPortIndex(state);
+      const nodeById = new Map((state.nodes ?? []).map((n) => [String(n.id), n]));
+
+      const getPortBoundsApprox = (nodeId: string) => {
+        const node = nodeById.get(String(nodeId));
+        const x = Number((node as any)?.position?.x ?? 0);
+        const y = Number((node as any)?.position?.y ?? 0);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const w = 80;
+        const h = 44;
+        return { left: x, top: y, right: x + w, bottom: y + h };
+      };
+
+      for (const gid of groupIds) {
+        const portId = index.get(String(gid))?.activateId;
+        if (!portId) continue;
+        bounds = mergeBounds(
+          bounds,
+          viewAdapter.getNodeBounds(String(portId)) ?? getPortBoundsApprox(portId)
+        );
+      }
+    }
+
     const nodeIdsSet = new Set<string>();
     for (const gid of groupIds) {
       const g = byId.get(gid);
@@ -356,6 +411,11 @@
         const id = String(nid);
         if (id) nodeIdsSet.add(id);
       }
+    }
+
+    if (bounds) {
+      focusBounds(bounds, { force: true });
+      return;
     }
 
     focusNodeIds(Array.from(nodeIdsSet), { force: true });
@@ -371,12 +431,14 @@
   const OVERRIDE_TTL_MS = 1500;
 
   // ===== Client Node Selection Binding =====
-  const selectionEqual = (a: string[], b: string[]) =>
-    a.length === b.length && a.every((id, idx) => id === b[idx]);
-
   const clampInt = (value: number, min: number, max: number) => {
     const next = Math.floor(value);
     return Math.max(min, Math.min(max, next));
+  };
+
+  const toFiniteNumber = (value: unknown, fallback: number): number => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
   };
 
   const coerceBoolean = (value: unknown, fallback = false): boolean => {
@@ -401,6 +463,12 @@
 
   const clientIdsInOrder = () =>
     (get(managerState).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean);
+
+  const audienceClientIdsInOrder = () =>
+    (get(managerState).clients ?? [])
+      .filter((c: any) => String(c?.group ?? '') !== 'display')
+      .map((c: any) => String(c?.clientId ?? ''))
+      .filter(Boolean);
 
   let patchPendingCommitByKey = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -925,7 +993,8 @@
       .filter((n) => Boolean(n.id));
     if (roots.length === 0) return [];
 
-    const connected = new Set(clientIdsInOrder());
+    const connectedAll = new Set(clientIdsInOrder());
+    const connectedAudience = new Set(audienceClientIdsInOrder());
 
     const connections = graphState.connections ?? [];
 
@@ -941,31 +1010,16 @@
         .sort()
         .join(', ');
 
-    const root = (() => {
-      if (roots.length === 1) return roots[0]!;
-      if (activeRoots.length === 1) return activeRoots[0]!;
-      if (activeRoots.length > 1) {
-        nodeEngine.lastError.set(
-          `Multiple active patch roots found (${formatRootList(activeRoots)}). Disconnect Deploy on all but one root.`
-        );
-        return null;
-      }
+    const selectedRoots = (() => {
+      if (roots.length === 1) return roots;
+      if (activeRoots.length >= 1) return activeRoots;
       nodeEngine.lastError.set(
-        `Multiple patch roots found (${formatRootList(roots)}). Connect Deploy on exactly one root (or delete the others).`
+        `Multiple patch roots found (${formatRootList(roots)}). Connect Deploy on one or more roots (or delete the others).`
       );
       return null;
     })();
 
-    if (!root) return [];
-    const prevError = get(nodeEngine.lastError);
-    if (
-      typeof prevError === 'string' &&
-      (prevError.startsWith('Multiple patch roots found') ||
-        prevError.startsWith('Multiple active patch roots found'))
-    ) {
-      nodeEngine.lastError.set(null);
-    }
-    const rootId = root.id;
+    if (!selectedRoots) return [];
 
     const outgoingBySourceKey = new Map<string, (typeof connections)[number][]>();
     for (const c of connections) {
@@ -994,55 +1048,10 @@
       return Boolean(port) && String(port?.type) === 'command';
     };
 
-    // Patch target routing (Max/MSP style):
-    // - Direct: `<patch-root>(cmd) -> client-object(in)`.
-    // - Indirect (supported): `<patch-root>(cmd) -> cmd-aggregator(...) -> client-object(in)`.
-    // We follow the command-type subgraph starting from `<patch-root>(cmd)` to find target objects.
-    const routedClientNodeIds: string[] = [];
-    const routedClientNodeIdSet = new Set<string>();
-    let hasDisplayTarget = false;
-
-    const queue: { nodeId: string; portId: string }[] = [{ nodeId: rootId, portId: 'cmd' }];
-    const visited = new Set<string>();
-
-    while (queue.length > 0) {
-      const next = queue.shift()!;
-      const visitKey = `${next.nodeId}:${next.portId}`;
-      if (visited.has(visitKey)) continue;
-      visited.add(visitKey);
-
-      const outgoing = outgoingBySourceKey.get(visitKey) ?? [];
-      for (const c of outgoing) {
-        const targetNodeId = String((c as any)?.targetNodeId ?? '');
-        if (!targetNodeId) continue;
-        const targetPortId = String((c as any)?.targetPortId ?? '');
-
-        const targetType = typeById.get(targetNodeId) ?? '';
-        if (!targetType) continue;
-        if (!isCommandInputPort(targetType, targetPortId)) continue;
-
-        if (targetType === 'display-object') {
-          hasDisplayTarget = true;
-          continue;
-        }
-
-        if (targetType === 'client-object') {
-          if (!routedClientNodeIdSet.has(targetNodeId)) {
-            routedClientNodeIdSet.add(targetNodeId);
-            routedClientNodeIds.push(targetNodeId);
-          }
-          continue;
-        }
-
-        // Continue walking through any node that can output commands.
-        for (const outPortId of getCommandOutputPorts(targetType)) {
-          queue.push({ nodeId: targetNodeId, portId: outPortId });
-        }
-      }
-    }
-
-    const out: string[] = [];
-    const seen = new Set<string>();
+    const toFiniteNumber = (value: unknown, fallback: number): number => {
+      const n = typeof value === 'number' ? value : Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
 
     const resolveClientId = (nodeId: string, outputPortId: string) => {
       const runtimeNode = nodeEngine.getNode(nodeId);
@@ -1056,33 +1065,158 @@
       return fromOut || fromConfig;
     };
 
-    for (const nodeId of routedClientNodeIds) {
-      const id = resolveClientId(nodeId, 'out');
-      if (!id || !connected.has(id) || seen.has(id)) continue;
-      seen.add(id);
-      out.push(id);
-    }
+    // Patch deployment treats `client-object` as a selection (index/range/random), so expand it to all target ids.
+    const resolveClientNodeTargets = (nodeId: string): string[] => {
+      const runtimeNode = nodeEngine.getNode(nodeId);
+      if (!runtimeNode) return [];
+      const computed = nodeEngine.getLastComputedInputs(nodeId);
+      const getComputedOrStoredInput = (portId: string): unknown => {
+        if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+          return (computed as any)[portId];
+        }
+        return (runtimeNode.inputValues as any)?.[portId];
+      };
 
-    if (hasDisplayTarget) {
-      const bridge = get(displayBridgeState);
-      if (bridge.status === 'connected' && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
-        seen.add(LOCAL_DISPLAY_TARGET_ID);
-        out.push(LOCAL_DISPLAY_TARGET_ID);
+      const clients = audienceClientIdsInOrder();
+      const total = clients.length;
+      if (total === 0) return [];
+
+      const randomRaw = getComputedOrStoredInput('random');
+      const random = coerceBoolean(randomRaw, false);
+      const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
+
+      const primaryId = resolveClientId(nodeId, 'out');
+      const indexRaw = getComputedOrStoredInput('index');
+      const indexCandidate = toFiniteNumber(indexRaw, Number.NaN);
+      const indexFromInput = Number.isFinite(indexCandidate)
+        ? clampInt(indexCandidate, 1, total)
+        : null;
+      const indexFromPrimary = primaryId ? ordered.indexOf(primaryId) + 1 : 0;
+      const index = indexFromInput ?? (indexFromPrimary > 0 ? indexFromPrimary : 1);
+
+      const rangeRaw = getComputedOrStoredInput('range');
+      const rangeCandidate = toFiniteNumber(rangeRaw, 1);
+      const range = clampInt(rangeCandidate, 1, total);
+
+      const ids: string[] = [];
+      const start = index - 1;
+      for (let i = 0; i < range; i += 1) {
+        ids.push(ordered[(start + i) % total]);
+      }
+      return ids;
+    };
+
+    // Patch target routing (Max/MSP style):
+    // - Direct: `<patch-root>(cmd) -> client-object(in)`.
+    // - Indirect (supported): `<patch-root>(cmd) -> cmd-aggregator(...) -> client-object(in)`.
+    // We follow the command-type subgraph starting from `<patch-root>(cmd)` to find target objects.
+    const resolveTargetsForRoot = (rootId: string): string[] => {
+      const routedClientNodeIds: string[] = [];
+      const routedClientNodeIdSet = new Set<string>();
+      let hasDisplayTarget = false;
+
+      const queue: { nodeId: string; portId: string }[] = [{ nodeId: rootId, portId: 'cmd' }];
+      const visited = new Set<string>();
+
+      while (queue.length > 0) {
+        const next = queue.shift()!;
+        const visitKey = `${next.nodeId}:${next.portId}`;
+        if (visited.has(visitKey)) continue;
+        visited.add(visitKey);
+
+        const outgoing = outgoingBySourceKey.get(visitKey) ?? [];
+        for (const c of outgoing) {
+          const targetNodeId = String((c as any)?.targetNodeId ?? '');
+          if (!targetNodeId) continue;
+          const targetPortId = String((c as any)?.targetPortId ?? '');
+
+          const targetType = typeById.get(targetNodeId) ?? '';
+          if (!targetType) continue;
+          if (!isCommandInputPort(targetType, targetPortId)) continue;
+
+          if (targetType === 'display-object') {
+            hasDisplayTarget = true;
+            continue;
+          }
+
+          if (targetType === 'client-object') {
+            if (!routedClientNodeIdSet.has(targetNodeId)) {
+              routedClientNodeIdSet.add(targetNodeId);
+              routedClientNodeIds.push(targetNodeId);
+            }
+            continue;
+          }
+
+          // Continue walking through any node that can output commands.
+          for (const outPortId of getCommandOutputPorts(targetType)) {
+            queue.push({ nodeId: targetNodeId, portId: outPortId });
+          }
+        }
       }
 
-      const displayIds = (get(managerState).clients ?? [])
-        .filter((c: any) => String(c?.group ?? '') === 'display')
-        .map((c: any) => String(c?.clientId ?? ''))
-        .filter((id) => Boolean(id) && connected.has(id));
+      const out: string[] = [];
+      const seen = new Set<string>();
 
-      for (const id of displayIds) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        out.push(id);
+      for (const nodeId of routedClientNodeIds) {
+        const ids = resolveClientNodeTargets(nodeId);
+        for (const id of ids) {
+          if (!id || !connectedAudience.has(id) || seen.has(id)) continue;
+          seen.add(id);
+          out.push(id);
+        }
+      }
+
+      if (hasDisplayTarget) {
+        const bridge = get(displayBridgeState);
+        if (bridge.status === 'connected' && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
+          seen.add(LOCAL_DISPLAY_TARGET_ID);
+          out.push(LOCAL_DISPLAY_TARGET_ID);
+        }
+
+        const displayIds = (get(managerState).clients ?? [])
+          .filter((c: any) => String(c?.group ?? '') === 'display')
+          .map((c: any) => String(c?.clientId ?? ''))
+          .filter((id) => Boolean(id) && connectedAll.has(id));
+
+        for (const id of displayIds) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          out.push(id);
+        }
+      }
+
+      return out;
+    };
+
+    const targetsByRoot = selectedRoots.map((root) => ({
+      root,
+      targets: resolveTargetsForRoot(root.id),
+    }));
+
+    const stableKey = (targets: string[]) => Array.from(new Set(targets)).sort().join('|');
+    const keys = targetsByRoot.map((t) => stableKey(t.targets));
+
+    if (keys.length > 1) {
+      const first = keys[0];
+      if (keys.some((k) => k !== first)) {
+        nodeEngine.lastError.set(
+          `Multiple active patch roots have different targets (${formatRootList(selectedRoots)}). Ensure they route to the same client(s), or deploy only one root.`
+        );
+        return [];
       }
     }
 
-    return out;
+    const prevError = get(nodeEngine.lastError);
+    if (
+      typeof prevError === 'string' &&
+      (prevError.startsWith('Multiple patch roots found') ||
+        prevError.startsWith('Multiple active patch roots found') ||
+        prevError.startsWith('Multiple active patch roots have different targets'))
+    ) {
+      nodeEngine.lastError.set(null);
+    }
+
+    return targetsByRoot[0]?.targets ?? [];
   };
 
   const stopAndRemovePatchOnClient = (clientId: string, patchId: string) => {
@@ -1306,7 +1440,7 @@
     rangeRaw: number,
     randomRaw: unknown
   ) => {
-    const clients = clientIdsInOrder();
+    const clients = audienceClientIdsInOrder();
     if (clients.length === 0) return null;
 
     const total = clients.length;
@@ -1401,16 +1535,11 @@
     nodeId: string,
     next: { index?: number; range?: number; clientId?: string; random?: boolean }
   ) => {
-    const clients = clientIdsInOrder();
+    const clients = audienceClientIdsInOrder();
     if (clients.length === 0) return;
 
     const node = nodeEngine.getNode(nodeId);
     if (!node || node.type !== 'client-object') return;
-
-    const toFiniteNumber = (value: unknown, fallback: number): number => {
-      const n = typeof value === 'number' ? value : Number(value);
-      return Number.isFinite(n) ? n : fallback;
-    };
 
     const currentIndexRaw = toFiniteNumber((node.inputValues as any)?.index, 1);
     const currentRangeRaw = toFiniteNumber((node.inputValues as any)?.range, 1);
@@ -1433,12 +1562,39 @@
     const slice = computeClientSlice(nodeId, desiredIndex, desiredRange, desiredRandom);
     if (!slice) return;
 
-    const currentSelected = (get(managerState).selectedClientIds ?? []).map(String);
-    if (!selectionEqual(currentSelected, slice.ids)) {
-      selectClients(slice.ids);
-    }
-
     await syncClientNodeUi(nodeId, slice);
+  };
+
+  const syncClientNodesFromInputs = () => {
+    const clients = audienceClientIdsInOrder();
+    if (clients.length === 0) return;
+
+    const engineState = get(graphStateStore);
+    for (const node of engineState.nodes ?? []) {
+      if (String(node.type) !== 'client-object') continue;
+      const nodeId = String(node.id);
+      const nodeInstance = nodeEngine.getNode(nodeId);
+      const computed = nodeEngine.getLastComputedInputs(nodeId);
+      const indexRaw = toFiniteNumber(
+        computed && Object.prototype.hasOwnProperty.call(computed, 'index')
+          ? (computed as any).index
+          : (nodeInstance?.inputValues as any)?.index,
+        1
+      );
+      const rangeRaw = toFiniteNumber(
+        computed && Object.prototype.hasOwnProperty.call(computed, 'range')
+          ? (computed as any).range
+          : (nodeInstance?.inputValues as any)?.range,
+        1
+      );
+      const randomRaw =
+        computed && Object.prototype.hasOwnProperty.call(computed, 'random')
+          ? (computed as any).random
+          : (nodeInstance?.inputValues as any)?.random;
+      const slice = computeClientSlice(nodeId, indexRaw, rangeRaw, randomRaw);
+      if (!slice) continue;
+      void syncClientNodeUi(nodeId, slice);
+    }
   };
 
   const sendNodeOverride = (
@@ -1656,7 +1812,8 @@
       if (!groupId) continue;
 
       const entry = byGroupId.get(groupId) ?? {};
-      if (type === GROUP_ACTIVATE_NODE_TYPE && !entry.activateId) entry.activateId = String(node.id);
+      if (type === GROUP_ACTIVATE_NODE_TYPE && !entry.activateId)
+        entry.activateId = String(node.id);
       byGroupId.set(groupId, entry);
     }
 
@@ -1773,14 +1930,16 @@
           const b = viewAdapter.getNodeBounds(nodeId);
           const w = b ? b.right - b.left : 72;
           const h = b ? b.bottom - b.top : 40;
-          const desiredX = frame.left - w / 2;
+          // Place the Activate port fully outside the Group frame (to the left) with a small gap,
+          // instead of straddling the frame edge.
+          const gap = 18;
+          const desiredX = frame.left - w - gap;
           const desiredY = centerY - h / 2;
           const cur = viewAdapter.getNodePosition(nodeId);
           if (!cur || Math.abs(cur.x - desiredX) > 1 || Math.abs(cur.y - desiredY) > 1) {
             viewAdapter.setNodePosition(nodeId, desiredX, desiredY);
           }
         }
-
       }
     } finally {
       groupController.endProgrammaticTranslate();
@@ -2420,6 +2579,8 @@
             focusNodeIds(ids);
           }
         }
+
+        syncClientNodesFromInputs();
       },
       isSyncingRef,
     });
@@ -2448,47 +2609,56 @@
     });
 
     let lastClientKey = '';
-    let lastSelectedKey = '';
     managerUnsub = managerState.subscribe(($state) => {
-      const clients = ($state.clients ?? [])
-        .map((c: any) => String(c?.clientId ?? ''))
-        .filter(Boolean);
-      const selected = ($state.selectedClientIds ?? []).map(String);
-      const nextClientKey = clients.join('|');
-      const nextSelectedKey = selected.join('|');
-      if (nextClientKey === lastClientKey && nextSelectedKey === lastSelectedKey) return;
+      const clientsWithGroups = ($state.clients ?? [])
+        .map((c: any) => ({
+          id: String(c?.clientId ?? ''),
+          group: String(c?.group ?? ''),
+        }))
+        .filter((c: any) => Boolean(c.id));
+
+      const audience = clientsWithGroups
+        .filter((c: any) => String(c.group) !== 'display')
+        .map((c: any) => String(c.id));
+
+      const displayIdSet = new Set(
+        clientsWithGroups
+          .filter((c: any) => String(c.group) === 'display')
+          .map((c: any) => String(c.id))
+      );
+
+      const nextClientKey = clientsWithGroups.map((c: any) => `${c.id}:${c.group}`).join('|');
+      if (nextClientKey === lastClientKey) return;
       lastClientKey = nextClientKey;
-      lastSelectedKey = nextSelectedKey;
 
       schedulePatchReconcile('manager-state');
 
-      if (clients.length === 0) return;
-
-      const selectedInOrder = selected.filter((id) => clients.includes(id));
-      const range = Math.max(1, Math.min(clients.length, selectedInOrder.length || 1));
-      const firstId = selectedInOrder[0] ?? clients[0] ?? '';
-      const index = Math.max(1, clients.indexOf(firstId) + 1);
-      const ids = selectedInOrder.length > 0 ? selectedInOrder : firstId ? [firstId] : [];
-      const slice = {
-        index,
-        range,
-        total: clients.length,
-        maxIndex: clients.length,
-        ids,
-        firstId,
-        random: false,
-      };
-      if (!slice) return;
-
       const engineState = get(graphStateStore);
-      for (const node of engineState.nodes ?? []) {
-        if (String(node.type) !== 'client-object') continue;
-        const nodeId = String(node.id);
-        const nodeInstance = nodeEngine.getNode(nodeId);
-        const randomActive = coerceBoolean((nodeInstance?.inputValues as any)?.random, false);
-        if (randomActive) continue;
-        void syncClientNodeUi(nodeId, slice);
+      // If a project ever ended up with a Display clientId inside a Client node, clear it.
+      if (displayIdSet.size > 0) {
+        for (const node of engineState.nodes ?? []) {
+          if (String(node.type) !== 'client-object') continue;
+          const nodeId = String(node.id);
+          const nodeInstance = nodeEngine.getNode(nodeId);
+          const configuredClientId =
+            typeof (nodeInstance?.config as any)?.clientId === 'string'
+              ? String((nodeInstance?.config as any).clientId)
+              : '';
+          if (configuredClientId && displayIdSet.has(configuredClientId)) {
+            nodeEngine.updateNodeConfig(nodeId, { clientId: '' });
+            if (nodeInstance?.outputValues) {
+              (nodeInstance.outputValues as any).out = { clientId: '', sensors: null };
+              nodeEngine.tickTime.set(Date.now());
+            }
+          }
+        }
       }
+
+      if (audience.length === 0) {
+        return;
+      }
+
+      syncClientNodesFromInputs();
     });
 
     // Patch targets can include local display (MessagePort), which is outside `managerState.clients`.
@@ -2788,7 +2958,8 @@
     loopController?.destroy();
     groupController.destroy();
     minimapController.destroy();
-    if (groupPortAlignRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(groupPortAlignRaf);
+    if (groupPortAlignRaf && typeof cancelAnimationFrame !== 'undefined')
+      cancelAnimationFrame(groupPortAlignRaf);
     if (wheelHandler) window.removeEventListener('wheel', wheelHandler, { capture: true } as any);
     if (contextMenuHandler)
       container?.removeEventListener('contextmenu', contextMenuHandler, { capture: true } as any);
@@ -2850,6 +3021,7 @@
 <NodeCanvasLayout
   bind:container
   isRunning={$isRunningStore}
+  edgeShadowsEnabled={$nodeGraphEdgeShadows}
   gridScale={canvasTransform.k}
   gridOffset={{ x: canvasTransform.tx, y: canvasTransform.ty }}
 >

@@ -70,15 +70,48 @@
     const byId = new Map<string, GroupIndexNode>();
     for (const g of normalized) byId.set(g.id, { group: g, children: [] });
 
-    const roots: GroupIndexNode[] = [];
+    // Build parent pointers (ignore missing/invalid parent IDs).
+    const parentOf = new Map<string, string | null>();
+    for (const g of normalized) {
+      const pid = g.parentId ? String(g.parentId) : null;
+      if (!pid || pid === g.id || !byId.has(pid)) parentOf.set(g.id, null);
+      else parentOf.set(g.id, pid);
+    }
+
+    const wouldCreateCycle = (childId: string, parentId: string): boolean => {
+      if (!childId || !parentId) return false;
+      if (childId === parentId) return true;
+      const visited = new Set<string>();
+      let cursor: string | null = parentId;
+      while (cursor) {
+        if (cursor === childId) return true;
+        if (visited.has(cursor)) return true; // cycle upstream
+        visited.add(cursor);
+        cursor = parentOf.get(cursor) ?? null;
+      }
+      return false;
+    };
+
+    const attached = new Set<string>();
     for (const g of normalized) {
       const node = byId.get(g.id);
       if (!node) continue;
-      const pid = g.parentId ? String(g.parentId) : null;
-      const parent = pid ? byId.get(pid) : null;
-      if (parent) parent.children.push(node);
-      else roots.push(node);
+      const pid = parentOf.get(g.id);
+      if (!pid) continue;
+      const parent = byId.get(pid) ?? null;
+      if (!parent) continue;
+      if (wouldCreateCycle(g.id, pid)) continue;
+      parent.children.push(node);
+      attached.add(g.id);
     }
+
+    const roots: GroupIndexNode[] = [];
+    for (const g of normalized) {
+      if (!attached.has(g.id)) roots.push(byId.get(g.id)!);
+    }
+
+    // Fallback: if something is corrupted (e.g. cycles), never "hide" the index.
+    if (roots.length === 0) return normalized.map((g) => byId.get(g.id)!).filter(Boolean);
 
     return roots;
   };
@@ -137,15 +170,15 @@
       </Button>
     </div>
 
-    <div class="toolbar-center">
-      {#if groupIndexRoots.length > 0}
-        <div class="group-index" aria-label="Group index">
+    {#if groupIndexRoots.length > 0}
+      <div class="toolbar-center" aria-label="Group index">
+        <div class="group-index-bar">
           {#each groupIndexRoots as node (node.group.id)}
             <GroupIndexItem {node} depth={0} onFocus={onFocusGroup} />
           {/each}
         </div>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <div class="toolbar-right">
       <div class="toolbar-menu-wrap" bind:this={toolbarMenuWrap}>
@@ -227,7 +260,7 @@
               </button>
             {/if}
             <div class="toolbar-menu-sep" />
-            <div class="toolbar-menu-footer">{nodeCount} nodes</div>
+            <div class="toolbar-menu-footer">{nodeCount} nodes · {groups.length} groups</div>
           </div>
         {/if}
       </div>
@@ -282,7 +315,6 @@
   .canvas-toolbar {
     width: 100%;
     display: flex;
-    justify-content: space-between;
     align-items: center;
     gap: 14px;
     padding: 8px 12px;
@@ -301,40 +333,46 @@
     min-width: 0;
   }
 
-  .toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
   .toolbar-center {
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
   }
 
-  .group-index {
+  .toolbar-right {
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
+  }
+
+  .group-index-bar {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     max-width: 100%;
     overflow-x: auto;
-    padding: 2px 10px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
   }
 
-  .group-index::-webkit-scrollbar {
-    height: 6px;
+  .group-index-bar::-webkit-scrollbar {
+    height: 0px;
   }
 
-  .group-index::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.18);
-    border-radius: 999px;
+  .group-index-bar::-webkit-scrollbar-thumb {
+    background: transparent;
   }
 
-  .group-index::-webkit-scrollbar-track {
+  .group-index-bar::-webkit-scrollbar-track {
     background: transparent;
   }
 

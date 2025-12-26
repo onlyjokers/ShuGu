@@ -339,7 +339,10 @@ class NodeEngineClass {
       if (patchRoots.length === 0) return null;
 
       const incomingByTarget = new Map<string, { sourceNodeId: string; targetPortId: string }[]>();
-      const outgoingBySourceKey = new Map<string, { targetNodeId: string; targetPortId: string }[]>();
+      const outgoingBySourceKey = new Map<
+        string,
+        { targetNodeId: string; targetPortId: string }[]
+      >();
       for (const c of connections) {
         const targetNodeId = String(c.targetNodeId);
         const sourceNodeId = String(c.sourceNodeId);
@@ -356,7 +359,10 @@ class NodeEngineClass {
         outgoingBySourceKey.set(sourceKey, outgoing);
       }
 
-      const shouldTraverseComputeDependency = (targetNodeId: string, targetPortId: string): boolean => {
+      const shouldTraverseComputeDependency = (
+        targetNodeId: string,
+        targetPortId: string
+      ): boolean => {
         const node = nodeById.get(String(targetNodeId));
         if (!node) return true;
         const def = nodeRegistry.get(String(node.type));
@@ -429,7 +435,8 @@ class NodeEngineClass {
             if (targetType === 'display-object') continue;
 
             const outPorts = getCommandOutputPorts(targetType);
-            for (const outPortId of outPorts) queue.push({ nodeId: targetNodeId, portId: outPortId });
+            for (const outPortId of outPorts)
+              queue.push({ nodeId: targetNodeId, portId: outPortId });
           }
         }
 
@@ -486,6 +493,12 @@ class NodeEngineClass {
 
   getNode(nodeId: string): NodeInstance | undefined {
     return this.runtime.getNode(nodeId);
+  }
+
+  getLastComputedInputs(nodeId: string): Record<string, unknown> | null {
+    const id = String(nodeId ?? '');
+    if (!id) return null;
+    return this.runtime.getLastComputedInputs(id);
   }
 
   // ========== Lifecycle ==========
@@ -859,7 +872,8 @@ class NodeEngineClass {
   }
 
   /**
-   * Export a patch subgraph rooted at `audio-out` for client-side execution.
+   * Export a deployable patch subgraph rooted at one or more output sink nodes
+   * (`audio-out` / `image-out` / `video-out`) for client-side execution.
    * Throws if the patch contains node types outside the client whitelist.
    */
   exportGraphForPatch(): {
@@ -887,29 +901,20 @@ class NodeEngineClass {
       )
     );
 
-    const rootType = (() => {
-      if (roots.length === 1) return String(roots[0]?.type ?? '');
-      if (activeRoots.length === 1) return String(activeRoots[0]?.type ?? '');
+    const selectedRoots = (() => {
+      if (roots.length === 1) return roots;
+      if (activeRoots.length >= 1) return activeRoots;
       const list = roots
         .map((n) => `${String(n.type)}:${String(n.id)}`)
         .sort()
         .join(', ');
-      if (activeRoots.length > 1) {
-        const activeList = activeRoots
-          .map((n) => `${String(n.type)}:${String(n.id)}`)
-          .sort()
-          .join(', ');
-        throw new Error(
-          `Multiple active patch roots found (${activeList}). Disconnect Deploy on all but one root.`
-        );
-      }
       throw new Error(
-        `Multiple patch roots found (${list}). Connect Deploy on exactly one root (or delete the others).`
+        `Multiple patch roots found (${list}). Connect Deploy on one or more roots (or delete the others).`
       );
     })();
 
     const patch = exportGraphForPatch(snapshot, {
-      rootType,
+      rootNodeIds: selectedRoots.map((n) => String(n.id)),
       nodeRegistry,
       isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(String(nodeId)),
     });
@@ -965,7 +970,14 @@ class NodeEngineClass {
       .map((n) => String(n.id))
       .sort()
       .join(',');
-    const patchId = `patch:${rootType}:${patch.rootNodeId}:${hashString(nodeKey)}`;
+    const rootList = selectedRoots
+      .map((n) => `${String(n.type)}:${String(n.id)}`)
+      .sort()
+      .join(', ');
+    const patchId =
+      selectedRoots.length === 1
+        ? `patch:${String(selectedRoots[0]!.type)}:${String(selectedRoots[0]!.id)}:${hashString(nodeKey)}`
+        : `patch:multi:${hashString(rootList)}:${hashString(nodeKey)}`;
 
     return {
       graph: patch.graph,
