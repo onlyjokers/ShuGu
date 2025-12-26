@@ -20,6 +20,7 @@ export class ToneAudioEngine {
   private loadPromise: Promise<ToneModule> | null = null;
   private enabled = false;
   private lastError: string | null = null;
+  private startPromise: Promise<{ enabled: boolean; error?: string }> | null = null;
 
   getStatus(): ToneAudioEngineStatus {
     return { loaded: Boolean(this.tone), enabled: this.enabled, error: this.lastError };
@@ -49,24 +50,58 @@ export class ToneAudioEngine {
 
   /**
    * Enable audio. Must be called from a user gesture for mobile browsers.
+   *
+   * Important: Do NOT `await` anything before calling `Tone.start()` (user gesture will be lost).
+   * This method guarantees that when Tone is already loaded, `Tone.start()` is invoked synchronously.
    */
-  async start(): Promise<{ enabled: boolean; error?: string }> {
-    if (typeof window === 'undefined') return { enabled: false, error: 'not in a browser' };
-    try {
-      const tone = await this.ensureLoaded();
-      await tone.start();
+  start(): Promise<{ enabled: boolean; error?: string }> {
+    if (typeof window === 'undefined') return Promise.resolve({ enabled: false, error: 'not in a browser' });
+    if (this.enabled) return Promise.resolve({ enabled: true });
+    if (this.startPromise) return this.startPromise;
+
+    const finalize = (tone: ToneModule) => {
       const state = tone.getContext().state;
       this.enabled = state === 'running';
       if (!this.enabled) this.lastError = `Tone context not running (state=${state})`;
       else this.lastError = null;
       return this.enabled ? { enabled: true } : { enabled: false, error: this.lastError ?? undefined };
-    } catch (err) {
-      this.lastError = err instanceof Error ? err.message : String(err);
-      this.enabled = false;
-      return { enabled: false, error: this.lastError };
-    }
+    };
+
+    const startLoadedTone = (tone: ToneModule) => {
+      try {
+        // Must be invoked synchronously from the user gesture stack.
+        const started = tone.start();
+        return Promise.resolve(started).then(() => finalize(tone));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.enabled = false;
+        this.lastError = message;
+        return { enabled: false, error: message };
+      }
+    };
+
+    const run = (async () => {
+      try {
+        if (this.tone) return await startLoadedTone(this.tone);
+
+        // Best-effort fallback: load then start. On mobile browsers this may still fail because the
+        // start call happens after an async boundary; apps should call `ensureLoaded()` early.
+        const tone = await this.ensureLoaded();
+        return await startLoadedTone(tone);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.enabled = false;
+        this.lastError = message;
+        return { enabled: false, error: message };
+      }
+    })();
+
+    this.startPromise = run.finally(() => {
+      this.startPromise = null;
+    });
+
+    return this.startPromise;
   }
 }
 
 export const toneAudioEngine = new ToneAudioEngine();
-

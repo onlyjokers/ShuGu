@@ -357,6 +357,7 @@
   style:width
   style:height
   data-testid="node"
+  data-rete-node-id={data.id}
 >
   {#if bypassWirePath && bypassWireSize}
     <svg

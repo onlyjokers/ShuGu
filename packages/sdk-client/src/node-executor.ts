@@ -292,6 +292,7 @@ export class NodeExecutor {
             'load-audio-from-assets',
             'load-audio-from-local',
             'tone-osc',
+            'audio-data',
             'tone-delay',
             'tone-resonator',
             'tone-pitch',

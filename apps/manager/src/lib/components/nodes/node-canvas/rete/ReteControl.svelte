@@ -2,12 +2,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { ClassicPreset } from 'rete';
-	  import {
-	    audienceClients,
-	    clientReadiness,
-	    nodeMediaSignals,
-	    sensorData,
-	  } from '$lib/stores/manager';
+  import {
+    audienceClients,
+    clientReadiness,
+    nodeMediaSignals,
+    sensorData,
+  } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
   import { localMediaStore, type LocalMediaKind } from '$lib/stores/local-media';
   import { nodeEngine } from '$lib/nodes';
@@ -124,7 +124,7 @@
     return filtered.map((a) => ({
       value: String(a?.id ?? ''),
       label: `${String(a?.originalName ?? a?.id ?? '')}`,
-      }));
+    }));
   }
 
   function buildLocalMediaOptions(kind: string): { value: string; label: string }[] {
@@ -145,9 +145,13 @@
     return null;
   }
 
-  const localAssetKindFromControl = (kindRaw: unknown, fallbackPath: string): LocalMediaKind | null => {
+  const localAssetKindFromControl = (
+    kindRaw: unknown,
+    fallbackPath: string
+  ): LocalMediaKind | null => {
     const normalized = typeof kindRaw === 'string' ? kindRaw.trim().toLowerCase() : '';
-    if (normalized === 'audio' || normalized === 'image' || normalized === 'video') return normalized;
+    if (normalized === 'audio' || normalized === 'image' || normalized === 'video')
+      return normalized;
     return inferLocalKindFromPath(fallbackPath);
   };
 
@@ -233,89 +237,89 @@
     }
   }
 
-	  function readinessClass(clientId: string): string {
-	    const info = $clientReadiness.get(clientId);
-	    if (!info) return 'connected';
-	    if (info.status === 'assets-ready') return 'ready';
-	    if (info.status === 'assets-error') return 'error';
-	    if (info.status === 'assets-loading') return 'loading';
-	    return 'connected';
-	  }
+  function readinessClass(clientId: string): string {
+    const info = $clientReadiness.get(clientId);
+    if (!info) return 'connected';
+    if (info.status === 'assets-ready') return 'ready';
+    if (info.status === 'assets-error') return 'error';
+    if (info.status === 'assets-loading') return 'loading';
+    return 'connected';
+  }
 
-	  $: hasLabel = Boolean(data?.label) && !isInline;
-	  $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
+  $: hasLabel = Boolean(data?.label) && !isInline;
+  $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
 
-	  const clampInt = (value: number, min: number, max: number) => {
-	    const next = Math.floor(value);
-	    return Math.max(min, Math.min(max, next));
-	  };
+  const clampInt = (value: number, min: number, max: number) => {
+    const next = Math.floor(value);
+    return Math.max(min, Math.min(max, next));
+  };
 
-	  const toFiniteNumber = (value: unknown, fallback: number): number => {
-	    const n = typeof value === 'number' ? value : Number(value);
-	    return Number.isFinite(n) ? n : fallback;
-	  };
+  const toFiniteNumber = (value: unknown, fallback: number): number => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
 
-	  const coerceBoolean = (value: unknown, fallback = false): boolean => {
-	    if (typeof value === 'boolean') return value;
-	    if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
-	    return fallback;
-	  };
+  const coerceBoolean = (value: unknown, fallback = false): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value >= 0.5;
+    return fallback;
+  };
 
-	  const hashStringDjb2 = (value: string): number => {
-	    let hash = 5381;
-	    for (let i = 0; i < value.length; i += 1) {
-	      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
-	    }
-	    return hash >>> 0;
-	  };
+  const hashStringDjb2 = (value: string): number => {
+    let hash = 5381;
+    for (let i = 0; i < value.length; i += 1) {
+      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+    }
+    return hash >>> 0;
+  };
 
-	  const buildStableRandomOrder = (nodeId: string, clients: string[]) => {
-	    const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
-	    keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
-	    return keyed.map((k) => k.id);
-	  };
+  const buildStableRandomOrder = (nodeId: string, clients: string[]) => {
+    const keyed = clients.map((id) => ({ id, score: hashStringDjb2(`${nodeId}|${id}`) }));
+    keyed.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
+    return keyed.map((k) => k.id);
+  };
 
-	  $: clientPickerSelectedIds = (() => {
-	    if (data?.controlType !== 'client-picker') return [];
-	    const _tick = $tickTimeStore;
-	    void _tick;
+  $: clientPickerSelectedIds = (() => {
+    if (data?.controlType !== 'client-picker') return [];
+    const _tick = $tickTimeStore;
+    void _tick;
 
-	    const nodeId = String(data?.nodeId ?? '');
-	    if (!nodeId) return [];
+    const nodeId = String(data?.nodeId ?? '');
+    if (!nodeId) return [];
 
-	    const clients = ($audienceClients ?? [])
-	      .map((c: any) => String(c?.clientId ?? ''))
-	      .filter(Boolean);
-	    if (clients.length === 0) return [];
+    const clients = ($audienceClients ?? [])
+      .map((c: any) => String(c?.clientId ?? ''))
+      .filter(Boolean);
+    if (clients.length === 0) return [];
 
-	    const node = nodeEngine.getNode(nodeId);
-	    if (!node) return [];
-	    const computed = nodeEngine.getLastComputedInputs(nodeId);
-	    const getComputedOrStoredInput = (portId: string): unknown => {
-	      if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
-	        return (computed as any)[portId];
-	      }
-	      return (node.inputValues as any)?.[portId];
-	    };
+    const node = nodeEngine.getNode(nodeId);
+    if (!node) return [];
+    const computed = nodeEngine.getLastComputedInputs(nodeId);
+    const getComputedOrStoredInput = (portId: string): unknown => {
+      if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+        return (computed as any)[portId];
+      }
+      return (node.inputValues as any)?.[portId];
+    };
 
-	    const total = clients.length;
-	    const indexRaw = toFiniteNumber(getComputedOrStoredInput('index'), 1);
-	    const rangeRaw = toFiniteNumber(getComputedOrStoredInput('range'), 1);
-	    const random = coerceBoolean(getComputedOrStoredInput('random'), false);
+    const total = clients.length;
+    const indexRaw = toFiniteNumber(getComputedOrStoredInput('index'), 1);
+    const rangeRaw = toFiniteNumber(getComputedOrStoredInput('range'), 1);
+    const random = coerceBoolean(getComputedOrStoredInput('random'), false);
 
-	    const index = clampInt(indexRaw, 1, total);
-	    const range = clampInt(rangeRaw, 1, total);
-	    const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
+    const index = clampInt(indexRaw, 1, total);
+    const range = clampInt(rangeRaw, 1, total);
+    const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
 
-	    const ids: string[] = [];
-	    const start = index - 1;
-	    for (let i = 0; i < range; i += 1) {
-	      ids.push(ordered[(start + i) % total]);
-	    }
-	    return ids;
-	  })();
-	  $: clientPickerPrimaryClientId = clientPickerSelectedIds[0] ?? '';
-	  $: clientPickerSelectedIdSet = new Set(clientPickerSelectedIds);
+    const ids: string[] = [];
+    const start = index - 1;
+    for (let i = 0; i < range; i += 1) {
+      ids.push(ordered[(start + i) % total]);
+    }
+    return ids;
+  })();
+  $: clientPickerPrimaryClientId = clientPickerSelectedIds[0] ?? '';
+  $: clientPickerSelectedIdSet = new Set(clientPickerSelectedIds);
 
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '0.00';
@@ -828,7 +832,10 @@
     timeRangeStep = isFiniteNumber((data as any).step) ? Number((data as any).step) : 0.01;
 
     const runtimeNode = timeRangeNodeId ? nodeEngine.getNode(timeRangeNodeId) : null;
-    const assetIdRaw = typeof (runtimeNode as any)?.config?.assetId === 'string' ? String((runtimeNode as any).config.assetId) : '';
+    const assetIdRaw =
+      typeof (runtimeNode as any)?.config?.assetId === 'string'
+        ? String((runtimeNode as any).config.assetId)
+        : '';
     const assetId = assetIdRaw.trim();
 
     const localAssetPathRaw =
@@ -839,7 +846,8 @@
 
     // Refresh duration/backdrop when the asset changes.
     const timelineAssetKey =
-      timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets'
+      timeRangeNodeType === 'load-audio-from-assets' ||
+      timeRangeNodeType === 'load-video-from-assets'
         ? assetId
         : localAssetPath;
 
@@ -852,7 +860,10 @@
 
     const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
     const contentUrl = (() => {
-      if (timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets') {
+      if (
+        timeRangeNodeType === 'load-audio-from-assets' ||
+        timeRangeNodeType === 'load-video-from-assets'
+      ) {
         return assetId ? buildAssetContentUrl(serverUrl, assetId) : null;
       }
       const kind: LocalMediaKind | null =
@@ -869,7 +880,8 @@
       lastTimelineUrl = contentUrl;
       void (async () => {
         const kind: any =
-          timeRangeNodeType === 'load-video-from-assets' || timeRangeNodeType === 'load-video-from-local'
+          timeRangeNodeType === 'load-video-from-assets' ||
+          timeRangeNodeType === 'load-video-from-local'
             ? 'video'
             : 'audio';
         const duration = await getMediaDurationSec(contentUrl, kind);
@@ -926,10 +938,13 @@
         (c: any) => String(c.targetNodeId) === timeRangeNodeId && String(c.targetPortId) === 'asset'
       );
       const localInputValue =
-        typeof (runtimeNode as any)?.inputValues?.asset === 'string' ? String((runtimeNode as any).inputValues.asset).trim() : '';
+        typeof (runtimeNode as any)?.inputValues?.asset === 'string'
+          ? String((runtimeNode as any).inputValues.asset).trim()
+          : '';
 
       const hasAsset =
-        timeRangeNodeType === 'load-audio-from-assets' || timeRangeNodeType === 'load-video-from-assets'
+        timeRangeNodeType === 'load-audio-from-assets' ||
+        timeRangeNodeType === 'load-video-from-assets'
           ? Boolean(assetId)
           : Boolean(localAssetPath || localInputValue || inputHasAsset);
       // Require a client "started" signal so the cursor only advances when playback actually begins.
@@ -951,7 +966,8 @@
       const needsStartedSeq = timeRangeStartSeqBase ?? 0;
       const hasStartedSignal = playRequested && startedSeq > needsStartedSeq;
 
-      timeRangeIsPlaying = timeRangeIsPlaying && hasAsset && Boolean(isEngineRunning) && hasStartedSignal;
+      timeRangeIsPlaying =
+        timeRangeIsPlaying && hasAsset && Boolean(isEngineRunning) && hasStartedSignal;
     }
 
     syncTimeRangeUi({ startSec, endSec, cursorSec });
@@ -1209,11 +1225,11 @@
         {#each $audienceClients as c (c.clientId)}
           <button
             type="button"
-	            class="client-item {c.clientId === clientPickerPrimaryClientId
-	              ? 'selected'
-	              : clientPickerSelectedIdSet.has(c.clientId)
-	                ? 'in-range'
-	                : ''}"
+            class="client-item {c.clientId === clientPickerPrimaryClientId
+              ? 'selected'
+              : clientPickerSelectedIdSet.has(c.clientId)
+                ? 'in-range'
+                : ''}"
             disabled={data.readonly}
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(c.clientId)}

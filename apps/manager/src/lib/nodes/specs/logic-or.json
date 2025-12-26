@@ -1,0 +1,12 @@
+{
+  "__purpose": "Manager node spec for logic-or (boolean OR gate).",
+  "type": "logic-or",
+  "label": "OR",
+  "category": "Gate",
+  "inputs": [
+    { "id": "a", "label": "A", "type": "boolean" },
+    { "id": "b", "label": "B", "type": "boolean" }
+  ],
+  "outputs": [{ "id": "out", "label": "Out", "type": "boolean" }],
+  "configSchema": []
+}

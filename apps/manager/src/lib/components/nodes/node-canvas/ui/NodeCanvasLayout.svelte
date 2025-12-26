@@ -2,13 +2,14 @@
 <script lang="ts">
   export let container: HTMLDivElement | null = null;
   export let isRunning = false;
+  export let edgeShadowsEnabled = true;
   // Scale grid background with canvas zoom.
   export let gridScale = 1;
   // Keep grid background aligned with canvas translation.
   export let gridOffset = { x: 0, y: 0 };
 </script>
 
-<div class="node-canvas-container">
+<div class="node-canvas-container" class:edge-shadows-off={!edgeShadowsEnabled}>
   <slot name="toolbar" />
   <slot name="logs" />
 
@@ -124,6 +125,12 @@
   :global(.node-canvas-container .node.stopped:not(.group-disabled)) {
     opacity: 0.62;
     filter: grayscale(0.6) saturate(0.6);
+  }
+
+  /* Ensure edge shadow toggles actually remove filters (SVG filters are expensive). */
+  :global(.node-canvas-container.edge-shadows-off svg.connection),
+  :global(.node-canvas-container.edge-shadows-off svg.connection path) {
+    filter: none !important;
   }
 
   :global(.node-canvas-container .node .title) {

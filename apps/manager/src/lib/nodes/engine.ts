@@ -33,6 +33,7 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'proc-screen-color') return 'screen';
   if (type === 'proc-synth-update') return 'sound';
   if (type === 'tone-osc') return 'sound';
+  if (type === 'audio-data') return 'sound';
   if (type === 'tone-delay') return 'sound';
   if (type === 'tone-resonator') return 'sound';
   if (type === 'tone-pitch') return 'sound';
@@ -818,6 +819,13 @@ class NodeEngineClass {
       'client-object',
       'proc-client-sensors',
       'math',
+      // Gates
+      'logic-not',
+      'logic-and',
+      'logic-or',
+      'logic-nand',
+      'logic-nor',
+      'logic-xor',
       'tone-lfo',
       'number',
       'string',
@@ -876,7 +884,7 @@ class NodeEngineClass {
    * (`audio-out` / `image-out` / `video-out`) for client-side execution.
    * Throws if the patch contains node types outside the client whitelist.
    */
-  exportGraphForPatch(): {
+  exportGraphForPatchFromRootNodeIds(rootNodeIds: string[]): {
     graph: Pick<GraphState, 'nodes' | 'connections'>;
     meta: {
       loopId: string;
@@ -888,33 +896,23 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
-    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
-    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
-    if (roots.length === 0) {
-      throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);
-    }
+    const ids = Array.from(new Set((rootNodeIds ?? []).map(String).filter(Boolean))).sort();
+    if (ids.length === 0) throw new Error('No patch root ids provided.');
 
-    const connections = snapshot.connections ?? [];
-    const activeRoots = roots.filter((root) =>
-      connections.some(
-        (c) => String(c.sourceNodeId) === String(root.id) && String(c.sourcePortId) === 'cmd'
-      )
-    );
-
-    const selectedRoots = (() => {
-      if (roots.length === 1) return roots;
-      if (activeRoots.length >= 1) return activeRoots;
-      const list = roots
-        .map((n) => `${String(n.type)}:${String(n.id)}`)
-        .sort()
-        .join(', ');
-      throw new Error(
-        `Multiple patch roots found (${list}). Connect Deploy on one or more roots (or delete the others).`
-      );
-    })();
+    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out']);
+    const nodeById = new Map((snapshot.nodes ?? []).map((n) => [String(n.id), n]));
+    const roots = ids.map((id) => {
+      const node = nodeById.get(String(id)) ?? null;
+      if (!node) throw new Error(`Invalid patch root id: ${String(id)}`);
+      const type = String((node as any)?.type ?? '');
+      if (!patchRootTypes.has(type)) {
+        throw new Error(`Invalid patch root type: ${type}:${String((node as any)?.id ?? id)}`);
+      }
+      return node;
+    });
 
     const patch = exportGraphForPatch(snapshot, {
-      rootNodeIds: selectedRoots.map((n) => String(n.id)),
+      rootNodeIds: ids,
       nodeRegistry,
       isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(String(nodeId)),
     });
@@ -926,6 +924,13 @@ class NodeEngineClass {
       'logic-multiple',
       'logic-subtract',
       'logic-divide',
+      // Gates
+      'logic-not',
+      'logic-and',
+      'logic-or',
+      'logic-nand',
+      'logic-nor',
+      'logic-xor',
       'logic-if',
       'logic-for',
       'logic-sleep',
@@ -970,13 +975,13 @@ class NodeEngineClass {
       .map((n) => String(n.id))
       .sort()
       .join(',');
-    const rootList = selectedRoots
-      .map((n) => `${String(n.type)}:${String(n.id)}`)
+    const rootList = roots
+      .map((n: any) => `${String(n.type)}:${String(n.id)}`)
       .sort()
       .join(', ');
     const patchId =
-      selectedRoots.length === 1
-        ? `patch:${String(selectedRoots[0]!.type)}:${String(selectedRoots[0]!.id)}:${hashString(nodeKey)}`
+      roots.length === 1
+        ? `patch:${String((roots[0] as any).type)}:${String((roots[0] as any).id)}:${hashString(nodeKey)}`
         : `patch:multi:${hashString(rootList)}:${hashString(nodeKey)}`;
 
     return {
@@ -990,6 +995,46 @@ class NodeEngineClass {
       },
       assetRefs: patch.assetRefs,
     };
+  }
+
+  exportGraphForPatch(): {
+    graph: Pick<GraphState, 'nodes' | 'connections'>;
+    meta: {
+      loopId: string;
+      requiredCapabilities: string[];
+      tickIntervalMs: number;
+      protocolVersion: typeof PROTOCOL_VERSION;
+      executorVersion: string;
+    };
+    assetRefs: string[];
+  } {
+    const snapshot = this.runtime.exportGraph();
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
+    if (roots.length === 0) {
+      throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);
+    }
+
+    const connections = snapshot.connections ?? [];
+    const activeRoots = roots.filter((root) =>
+      connections.some(
+        (c) => String(c.sourceNodeId) === String(root.id) && String(c.sourcePortId) === 'cmd'
+      )
+    );
+
+    const selectedRoots = (() => {
+      if (roots.length === 1) return roots;
+      if (activeRoots.length >= 1) return activeRoots;
+      const list = roots
+        .map((n) => `${String(n.type)}:${String(n.id)}`)
+        .sort()
+        .join(', ');
+      throw new Error(
+        `Multiple patch roots found (${list}). Connect Deploy on one or more roots (or delete the others).`
+      );
+    })();
+
+    return this.exportGraphForPatchFromRootNodeIds(selectedRoots.map((n) => String(n.id)));
   }
 }
 
