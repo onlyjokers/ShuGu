@@ -26,6 +26,15 @@ export type LocalLoop = {
 
 const TICK_INTERVAL = 33; // ~30 FPS
 
+function shouldComputeWhileOffloaded(type: string): boolean {
+  // UI/Debug: keep pure nodes running locally so values can be inspected even when a patch/loop is offloaded.
+  // This must stay conservative: do not include nodes with side-effects (commands, parameter writes, etc).
+  const t = String(type ?? '');
+  if (!t) return false;
+  if (t.startsWith('logic-')) return true;
+  return false;
+}
+
 function capabilityForNodeType(type: string | undefined): string | null {
   if (!type) return null;
   if (type === 'proc-client-sensors') return 'sensors';
@@ -99,6 +108,7 @@ class NodeEngineClass {
           ) {
             return true;
           }
+          if (shouldComputeWhileOffloaded(type)) return true;
           return false;
         }
         if (this.offloadedPatchNodeIds.has(nodeId)) {
@@ -113,6 +123,7 @@ class NodeEngineClass {
           ) {
             return true;
           }
+          if (shouldComputeWhileOffloaded(type)) return true;
           return false;
         }
         return true;
