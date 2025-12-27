@@ -30,6 +30,7 @@
   let startedReportKey = '';
   let finishReportKey = '';
   let autoplayForcedMute = false;
+  let lastPlayIntent = playing;
 
   let webAudioSource: MediaElementAudioSourceNode | null = null;
   let webAudioGain: GainNode | null = null;
@@ -347,7 +348,39 @@
   }
 
   $: if (videoElement && loaded) {
+    const playRising = playing && !lastPlayIntent;
+    lastPlayIntent = playing;
+
     if (playing && url) {
+      // When re-triggering after reaching the clip edge, `video.play()` can no-op because we're still at the end.
+      // Reset to the clip start/end depending on direction so MIDI (or any toggle) can reliably restart playback.
+      const cursor =
+        typeof cursorSec === 'number' && Number.isFinite(cursorSec) && cursorSec >= 0 ? cursorSec : null;
+      if (playRising && cursor === null) {
+        const { start, end } = getRange();
+        const endValue = typeof end === 'number' && Number.isFinite(end) ? end : null;
+        const epsilon = 0.03;
+
+        if (reverse) {
+          const desiredEnd = endValue ?? durationSec ?? start;
+          if (videoElement.currentTime <= start + epsilon) {
+            videoElement.currentTime = desiredEnd;
+            lastCursorApplied = null;
+          }
+        } else {
+          const effectiveEnd = endValue ?? durationSec;
+          const atEnd =
+            videoElement.ended ||
+            (typeof effectiveEnd === 'number' &&
+              Number.isFinite(effectiveEnd) &&
+              videoElement.currentTime >= effectiveEnd - epsilon);
+          if (atEnd) {
+            videoElement.currentTime = start;
+            lastCursorApplied = null;
+          }
+        }
+      }
+
       visible = true;
       if (!reverse) {
         const attempt = videoElement.play();
