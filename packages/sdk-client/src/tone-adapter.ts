@@ -113,6 +113,7 @@ type TonePlayerInstance = {
   lastTrigger: boolean;
   loading: boolean;
   ended: boolean;
+  endedReported: boolean;
   // Set before calling `player.stop()` so `onstop` can distinguish manual stops from natural ends.
   manualStopPending: boolean;
   // Latest desired URL for this player (resolved asset URL). Used to detect config changes.
@@ -1623,6 +1624,7 @@ function createPlayerInstance(
     loadSeq: 0,
     loadController: null,
     ended: false,
+    endedReported: false,
     manualStopPending: false,
     lastUrl: null,
     loadedUrl: null,
@@ -2860,6 +2862,7 @@ export function registerToneClientDefinitions(
           instance.lastClip = null;
           instance.lastCursorSec = null;
           instance.ended = false;
+          instance.endedReported = false;
           instance.manualStopPending = false;
           try {
             instance.loadController?.abort();
@@ -2985,7 +2988,10 @@ export function registerToneClientDefinitions(
           instance.lastClip.loop !== nextClip.loop ||
           instance.lastClip.reverse !== nextClip.reverse;
 
-        if (clipChanged) instance.ended = false;
+        if (clipChanged) {
+          instance.ended = false;
+          instance.endedReported = false;
+        }
 
         const cursorClamped = (() => {
           if (cursorRequested === null) return null;
@@ -3089,6 +3095,7 @@ export function registerToneClientDefinitions(
           if (!canStartNow) return;
           const wasStarted = instance.started;
           instance.ended = false;
+          instance.endedReported = false;
           applyClipToPlayer();
           const nextPos =
             resolvedClipEnd !== null
@@ -3167,6 +3174,7 @@ export function registerToneClientDefinitions(
         if (!enabled) {
           stopAndMaybePause();
           instance.ended = false;
+          instance.endedReported = false;
           if (cursorClamped !== null) instance.pausedOffsetSec = cursorClamped;
         } else {
           if (clipChanged && instance.started) {
@@ -3226,6 +3234,31 @@ export function registerToneClientDefinitions(
         instance.lastParams = { ...instance.lastParams, ...params, reverse };
         instance.lastCursorSec = cursorClamped;
 
+        // Fallback: if Tone reports the player stopped but we missed the `onstop` callback,
+        // treat it as a finish when Play is still enabled.
+        if (enabled && instance.started && !loop && !instance.ended && !instance.manualStopPending) {
+          const playerStopped = (() => {
+            try {
+              return String(instance.player?.state ?? '') === 'stopped';
+            } catch {
+              return false;
+            }
+          })();
+
+          if (playerStopped) {
+            const fallbackEndPos =
+              reverse ? clipStart : resolvedClipEnd ?? bufferDuration ?? instance.pausedOffsetSec;
+            if (typeof fallbackEndPos === 'number' && Number.isFinite(fallbackEndPos)) {
+              instance.pausedOffsetSec = Math.max(0, fallbackEndPos);
+            }
+            instance.ended = true;
+            instance.started = false;
+            instance.startedAt = 0;
+            instance.startOffsetSec = 0;
+            instance.startDurationSec = null;
+          }
+        }
+
         if (
           enabled &&
           instance.started &&
@@ -3246,6 +3279,7 @@ export function registerToneClientDefinitions(
               : nowPos >= resolvedClipEnd - nearEdge;
             if (reachedEnd) {
               instance.pausedOffsetSec = reverse ? clipStart : resolvedClipEnd;
+              instance.ended = true;
               try {
                 instance.player.stop();
               } catch {
@@ -3256,6 +3290,24 @@ export function registerToneClientDefinitions(
               instance.startOffsetSec = 0;
               instance.startDurationSec = null;
             }
+          }
+        }
+
+        if (enabled && !loop && instance.ended && !instance.endedReported && deps.sdk) {
+          try {
+            deps.sdk.sendSensorData(
+              'custom',
+              {
+                kind: 'node-media',
+                event: 'ended',
+                nodeId: context.nodeId,
+                nodeType: opts.sensorNodeType,
+              } as any,
+              { trackLatest: false }
+            );
+            instance.endedReported = true;
+          } catch {
+            // ignore
           }
         }
 

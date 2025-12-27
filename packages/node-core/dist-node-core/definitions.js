@@ -13,6 +13,13 @@ function clampInt(value, fallback, min, max) {
     const next = Math.floor(n);
     return Math.max(min, Math.min(max, next));
 }
+function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+function coerceNumber(value, fallback) {
+    const n = typeof value === 'string' ? Number(value) : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
 function coerceBoolean(value) {
     if (typeof value === 'boolean')
         return value;
@@ -276,6 +283,103 @@ function createAudioDataNode() {
         }),
     };
 }
+const loadAudioTimelineState = new Map();
+function computeLoadAudioFinished(opts) {
+    const state = loadAudioTimelineState.get(opts.nodeId) ?? {
+        signature: '',
+        lastPlay: false,
+        lastCursorSec: null,
+        startedFromSec: null,
+        progressedSec: 0,
+        ended: false,
+    };
+    const settingsChanged = opts.signature !== state.signature;
+    if (settingsChanged) {
+        state.signature = opts.signature;
+        state.lastCursorSec = null;
+        state.startedFromSec = null;
+        state.progressedSec = 0;
+        state.ended = false;
+    }
+    const playActive = Boolean(opts.play);
+    const playRising = playActive && !state.lastPlay;
+    if (!playActive) {
+        // Match client runtime: Play=false clears Finish, but keep playhead progress for resume.
+        state.ended = false;
+        state.lastPlay = false;
+        loadAudioTimelineState.set(opts.nodeId, state);
+        return false;
+    }
+    const resolvedClipEnd = opts.clipEnd >= 0 ? Math.max(opts.clipStart, opts.clipEnd) : null;
+    const cursorClamped = (() => {
+        if (opts.cursorSec === null)
+            return null;
+        const base = Math.max(opts.clipStart, opts.cursorSec);
+        if (resolvedClipEnd !== null)
+            return Math.min(resolvedClipEnd, base);
+        return base;
+    })();
+    const cursorChanged = (() => {
+        if (cursorClamped === null) {
+            return state.lastCursorSec !== null;
+        }
+        if (state.lastCursorSec === null)
+            return true;
+        return Math.abs(cursorClamped - state.lastCursorSec) > 0.005;
+    })();
+    if (cursorChanged) {
+        state.lastCursorSec = cursorClamped;
+        state.startedFromSec = cursorClamped;
+        state.progressedSec = 0;
+        state.ended = false;
+    }
+    else {
+        state.lastCursorSec = cursorClamped;
+    }
+    if (state.ended && playRising) {
+        state.startedFromSec = cursorClamped;
+        state.progressedSec = 0;
+        state.ended = false;
+    }
+    if (opts.loop) {
+        state.ended = false;
+        state.lastPlay = true;
+        loadAudioTimelineState.set(opts.nodeId, state);
+        return false;
+    }
+    if (state.startedFromSec === null) {
+        const fallbackStart = opts.reverse && resolvedClipEnd !== null ? resolvedClipEnd : Math.max(0, opts.clipStart);
+        state.startedFromSec = cursorClamped ?? fallbackStart;
+        state.progressedSec = 0;
+        state.ended = false;
+    }
+    if (resolvedClipEnd === null) {
+        // Without an explicit end, we cannot infer the full media duration on the manager.
+        state.ended = false;
+        state.lastPlay = true;
+        loadAudioTimelineState.set(opts.nodeId, state);
+        return false;
+    }
+    const startPos = clampNumber(state.startedFromSec, opts.clipStart, resolvedClipEnd);
+    const durationSec = opts.reverse
+        ? Math.max(0, startPos - opts.clipStart)
+        : Math.max(0, resolvedClipEnd - startPos);
+    const rateRaw = Math.abs(opts.playbackRate);
+    const rate = Number.isFinite(rateRaw) && rateRaw > 0 ? rateRaw : 1;
+    const dtSec = Number.isFinite(opts.deltaTimeMs) ? Math.max(0, opts.deltaTimeMs) / 1000 : 0;
+    if (durationSec <= 0) {
+        state.ended = true;
+    }
+    else if (state.lastPlay) {
+        state.progressedSec = Math.min(durationSec, state.progressedSec + dtSec * rate);
+        if (state.progressedSec >= durationSec) {
+            state.ended = true;
+        }
+    }
+    state.lastPlay = true;
+    loadAudioTimelineState.set(opts.nodeId, state);
+    return state.ended;
+}
 function createLoadAudioFromAssetsNode() {
     return {
         type: 'load-audio-from-assets',
@@ -333,13 +437,43 @@ function createLoadAudioFromAssetsNode() {
                 step: 0.01,
             },
         ],
-        process: (inputs, config) => {
+        process: (inputs, config, context) => {
             const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
-            const playRaw = inputs.play;
-            const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-            // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
-            // Return a simple gate value so downstream nodes can reflect play/pause state.
-            return { ref: assetId && play ? 1 : 0, ended: false };
+            const play = coerceBoolean(inputs.play);
+            const loop = coerceBoolean(inputs.loop);
+            const reverse = coerceBoolean(inputs.reverse);
+            const playbackRate = coerceNumber(inputs.playbackRate ?? config.playbackRate, 1);
+            const clipStart = Math.max(0, coerceNumber(inputs.startSec, 0));
+            const clipEndRaw = coerceNumber(inputs.endSec, -1);
+            const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
+            const cursorRaw = coerceNumber(inputs.cursorSec, -1);
+            const cursorSec = Number.isFinite(cursorRaw) && cursorRaw >= 0 ? Math.max(0, cursorRaw) : null;
+            if (!assetId) {
+                loadAudioTimelineState.delete(context.nodeId);
+                return { ref: 0, ended: false };
+            }
+            // Manager-side simulation: the actual audio playback is implemented on the client runtime.
+            // Emit a best-effort Finish state based on the configured clip and playback controls.
+            const signature = [
+                assetId,
+                Math.round(clipStart * 1000) / 1000,
+                Math.round(clipEnd * 1000) / 1000,
+                loop ? 1 : 0,
+                reverse ? 1 : 0,
+            ].join('|');
+            const ended = computeLoadAudioFinished({
+                nodeId: context.nodeId,
+                signature,
+                play,
+                loop,
+                reverse,
+                playbackRate,
+                clipStart,
+                clipEnd,
+                cursorSec,
+                deltaTimeMs: context.deltaTime,
+            });
+            return { ref: play ? 1 : 0, ended };
         },
     };
 }
@@ -401,16 +535,46 @@ function createLoadAudioFromLocalNode() {
                 step: 0.01,
             },
         ],
-        process: (inputs, config) => {
+        process: (inputs, config, context) => {
             const asset = typeof inputs.asset === 'string' && inputs.asset.trim()
                 ? inputs.asset.trim()
                 : typeof config.assetPath === 'string'
                     ? String(config.assetPath).trim()
                     : '';
-            const playRaw = inputs.play;
-            const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-            // Client runtime may override this for real playback. Manager-side stays as a simple gate.
-            return { ref: asset && play ? 1 : 0, ended: false };
+            const play = coerceBoolean(inputs.play);
+            const loop = coerceBoolean(inputs.loop);
+            const reverse = coerceBoolean(inputs.reverse);
+            const playbackRate = coerceNumber(inputs.playbackRate ?? config.playbackRate, 1);
+            const clipStart = Math.max(0, coerceNumber(inputs.startSec, 0));
+            const clipEndRaw = coerceNumber(inputs.endSec, -1);
+            const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
+            const cursorRaw = coerceNumber(inputs.cursorSec, -1);
+            const cursorSec = Number.isFinite(cursorRaw) && cursorRaw >= 0 ? Math.max(0, cursorRaw) : null;
+            if (!asset) {
+                loadAudioTimelineState.delete(context.nodeId);
+                return { ref: 0, ended: false };
+            }
+            const signature = [
+                asset,
+                Math.round(clipStart * 1000) / 1000,
+                Math.round(clipEnd * 1000) / 1000,
+                loop ? 1 : 0,
+                reverse ? 1 : 0,
+            ].join('|');
+            const ended = computeLoadAudioFinished({
+                nodeId: context.nodeId,
+                signature,
+                play,
+                loop,
+                reverse,
+                playbackRate,
+                clipStart,
+                clipEnd,
+                cursorSec,
+                deltaTimeMs: context.deltaTime,
+            });
+            // Client runtime may override this for real playback. Manager-side stays as a best-effort sim.
+            return { ref: play ? 1 : 0, ended };
         },
     };
 }

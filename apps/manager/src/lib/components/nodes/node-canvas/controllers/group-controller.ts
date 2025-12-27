@@ -53,6 +53,8 @@ export type GroupController = {
   requestFramesUpdate: () => void;
   setGroups: (groups: NodeGroup[]) => void;
   appendGroups: (groups: NodeGroup[]) => void;
+  /** Reconcile group membership after nodes are removed from the graph. Returns removed group IDs. */
+  reconcileGraphNodes: (graph?: GraphState) => string[];
   setRuntimeActiveByGroupId: (activeById: Map<string, boolean>) => void;
   applyHighlights: () => Promise<void>;
   scheduleHighlight: () => void;
@@ -1333,6 +1335,159 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     opts.requestMinimapUpdate();
   };
 
+  const reconcileGraphNodes = (graphOverride?: GraphState): string[] => {
+    const groupsSnapshot = get(nodeGroups);
+    if (groupsSnapshot.length === 0) return [];
+
+    const graph = graphOverride ?? opts.getGraphState();
+    const existingNodeIds = new Set<string>();
+    for (const node of graph.nodes ?? []) {
+      const id = String(node.id ?? '');
+      if (!id) continue;
+      // Ignore UI-only group edge ports so a deleted group doesn't "stick" just because a port node survived.
+      if (String(node.type ?? '') === 'group-activate') continue;
+      existingNodeIds.add(id);
+    }
+
+    const prevById = new Map<string, NodeGroup>();
+    for (const g of groupsSnapshot) prevById.set(String(g.id), g);
+
+    const normalized: NodeGroup[] = [];
+    const byId = new Map<string, NodeGroup>();
+    for (const group of groupsSnapshot) {
+      const id = String(group?.id ?? '');
+      if (!id) continue;
+      const parentId = group?.parentId ? String(group.parentId) : null;
+      const nodeIds = Array.from(new Set((group.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean))).filter(
+        (nid) => existingNodeIds.has(nid)
+      );
+      const next: NodeGroup = { ...group, id, parentId, nodeIds };
+      normalized.push(next);
+      byId.set(id, next);
+    }
+
+    if (normalized.length === 0) {
+      const removedIds = Array.from(prevById.keys()).filter(Boolean);
+      if (removedIds.length > 0) {
+        nodeGroups.set([]);
+        recomputeDisabledNodes([]);
+        clearSelection();
+        requestFramesUpdate();
+        opts.requestLoopFramesUpdate();
+        opts.requestMinimapUpdate();
+      }
+      return removedIds;
+    }
+
+    const childrenByParent = new Map<string, string[]>();
+    for (const g of normalized) {
+      const pid = g.parentId ? String(g.parentId) : '';
+      if (!pid || pid === g.id || !byId.has(pid)) continue;
+      const list = childrenByParent.get(pid) ?? [];
+      list.push(g.id);
+      childrenByParent.set(pid, list);
+    }
+
+    const unionCache = new Map<string, Set<string>>();
+    const visiting = new Set<string>();
+    const computeUnion = (id: string): Set<string> => {
+      const cached = unionCache.get(id);
+      if (cached) return cached;
+      if (visiting.has(id)) return new Set((byId.get(id)?.nodeIds ?? []).map(String));
+      visiting.add(id);
+      const base = new Set((byId.get(id)?.nodeIds ?? []).map(String));
+      for (const childId of childrenByParent.get(id) ?? []) {
+        const childUnion = computeUnion(String(childId));
+        for (const nid of childUnion) base.add(nid);
+      }
+      visiting.delete(id);
+      unionCache.set(id, base);
+      return base;
+    };
+
+    for (const g of normalized) computeUnion(g.id);
+
+    const removedGroupIds = new Set<string>();
+    for (const g of normalized) {
+      const union = unionCache.get(g.id) ?? new Set();
+      if (union.size === 0) removedGroupIds.add(g.id);
+    }
+
+    let changed = removedGroupIds.size > 0;
+    const nextGroups: NodeGroup[] = [];
+
+    for (const g of normalized) {
+      if (removedGroupIds.has(g.id)) continue;
+      const union = unionCache.get(g.id) ?? new Set<string>();
+      const preferred = Array.from((g.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean));
+      const ordered: string[] = [];
+      const seen = new Set<string>();
+      for (const nid of preferred) {
+        if (!union.has(nid) || seen.has(nid)) continue;
+        seen.add(nid);
+        ordered.push(nid);
+      }
+      const extras = Array.from(union).filter((nid) => !seen.has(nid));
+      extras.sort();
+      ordered.push(...extras);
+
+      const nextParentId =
+        g.parentId && byId.has(String(g.parentId)) && !removedGroupIds.has(String(g.parentId))
+          ? String(g.parentId)
+          : null;
+
+      const prev = prevById.get(g.id);
+      if (prev) {
+        const prevParentId = prev.parentId ? String(prev.parentId) : null;
+        const prevNodeIds = Array.from((prev.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean));
+        if (prevParentId !== nextParentId) changed = true;
+        if (prevNodeIds.length !== ordered.length) changed = true;
+        else {
+          for (let i = 0; i < ordered.length; i += 1) {
+            if (prevNodeIds[i] !== ordered[i]) {
+              changed = true;
+              break;
+            }
+          }
+        }
+      } else {
+        changed = true;
+      }
+
+      nextGroups.push({ ...g, parentId: nextParentId, nodeIds: ordered });
+    }
+
+    // Drop deleted nodes from selection (marquee highlight can otherwise linger after delete).
+    const prevSelection = get(groupSelectionNodeIds);
+    if (prevSelection.size > 0) {
+      const nextSelection = new Set(Array.from(prevSelection).filter((id) => existingNodeIds.has(String(id))));
+      if (nextSelection.size !== prevSelection.size) {
+        groupSelectionNodeIds.set(nextSelection);
+        if (nextSelection.size === 0) groupSelectionBounds.set(null);
+        scheduleHighlight();
+        requestFramesUpdate();
+      }
+    }
+
+    const editingId = get(editModeGroupId);
+    if (editingId && removedGroupIds.has(String(editingId))) {
+      editModeGroupId.set(null);
+      editModeGroupBounds = null;
+      clearGroupEditToast();
+      opts.requestLoopFramesUpdate();
+    }
+
+    if (!changed) return [];
+
+    nodeGroups.set(nextGroups);
+    recomputeDisabledNodes(nextGroups);
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
+
+    return Array.from(removedGroupIds);
+  };
+
   const setRuntimeActiveByGroupId = (activeById: Map<string, boolean>) => {
     if (!(activeById instanceof Map)) return;
     const prevGroups = get(nodeGroups);
@@ -1474,6 +1629,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     requestFramesUpdate,
     setGroups,
     appendGroups,
+    reconcileGraphNodes,
     setRuntimeActiveByGroupId,
     applyHighlights,
     scheduleHighlight,
