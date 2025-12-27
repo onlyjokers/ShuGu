@@ -42,6 +42,16 @@ export const displayBridgeState = writable<DisplayBridgeState>({
   error: null,
 });
 
+export type DisplayBridgeNodeMediaEvent = {
+  event: 'started' | 'ended';
+  nodeId: string;
+  nodeType?: string;
+  at: number;
+};
+
+// Latest node-media telemetry event from the paired Display (local MessagePort mode).
+export const displayBridgeNodeMedia = writable<DisplayBridgeNodeMediaEvent | null>(null);
+
 type DisplayPairMessage = {
   type: 'shugu:display:pair';
   token: string;
@@ -73,6 +83,14 @@ export type AssetManifestSnapshot = {
 type DisplayReadyMessage = {
   type: 'shugu:display:ready';
   manifestId?: string | null;
+  at?: number | null;
+};
+
+type DisplayNodeMediaMessage = {
+  type: 'shugu:display:node-media';
+  event: 'started' | 'ended';
+  nodeId: string;
+  nodeType?: string | null;
   at?: number | null;
 };
 
@@ -126,6 +144,7 @@ function teardownPort(): void {
     manifestUnsub = null;
   }
   lastManifestIdSentToLocal = null;
+  displayBridgeNodeMedia.set(null);
 
   if (!controlPort) return;
   try {
@@ -174,6 +193,23 @@ function handlePortMessage(event: MessageEvent): void {
   if (!data || typeof data !== 'object') return;
 
   const type = (data as { type?: unknown }).type;
+  if (type === 'shugu:display:node-media') {
+    const msg = data as DisplayNodeMediaMessage;
+    const nodeId = typeof msg.nodeId === 'string' ? msg.nodeId.trim() : '';
+    const eventType = typeof msg.event === 'string' ? msg.event : '';
+    if (!nodeId || (eventType !== 'started' && eventType !== 'ended')) return;
+
+    const at = typeof msg.at === 'number' && Number.isFinite(msg.at) ? msg.at : Date.now();
+    const nodeType = typeof msg.nodeType === 'string' ? msg.nodeType : undefined;
+    displayBridgeNodeMedia.set({
+      event: eventType as 'started' | 'ended',
+      nodeId,
+      ...(nodeType ? { nodeType } : {}),
+      at,
+    });
+    return;
+  }
+
   if (type !== 'shugu:display:ready') return;
 
   const ready = data as DisplayReadyMessage;

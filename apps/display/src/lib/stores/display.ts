@@ -174,6 +174,23 @@ let mediaMsgUnsub: (() => void) | null = null;
 export function reportNodeMediaStarted(nodeId: string, nodeType = 'load-video-from-assets'): void {
   const id = typeof nodeId === 'string' ? nodeId.trim() : '';
   if (!id) return;
+
+  // Local paired mode: report via MessagePort back to the Manager.
+  if (transportDecision === 'local' && localPort) {
+    try {
+      localPort.postMessage({
+        type: 'shugu:display:node-media',
+        event: 'started',
+        nodeId: id,
+        nodeType,
+        at: Date.now(),
+      });
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
   if (!sdk) return;
   const state = sdk.getState();
   if (state.status !== 'connected' || !state.clientId) return;

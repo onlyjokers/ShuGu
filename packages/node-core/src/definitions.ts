@@ -724,6 +724,7 @@ function createLoadImageFromAssetsNode(): NodeDefinition {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -732,7 +733,8 @@ function createLoadImageFromAssetsNode(): NodeDefinition {
     process: (_inputs, config) => {
       const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
       const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
       return { ref: assetId ? `asset:${assetId}${fitHash}` : '' };
     },
@@ -761,6 +763,7 @@ function createLoadImageFromLocalNode(): NodeDefinition {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -775,7 +778,8 @@ function createLoadImageFromLocalNode(): NodeDefinition {
             : '';
       const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
       const fitRaw = typeof config.fit === 'string' ? config.fit.trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
       if (!baseRef) return { ref: '' };
       if (!fitHash) return { ref: baseRef };
@@ -789,13 +793,11 @@ function createLoadImageFromLocalNode(): NodeDefinition {
   };
 }
 
-// Tracks playback progress for `load-video-from-assets` to emit a one-tick `Finish` pulse.
+// Tracks playback progress for `load-video-from-assets` / `load-video-from-local` timeline simulation.
 type LoadVideoTimelineState = {
   signature: string;
   lastPlay: boolean;
   accumulatedMs: number;
-  ended: boolean;
-  endedPulsePending: boolean;
 };
 
 const loadVideoTimelineState = new Map<string, LoadVideoTimelineState>();
@@ -921,26 +923,16 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
         signature: '',
         lastPlay: false,
         accumulatedMs: 0,
-        ended: false,
-        endedPulsePending: false,
       };
 
       const settingsChanged = signature !== state.signature;
       if (settingsChanged) {
         state.signature = signature;
         state.accumulatedMs = 0;
-        state.ended = false;
-        state.endedPulsePending = false;
       }
 
       const playActive = play;
       const playRising = playActive && !state.lastPlay;
-
-      if (state.ended && playRising) {
-        state.accumulatedMs = 0;
-        state.ended = false;
-        state.endedPulsePending = false;
-      }
 
       let durationSec: number | null = null;
       if (!loop) {
@@ -953,31 +945,38 @@ function createLoadVideoFromAssetsNode(): NodeDefinition {
         }
       }
 
+      const durationMs = durationSec !== null ? durationSec * 1000 : null;
+      const atEdgeBefore = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+
+      if (atEdgeBefore && playRising) {
+        state.accumulatedMs = 0;
+      }
+
       const dtMs =
         typeof context.deltaTime === 'number' && Number.isFinite(context.deltaTime)
           ? Math.max(0, context.deltaTime)
           : 0;
 
-      if (!loop && durationSec !== null && playActive && !state.ended) {
-        if (durationSec <= 0) {
-          state.ended = true;
-          state.endedPulsePending = true;
+      if (!loop && durationMs !== null && playActive) {
+        if (durationMs <= 0) {
+          state.accumulatedMs = durationMs;
         } else if (state.lastPlay) {
           state.accumulatedMs += dtMs;
-          if (state.accumulatedMs >= durationSec * 1000) {
-            state.accumulatedMs = durationSec * 1000;
-            state.ended = true;
-            state.endedPulsePending = true;
+          if (state.accumulatedMs >= durationMs) {
+            state.accumulatedMs = durationMs;
           }
         }
       }
 
-      const endedPulse = state.endedPulsePending;
-      state.endedPulsePending = false;
       state.lastPlay = playActive;
       loadVideoTimelineState.set(context.nodeId, state);
 
-      return { ref: refWithFit, ended: endedPulse };
+      const ended = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+      return { ref: refWithFit, ended };
+    },
+    onDisable: (_inputs, _config, context) => {
+      // Reset manager-side timeline state so `Finish` doesn't stay latched across stop/start.
+      loadVideoTimelineState.delete(context.nodeId);
     },
   };
 }
@@ -1116,26 +1115,16 @@ function createLoadVideoFromLocalNode(): NodeDefinition {
         signature: '',
         lastPlay: false,
         accumulatedMs: 0,
-        ended: false,
-        endedPulsePending: false,
       };
 
       const settingsChanged = signature !== state.signature;
       if (settingsChanged) {
         state.signature = signature;
         state.accumulatedMs = 0;
-        state.ended = false;
-        state.endedPulsePending = false;
       }
 
       const playActive = play;
       const playRising = playActive && !state.lastPlay;
-
-      if (state.ended && playRising) {
-        state.accumulatedMs = 0;
-        state.ended = false;
-        state.endedPulsePending = false;
-      }
 
       let durationSec: number | null = null;
       if (!loop) {
@@ -1148,31 +1137,38 @@ function createLoadVideoFromLocalNode(): NodeDefinition {
         }
       }
 
+      const durationMs = durationSec !== null ? durationSec * 1000 : null;
+      const atEdgeBefore = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+
+      if (atEdgeBefore && playRising) {
+        state.accumulatedMs = 0;
+      }
+
       const dtMs =
         typeof context.deltaTime === 'number' && Number.isFinite(context.deltaTime)
           ? Math.max(0, context.deltaTime)
           : 0;
 
-      if (!loop && durationSec !== null && playActive && !state.ended) {
-        if (durationSec <= 0) {
-          state.ended = true;
-          state.endedPulsePending = true;
+      if (!loop && durationMs !== null && playActive) {
+        if (durationMs <= 0) {
+          state.accumulatedMs = durationMs;
         } else if (state.lastPlay) {
           state.accumulatedMs += dtMs;
-          if (state.accumulatedMs >= durationSec * 1000) {
-            state.accumulatedMs = durationSec * 1000;
-            state.ended = true;
-            state.endedPulsePending = true;
+          if (state.accumulatedMs >= durationMs) {
+            state.accumulatedMs = durationMs;
           }
         }
       }
 
-      const endedPulse = state.endedPulsePending;
-      state.endedPulsePending = false;
       state.lastPlay = playActive;
       loadVideoTimelineState.set(context.nodeId, state);
 
-      return { ref: refWithFit, ended: endedPulse };
+      const ended = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+      return { ref: refWithFit, ended };
+    },
+    onDisable: (_inputs, _config, context) => {
+      // Reset manager-side timeline state so `Finish` doesn't stay latched across stop/start.
+      loadVideoTimelineState.delete(context.nodeId);
     },
   };
 }

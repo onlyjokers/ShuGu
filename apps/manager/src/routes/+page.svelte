@@ -139,8 +139,13 @@
     if (savedUrl && !savedIsHttp && !(isAccessingViaIP && savedIsLocalhost)) {
       serverUrl = savedUrl;
     } else {
-      // Default to HTTPS on current host
-      serverUrl = `https://${window.location.hostname}:3001`;
+      // Default to current hostname (localhost or IP) with HTTPS
+      // If running on standard HTTPS port (443), assume we are proxied and use the origin
+      if (window.location.protocol === 'https:' && window.location.port === '') {
+        serverUrl = window.location.origin;
+      } else {
+        serverUrl = `https://${window.location.hostname}:3001`;
+      }
     }
 
     const savedAssetWrite = localStorage.getItem('shugu-asset-write-token');
@@ -154,7 +159,8 @@
 
   onMount(() => {
     window.addEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
-    return () => window.removeEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
+    return () =>
+      window.removeEventListener('wheel', handleWheelNavigationGuard, wheelListenerOptions);
   });
 
   onMount(() => {
