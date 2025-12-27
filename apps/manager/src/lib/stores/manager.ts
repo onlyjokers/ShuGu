@@ -8,7 +8,11 @@ import { targetClients, targetGroup } from '@shugu/protocol';
 
 import { parameterRegistry } from '../parameters/registry';
 import { registerDefaultControlParameters } from '../parameters/presets';
-import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
+import {
+    displayBridgeNodeMedia,
+    displayBridgeState,
+    sendControl as sendLocalDisplayControl,
+} from '$lib/display/display-bridge';
 
 const SEND_TO_DISPLAY_STORAGE_KEY = 'shugu-send-to-display';
 
@@ -79,6 +83,8 @@ export const serverTime = derived(state, ($state) =>
 
 export const sendToDisplayEnabled = writable(false);
 
+const LOCAL_DISPLAY_CLIENT_ID = 'local:display';
+
 if (typeof window !== 'undefined') {
     try {
         sendToDisplayEnabled.set(window.localStorage.getItem(SEND_TO_DISPLAY_STORAGE_KEY) === '1');
@@ -94,6 +100,41 @@ if (typeof window !== 'undefined') {
         }
     });
 }
+
+// Local Display (MessagePort) can emit node-media started/ended signals. Mirror these into `nodeMediaSignals`
+// so time-range playheads advance even when the Display isn't server-connected.
+displayBridgeNodeMedia.subscribe((event) => {
+    if (!event) return;
+    const nodeId = typeof event.nodeId === 'string' ? event.nodeId.trim() : '';
+    if (!nodeId) return;
+    const type = event.event;
+    if (type !== 'started' && type !== 'ended') return;
+
+    const at = typeof event.at === 'number' && Number.isFinite(event.at) ? event.at : Date.now();
+    const nodeType = typeof event.nodeType === 'string' ? event.nodeType : undefined;
+
+    nodeMediaSignals.update((prev) => {
+        const next = new Map(prev);
+        const current = next.get(nodeId) ?? ({} as NodeMediaSignal);
+        const startedSeq = typeof current.startedSeq === 'number' ? current.startedSeq : 0;
+        const endedSeq = typeof current.endedSeq === 'number' ? current.endedSeq : 0;
+        const patch: NodeMediaSignal = {
+            ...current,
+            nodeType: nodeType ?? current.nodeType,
+            lastClientId: LOCAL_DISPLAY_CLIENT_ID,
+        };
+        if (type === 'started') {
+            patch.startedSeq = startedSeq + 1;
+            patch.startedAt = at;
+        }
+        if (type === 'ended') {
+            patch.endedSeq = endedSeq + 1;
+            patch.endedAt = at;
+        }
+        next.set(nodeId, patch);
+        return next;
+    });
+});
 
 /**
  * Initialize and connect to server

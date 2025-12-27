@@ -1,10 +1,12 @@
 /**
  * Purpose: Build Rete nodes and apply dynamic port constraints.
  */
+import { get } from 'svelte/store';
 import { ClassicPreset } from 'rete';
 import type { AreaPlugin } from 'rete-area-plugin';
 import type { NodeInstance, NodePort, PortType, Connection as EngineConnection } from '$lib/nodes/types';
 import type { NodeRegistry } from '@shugu/node-core';
+import { audienceClients } from '$lib/stores/manager';
 import {
   BooleanControl,
   ClientPickerControl,
@@ -70,8 +72,8 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
 
   const nodeLabel = (node: NodeInstance): string => {
     if (node.type === 'client-object') {
-      const id = String(node.config?.clientId ?? '');
-      return id ? `Client: ${id}` : 'Client';
+      const onlineCount = get(audienceClients).length;
+      return `Client: ${onlineCount} online`;
     }
     return nodeRegistry.get(node.type)?.label ?? node.type;
   };

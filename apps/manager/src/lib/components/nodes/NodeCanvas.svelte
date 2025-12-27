@@ -2790,6 +2790,8 @@
       lastClientKey = nextClientKey;
 
       schedulePatchReconcile('manager-state');
+      // Client node titles depend on online client count; refresh labels when client list changes.
+      void graphSync?.schedule(get(graphStateStore));
 
       const engineState = get(graphStateStore);
       // If a project ever ended up with a Display clientId inside a Client node, clear it.

@@ -5,6 +5,7 @@ import { get, writable, type Writable } from 'svelte/store';
 import type { LocalLoop } from '$lib/nodes';
 import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
+import { audienceClients } from '$lib/stores/manager';
 import type { GraphViewAdapter, NodeBounds } from '../adapters';
 
 export type NodeGroup = {
@@ -133,8 +134,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
   const nodeLabel = (node: NodeInstance): string => {
     if (node.type === 'client-object') {
-      const id = String(node.config?.clientId ?? '');
-      return id ? `Client: ${id}` : 'Client';
+      const onlineCount = get(audienceClients).length;
+      return `Client: ${onlineCount} online`;
     }
     return nodeRegistry.get(node.type)?.label ?? node.type;
   };
