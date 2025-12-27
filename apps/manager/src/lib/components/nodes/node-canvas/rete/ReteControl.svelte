@@ -619,6 +619,11 @@
     return Number.isFinite(num) ? num : null;
   };
 
+  const isInputConnected = (nodeId: string, portId: string): boolean =>
+    ($graphStateStore.connections ?? []).some(
+      (c: any) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === portId
+    );
+
   const readLocalNumber = (node: any, key: string): number | null => {
     const raw = node?.inputValues?.[key];
     const num = typeof raw === 'number' ? raw : Number(raw);
@@ -887,6 +892,23 @@
         const duration = await getMediaDurationSec(contentUrl, kind);
         if (duration !== null && contentUrl === lastTimelineUrl) {
           timeRangeDurationSec = duration;
+
+          // For video nodes, treat End=-1 as "media end" and hydrate it with the resolved duration
+          // so manager-side Finish can reflect `Current == End` (without requiring a manual end slider).
+          if (
+            kind === 'video' &&
+            timeRangeNodeId &&
+            (timeRangeNodeType === 'load-video-from-assets' ||
+              timeRangeNodeType === 'load-video-from-local') &&
+            !isInputConnected(timeRangeNodeId, 'endSec')
+          ) {
+            const node = nodeEngine.getNode(timeRangeNodeId);
+            const endStored = readLocalNumber(node, 'endSec') ?? -1;
+            if (endStored < 0) {
+              const rounded = Math.round(duration * 100) / 100;
+              nodeEngine.updateNodeInputValue(timeRangeNodeId, 'endSec', rounded);
+            }
+          }
         }
         if (kind === 'audio') {
           const bg = await getAudioSpectrogramDataUrl(contentUrl, {

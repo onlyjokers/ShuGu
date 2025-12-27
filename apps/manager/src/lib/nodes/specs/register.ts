@@ -1122,15 +1122,21 @@ if (!nodeRegistry.get('load-image-from-assets')) {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
       },
     ],
     process: (_inputs, config) => {
-      const assetId = typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
-      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const assetId =
+        typeof (config as any)?.assetId === 'string' ? String((config as any).assetId).trim() : '';
+      const fitRaw =
+        typeof (config as any)?.fit === 'string'
+          ? String((config as any).fit).trim().toLowerCase()
+          : '';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
       return { ref: assetId ? `asset:${assetId}${fitHash}` : '' };
     },
@@ -1369,6 +1375,7 @@ if (!nodeRegistry.get('load-image-from-local')) {
         defaultValue: 'contain',
         options: [
           { value: 'contain', label: 'Contain' },
+          { value: 'fit-screen', label: 'Fit Screen' },
           { value: 'cover', label: 'Cover' },
           { value: 'fill', label: 'Fill' },
         ],
@@ -1382,8 +1389,12 @@ if (!nodeRegistry.get('load-image-from-local')) {
             ? String((config as any).assetPath).trim()
             : '';
       const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
-      const fitRaw = typeof (config as any)?.fit === 'string' ? String((config as any).fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' ? fitRaw : 'contain';
+      const fitRaw =
+        typeof (config as any)?.fit === 'string'
+          ? String((config as any).fit).trim().toLowerCase()
+          : '';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
       if (!baseRef) return { ref: '' };
       if (!fitHash) return { ref: baseRef };

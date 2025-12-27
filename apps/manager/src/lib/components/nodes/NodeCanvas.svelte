@@ -1052,18 +1052,20 @@
 
   const resolvePatchDeploymentPlan = (): PatchDeploymentPlan | null => {
     const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const disabled = get(groupController.groupDisabledNodeIds);
     const roots = (graphState.nodes ?? [])
       .filter((n) => patchRootTypes.includes(String(n.type) as any))
       .map((n) => ({ id: String(n.id ?? ''), type: String(n.type ?? '') }))
       .filter((n) => Boolean(n.id));
-    if (roots.length === 0) return null;
+    const enabledRoots = roots.filter((root) => !disabled.has(root.id));
+    if (enabledRoots.length === 0) return null;
 
     const connectedAll = new Set(clientIdsInOrder());
     const connectedAudience = new Set(audienceClientIdsInOrder());
 
     const connections = graphState.connections ?? [];
 
-    const activeRoots = roots.filter((root) =>
+    const activeRoots = enabledRoots.filter((root) =>
       connections.some(
         (c) => String(c.sourceNodeId) === root.id && String(c.sourcePortId) === 'cmd'
       )
@@ -1076,10 +1078,10 @@
         .join(', ');
 
     const selectedRoots = (() => {
-      if (roots.length === 1) return roots;
+      if (enabledRoots.length === 1) return enabledRoots;
       if (activeRoots.length >= 1) return activeRoots;
       nodeEngine.lastError.set(
-        `Multiple patch roots found (${formatRootList(roots)}). Connect Deploy on one or more roots (or delete the others).`
+        `Multiple patch roots found (${formatRootList(enabledRoots)}). Connect Deploy on one or more roots (or delete the others).`
       );
       return null;
     })();
@@ -1366,6 +1368,7 @@
       }
     >();
     const desiredNodeIds = new Set<string>();
+    const retainedClientIds = new Set<string>();
 
     const groupsByRootKey = new Map<string, { rootIds: string[]; clientIds: string[] }>();
     for (const [clientId, rootIds] of plan.rootIdsByClientId.entries()) {
@@ -1381,37 +1384,76 @@
         payload = nodeEngine.exportGraphForPatchFromRootNodeIds(group.rootIds);
       } catch (err) {
         nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
-        return;
+        for (const clientId of group.clientIds) retainedClientIds.add(String(clientId));
+        continue;
       }
 
-      const isLocalOnlyPatch = (payload?.graph?.nodes ?? []).some((n: any) =>
-        localOnlyNodeTypes.has(String(n?.type ?? ''))
-      );
-
       let targets = group.clientIds.slice();
-      if (isLocalOnlyPatch) {
+      const applyLocalOnlyTargetFilter = () => {
+        const isLocalOnlyPatch = (payload?.graph?.nodes ?? []).some((n: any) =>
+          localOnlyNodeTypes.has(String(n?.type ?? ''))
+        );
+        if (!isLocalOnlyPatch) return true;
+
         const displayTargets = targets.filter((id) => isDisplayTarget(id));
         if (displayTargets.length === 0) {
           nodeEngine.lastError.set(
             'Load * From Local(Display only) requires a Display target (connect Deploy to Display).'
           );
-          stopAllDeployedPatches();
-          return;
+          return false;
         }
         targets = displayTargets;
+        return true;
+      };
+
+      if (!applyLocalOnlyTargetFilter() || targets.length === 0) continue;
+
+      let nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
+      let hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
+
+      // Disabled nodes do not exist on the client runtime; drop roots that include disabled nodes so other roots can
+      // still deploy and run.
+      if (hasDisabledNodes && group.rootIds.length > 1) {
+        const enabledRoots: string[] = [];
+        for (const rootId of group.rootIds) {
+          try {
+            const rootPayload = nodeEngine.exportGraphForPatchFromRootNodeIds([rootId]);
+            const rootNodeIds = new Set(
+              (rootPayload?.graph?.nodes ?? []).map((n: any) => String(n.id))
+            );
+            const rootHasDisabled = Array.from(rootNodeIds).some((id) => disabled.has(id));
+            if (!rootHasDisabled) enabledRoots.push(rootId);
+          } catch {
+            // ignore roots that fail to export
+          }
+        }
+
+        if (enabledRoots.length === 0) {
+          nodeEngine.lastError.set('Patch contains disabled nodes; enable them or remove from deploy.');
+          continue;
+        }
+
+        try {
+          payload = nodeEngine.exportGraphForPatchFromRootNodeIds(enabledRoots);
+        } catch (err) {
+          nodeEngine.lastError.set(err instanceof Error ? err.message : 'Export patch failed');
+          continue;
+        }
+
+        targets = group.clientIds.slice();
+        if (!applyLocalOnlyTargetFilter() || targets.length === 0) continue;
+
+        nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
+        hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
       }
 
-      if (targets.length === 0) continue;
+      if (hasDisabledNodes) {
+        nodeEngine.lastError.set('Patch contains disabled nodes; enable them or remove from deploy.');
+        continue;
+      }
 
       const topologySignature = computeTopologySignature(payload.graph ?? {});
       const patchId = String(payload?.meta?.loopId ?? '');
-      const nodeIds = new Set((payload?.graph?.nodes ?? []).map((n: any) => String(n.id)));
-
-      const hasDisabledNodes = Array.from(nodeIds).some((id) => disabled.has(id));
-      if (hasDisabledNodes) {
-        stopAllDeployedPatches();
-        return;
-      }
 
       applyTimeRangePlayheadsToPatchPayload(payload);
 
@@ -1421,14 +1463,27 @@
       }
     }
 
+    for (const clientId of retainedClientIds) {
+      const deployed = deployedPatchByClientId.get(clientId);
+      if (!deployed) continue;
+      for (const nodeId of deployed.nodeIds) desiredNodeIds.add(nodeId);
+    }
+
     if (desiredByClientId.size === 0) {
-      if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
+      if (retainedClientIds.size === 0) {
+        if (deployedPatchByClientId.size > 0) stopAllDeployedPatches();
+      } else {
+        syncPatchOffloadState(desiredNodeIds);
+        void applyPatchHighlights(desiredNodeIds);
+        const first = deployedPatchByClientId.values().next().value as DeployedPatch | undefined;
+        if (first) syncMidiBridgeRoutes(first.patchId, desiredNodeIds);
+      }
       return;
     }
 
     // Stop/remove patches on clients that are no longer targeted.
     for (const [clientId, patch] of deployedPatchByClientId.entries()) {
-      if (desiredByClientId.has(clientId)) continue;
+      if (desiredByClientId.has(clientId) || retainedClientIds.has(clientId)) continue;
       stopAndRemovePatchOnClient(clientId, patch.patchId);
       deployedPatchByClientId.delete(clientId);
     }
@@ -2600,16 +2655,30 @@
     });
 
     groupDisabledUnsub = groupController.groupDisabledNodeIds.subscribe((disabled) => {
-      const nodeIds = getDeployedPatchNodeIds();
-      if (nodeIds.size > 0) {
-        const disabledInPatch = Array.from(nodeIds).filter((id) => disabled.has(id));
+      let didStop = false;
+      for (const [clientId, patch] of deployedPatchByClientId.entries()) {
+        const disabledInPatch = Array.from(patch.nodeIds).filter((id) => disabled.has(id));
         // Avoid hard-stopping patches when the disabled nodes can be bypassed on the next reconcile.
         // This prevents audible restarts when toggling audio FX groups (e.g. Tone Delay).
         const shouldStop =
           disabledInPatch.length > 0 && !disabledInPatch.every((id) => isBypassableWhenDisabled(id));
-        if (shouldStop) {
-          stopAllDeployedPatches();
+        if (!shouldStop) continue;
+
+        stopAndRemovePatchOnClient(clientId, patch.patchId);
+        deployedPatchByClientId.delete(clientId);
+        midiBridgeActiveKeysByClientId.delete(clientId);
+
+        const prefix = `${clientId}|${patch.patchId}|`;
+        for (const key of Array.from(midiBridgeLastSignatureByClientKey.keys())) {
+          if (key.startsWith(prefix)) midiBridgeLastSignatureByClientKey.delete(key);
         }
+        didStop = true;
+      }
+
+      if (didStop) {
+        const nodeIds = getDeployedPatchNodeIds();
+        syncPatchOffloadState(nodeIds);
+        void applyPatchHighlights(nodeIds);
       }
       schedulePatchReconcile('group-gate');
     });

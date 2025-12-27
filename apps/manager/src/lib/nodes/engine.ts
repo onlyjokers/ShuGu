@@ -91,14 +91,28 @@ class NodeEngineClass {
           // UI/Debug: allow lightweight timeline simulation for asset playback nodes even when a
           // sensor loop is deployed, so their Finish ports can be observed in manager.
           const type = this.runtime.getNode(nodeId)?.type ?? '';
-          if (type === 'load-audio-from-assets' || type === 'load-audio-from-local') return true;
+          if (
+            type === 'load-audio-from-assets' ||
+            type === 'load-audio-from-local' ||
+            type === 'load-video-from-assets' ||
+            type === 'load-video-from-local'
+          ) {
+            return true;
+          }
           return false;
         }
         if (this.offloadedPatchNodeIds.has(nodeId)) {
           // UI/Debug: keep lightweight timeline simulation for asset playback nodes even when the
           // patch is offloaded to the client, so their Finish ports can be observed in manager.
           const type = this.runtime.getNode(nodeId)?.type ?? '';
-          if (type === 'load-audio-from-assets' || type === 'load-audio-from-local') return true;
+          if (
+            type === 'load-audio-from-assets' ||
+            type === 'load-audio-from-local' ||
+            type === 'load-video-from-assets' ||
+            type === 'load-video-from-local'
+          ) {
+            return true;
+          }
           return false;
         }
         return true;
