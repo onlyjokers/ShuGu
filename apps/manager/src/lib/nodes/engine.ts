@@ -86,8 +86,23 @@ class NodeEngineClass {
     this.runtime = new NodeRuntime(nodeRegistry, {
       tickIntervalMs: TICK_INTERVAL,
       isNodeEnabled: (nodeId) => !this.disabledNodeIds.has(nodeId),
-      isComputeEnabled: (nodeId) =>
-        !this.offloadedNodeIds.has(nodeId) && !this.offloadedPatchNodeIds.has(nodeId),
+      isComputeEnabled: (nodeId) => {
+        if (this.offloadedNodeIds.has(nodeId)) {
+          // UI/Debug: allow lightweight timeline simulation for asset playback nodes even when a
+          // sensor loop is deployed, so their Finish ports can be observed in manager.
+          const type = this.runtime.getNode(nodeId)?.type ?? '';
+          if (type === 'load-audio-from-assets' || type === 'load-audio-from-local') return true;
+          return false;
+        }
+        if (this.offloadedPatchNodeIds.has(nodeId)) {
+          // UI/Debug: keep lightweight timeline simulation for asset playback nodes even when the
+          // patch is offloaded to the client, so their Finish ports can be observed in manager.
+          const type = this.runtime.getNode(nodeId)?.type ?? '';
+          if (type === 'load-audio-from-assets' || type === 'load-audio-from-local') return true;
+          return false;
+        }
+        return true;
+      },
       isSinkEnabled: () => true,
       onTick: ({ time }) => {
         this.tickTime.set(time);

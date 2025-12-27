@@ -353,7 +353,7 @@
     pointer-events: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     max-width: 100%;
     overflow-x: auto;
     padding: 0;

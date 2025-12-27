@@ -111,6 +111,7 @@
 
   let graphState: GraphState = { nodes: [], connections: [] };
   let nodeCount = 0;
+  let lastGraphNodeCount = -1;
   let selectedNodeId = '';
   let importGraphInputEl: HTMLInputElement | null = null;
   let importTemplatesInputEl: HTMLInputElement | null = null;
@@ -2091,10 +2092,11 @@
     groupController.setRuntimeActiveByGroupId(activeByGroupId);
   };
 
-  const removeGroupPortNodesForGroupIds = (groupIds: string[]) => {
+  const removeGroupPortNodesForGroupIds = (groupIds: string[]): number => {
     const ids = new Set((groupIds ?? []).map((id) => String(id)).filter(Boolean));
-    if (ids.size === 0) return;
+    if (ids.size === 0) return 0;
 
+    let removed = 0;
     const state = nodeEngine.exportGraph();
     for (const node of state.nodes ?? []) {
       const type = String(node.type ?? '');
@@ -2102,7 +2104,10 @@
       const groupId = groupIdFromNode(node);
       if (!groupId || !ids.has(groupId)) continue;
       nodeEngine.removeNode(String(node.id));
+      removed += 1;
     }
+
+    return removed;
   };
 
   const disassembleGroupAndPorts = (groupId: string) => {
@@ -2728,6 +2733,21 @@
       if ((state.nodes ?? []).some((n) => String(n.type).startsWith('midi-'))) {
         void midiService.init();
       }
+
+      const nextNodeCount = state.nodes?.length ?? 0;
+      const prevNodeCount = lastGraphNodeCount;
+      lastGraphNodeCount = nextNodeCount;
+
+      // Only reconcile on node removal to avoid interfering with imports (nodes are added one-by-one).
+      if (prevNodeCount >= 0 && nextNodeCount < prevNodeCount) {
+        const removedGroupIds = groupController.reconcileGraphNodes(state);
+        if (removedGroupIds.length > 0) {
+          // Removing group ports triggers another graphState update; skip syncing this stale snapshot.
+          const removedPorts = removeGroupPortNodesForGroupIds(removedGroupIds);
+          if (removedPorts > 0) return;
+        }
+      }
+
       graphSync?.schedule(state);
       schedulePatchReconcile('graph-change');
       midiLoopBridgeDirty = true;

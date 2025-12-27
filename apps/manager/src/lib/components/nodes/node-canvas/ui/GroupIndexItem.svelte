@@ -20,9 +20,9 @@
   const sizeForDepth = (d: number) => {
     // Keep them "small squares" but ensure children are visibly nested inside parents.
     // (Previously child size matched the parent's inner box, making sub-groups look "missing".)
-    if (d <= 0) return 40;
-    if (d === 1) return 16;
-    return 10;
+    if (d <= 0) return 36;
+    if (d === 1) return 14;
+    return 9;
   };
 
   $: size = sizeForDepth(depth);
