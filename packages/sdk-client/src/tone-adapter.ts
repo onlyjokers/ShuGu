@@ -1276,26 +1276,30 @@ function createEffectInstance(
   let wrapper: EffectWrapper;
   switch (kind) {
     case 'tone-delay':
-      wrapper = createDelayEffect(params.time, params.feedback, params.wet);
+      wrapper = createDelayEffect(
+        params.time,
+        clamp(params.feedback, 0, 1),
+        clamp(params.wet, 0, 1)
+      );
       break;
     case 'tone-reverb':
-      wrapper = createReverbEffect(params.decay, params.preDelay, params.wet);
+      wrapper = createReverbEffect(params.decay, params.preDelay, clamp(params.wet, 0, 1));
       break;
     case 'tone-pitch':
       wrapper = createPitchEffect(
         params.pitch,
         params.windowSize,
         params.delayTime,
-        params.feedback,
-        params.wet
+        clamp(params.feedback, 0, 1),
+        clamp(params.wet, 0, 1)
       );
       break;
     case 'tone-resonator':
       wrapper = createResonatorEffect(
         params.delayTime,
-        params.resonance,
+        clamp(params.resonance, 0, 1),
         params.dampening,
-        params.wet
+        clamp(params.wet, 0, 1)
       );
       break;
   }
@@ -1356,8 +1360,8 @@ function updateEffectInstance(
     case 'tone-delay': {
       const effect = instance.wrapper.effect;
       const time = nextParams.time;
-      const feedback = nextParams.feedback;
-      const wet = nextParams.wet;
+      const feedback = clamp(nextParams.feedback, 0, 1);
+      const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.time !== time && !isToneLfoTargetActive(instance.nodeId, 'time')) {
         effect.delayTime.rampTo(time, DEFAULT_RAMP_SECONDS);
       }
@@ -1380,7 +1384,7 @@ function updateEffectInstance(
       const effect = instance.wrapper.effect;
       const decay = nextParams.decay;
       const preDelay = nextParams.preDelay;
-      const wet = nextParams.wet;
+      const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.decay !== decay) effect.decay = decay;
       if (instance.lastParams.preDelay !== preDelay) effect.preDelay = preDelay;
       if (
@@ -1411,8 +1415,8 @@ function updateEffectInstance(
       const pitch = nextParams.pitch;
       const windowSize = nextParams.windowSize;
       const delayTime = nextParams.delayTime;
-      const feedback = nextParams.feedback;
-      const wet = nextParams.wet;
+      const feedback = clamp(nextParams.feedback, 0, 1);
+      const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.pitch !== pitch) effect.pitch = pitch;
       if (instance.lastParams.windowSize !== windowSize) effect.windowSize = windowSize;
       if (instance.lastParams.delayTime !== delayTime) effect.delayTime = delayTime;
@@ -1429,9 +1433,9 @@ function updateEffectInstance(
     case 'tone-resonator': {
       const comb = instance.wrapper.effect;
       const delayTime = nextParams.delayTime;
-      const resonance = nextParams.resonance;
+      const resonance = clamp(nextParams.resonance, 0, 1);
       const dampening = nextParams.dampening;
-      const wet = nextParams.wet;
+      const wet = clamp(nextParams.wet, 0, 1);
       if (
         instance.lastParams.delayTime !== delayTime &&
         !isToneLfoTargetActive(instance.nodeId, 'delayTime')
