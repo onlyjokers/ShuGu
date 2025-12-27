@@ -4,13 +4,15 @@
     clientReadiness,
     state,
     toggleClientSelection,
-    selectAllClients,
+    selectAllClientsEnabled,
+    toggleSelectAllClients,
     clearSelection,
   } from '$lib/stores/manager';
   import { formatClientId } from '@shugu/ui-kit';
   import Button from '$lib/components/ui/Button.svelte';
 
   $: selectedIds = $state.selectedClientIds;
+  $: isSelectAllEnabled = $selectAllClientsEnabled;
 
   function readinessStatus(clientId: string): 'connected' | 'loading' | 'ready' | 'error' {
     const info = $clientReadiness.get(clientId);
@@ -41,18 +43,20 @@
     <h3 class="title">Clients ({$audienceClients.length})</h3>
     <div class="actions">
       <Button
-        variant="ghost"
+        variant={isSelectAllEnabled ? 'primary' : 'ghost'}
         size="sm"
-        on:click={selectAllClients}
-        disabled={$audienceClients.length === 0}
+        on:click={toggleSelectAllClients}
+        title={isSelectAllEnabled
+          ? 'Select-all mode enabled (new clients will be auto-selected). Click to disable.'
+          : 'Select all clients (auto-select new ones)'}
       >
-        All
+        {#if isSelectAllEnabled}All (Auto){:else}All{/if}
       </Button>
       <Button
         variant="ghost"
         size="sm"
         on:click={clearSelection}
-        disabled={selectedIds.length === 0}
+        disabled={selectedIds.length === 0 && !isSelectAllEnabled}
       >
         Clear
       </Button>

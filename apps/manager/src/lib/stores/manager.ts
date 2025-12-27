@@ -83,6 +83,9 @@ export const serverTime = derived(state, ($state) =>
 
 export const sendToDisplayEnabled = writable(false);
 
+// Select-all mode: keep all audience clients selected (including newly joined ones).
+export const selectAllClientsEnabled = writable(false);
+
 const LOCAL_DISPLAY_CLIENT_ID = 'local:display';
 
 if (typeof window !== 'undefined') {
@@ -99,6 +102,44 @@ if (typeof window !== 'undefined') {
             // ignore
         }
     });
+}
+
+let selectAllSyncScheduled = false;
+let selectAllSyncTargetIds: string[] | null = null;
+
+function scheduleSelectAllSync(clientIds: string[]): void {
+    selectAllSyncTargetIds = clientIds;
+    if (selectAllSyncScheduled) return;
+    selectAllSyncScheduled = true;
+
+    Promise.resolve().then(() => {
+        selectAllSyncScheduled = false;
+        if (!get(selectAllClientsEnabled)) return;
+        if (!sdk) return;
+
+        const ids = selectAllSyncTargetIds ?? [];
+        selectAllSyncTargetIds = null;
+        sdk.selectClients(ids);
+    });
+}
+
+function maybeSyncSelectAll(newState: ManagerState): void {
+    if (!get(selectAllClientsEnabled)) return;
+
+    const audienceIds = (newState.clients ?? [])
+        .filter((c) => c.group !== 'display')
+        .map((c) => String(c.clientId ?? ''))
+        .filter(Boolean);
+
+    const audienceIdSet = new Set(audienceIds);
+    const selectedIds = (newState.selectedClientIds ?? []).map(String).filter(Boolean);
+    const selectedIdSet = new Set(selectedIds);
+
+    const missingAudience = audienceIds.some((id) => !selectedIdSet.has(id));
+    const hasNonAudience = selectedIds.some((id) => !audienceIdSet.has(id));
+    if (missingAudience || hasNonAudience) {
+        scheduleSelectAllSync(audienceIds);
+    }
 }
 
 // Local Display (MessagePort) can emit node-media started/ended signals. Mirror these into `nodeMediaSignals`
@@ -181,6 +222,8 @@ export function connect(config: ManagerSDKConfig): void {
             }
             return next;
         });
+
+        maybeSyncSelectAll(newState);
     });
 
     // Subscribe to sensor data
@@ -292,10 +335,22 @@ export function selectClients(clientIds: string[]): void {
     sdk?.selectClients(clientIds.filter((id) => audienceIdSet.has(id)));
 }
 
+export function setSelectAllClients(enabled: boolean): void {
+    selectAllClientsEnabled.set(enabled);
+    if (enabled) {
+        selectClients(get(audienceClients).map((c) => c.clientId));
+    }
+}
+
+export function toggleSelectAllClients(): void {
+    setSelectAllClients(!get(selectAllClientsEnabled));
+}
+
 /**
  * Toggle client selection
  */
 export function toggleClientSelection(clientId: string): void {
+    selectAllClientsEnabled.set(false);
     const currentState = get(state);
     const isSelected = currentState.selectedClientIds.includes(clientId);
 
@@ -310,13 +365,14 @@ export function toggleClientSelection(clientId: string): void {
  * Select all clients
  */
 export function selectAllClients(): void {
-    selectClients(get(audienceClients).map((c) => c.clientId));
+    setSelectAllClients(true);
 }
 
 /**
  * Clear all selection
  */
 export function clearSelection(): void {
+    selectAllClientsEnabled.set(false);
     sdk?.clearSelection();
 }
 
