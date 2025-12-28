@@ -161,6 +161,7 @@ type AudioDataInstance = {
 };
 
 const DEFAULT_RAMP_SECONDS = 0.05;
+const MIN_TONE_DELAY_TIME_SECONDS = 0.001;
 const DEFAULT_STEP_SECONDS = 0.25;
 const DEFAULT_BUS = 'main';
 const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
@@ -261,6 +262,15 @@ function isToneLfoTargetActive(nodeId: string, portId: string): boolean {
 function toNumber(value: unknown, fallback: number): number {
   const num = typeof value === 'string' ? Number(value) : Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function toNonNegativeNumber(value: unknown, fallback: number): number {
+  return Math.max(0, toNumber(value, fallback));
+}
+
+function toToneDelayTimeSeconds(value: unknown, fallback: number): number {
+  // Safety: Tone delay time must always be > 0.
+  return Math.max(MIN_TONE_DELAY_TIME_SECONDS, toNumber(value, fallback));
 }
 
 function toString(value: unknown, fallback: string): string {
@@ -1197,7 +1207,11 @@ function disposeLoop(instance: ToneOscInstance): void {
 }
 
 function createDelayEffect(time: number, feedback: number, wet: number): EffectWrapper {
-  const effect = new toneModule!.FeedbackDelay({ delayTime: time, feedback, wet });
+  const effect = new toneModule!.FeedbackDelay({
+    delayTime: toToneDelayTimeSeconds(time, MIN_TONE_DELAY_TIME_SECONDS),
+    feedback,
+    wet,
+  });
   const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
   return {
     input: effect,
@@ -1276,15 +1290,16 @@ function createEffectInstance(
   enabled: boolean,
   nodeId: string
 ): ToneEffectInstance {
+  const safeParams: Record<string, number> = { ...params };
   let wrapper: EffectWrapper;
   switch (kind) {
-    case 'tone-delay':
-      wrapper = createDelayEffect(
-        params.time,
-        clamp(params.feedback, 0, 1),
-        clamp(params.wet, 0, 1)
-      );
+    case 'tone-delay': {
+      safeParams.time = toToneDelayTimeSeconds(params.time, 0.25);
+      safeParams.feedback = clamp(params.feedback, 0, 1);
+      safeParams.wet = clamp(params.wet, 0, 1);
+      wrapper = createDelayEffect(safeParams.time, safeParams.feedback, safeParams.wet);
       break;
+    }
     case 'tone-reverb':
       wrapper = createReverbEffect(params.decay, params.preDelay, clamp(params.wet, 0, 1));
       break;
@@ -1315,7 +1330,7 @@ function createEffectInstance(
     enabled,
     wiredExternally: false,
     wrapper,
-    lastParams: { ...params, bus, order, enabled },
+    lastParams: { ...safeParams, bus, order, enabled },
   };
 
   if (!enabled && wrapper.setWet) {
@@ -1362,7 +1377,7 @@ function updateEffectInstance(
   switch (instance.kind) {
     case 'tone-delay': {
       const effect = instance.wrapper.effect;
-      const time = nextParams.time;
+      const time = toToneDelayTimeSeconds(nextParams.time, 0.25);
       const feedback = clamp(nextParams.feedback, 0, 1);
       const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.time !== time && !isToneLfoTargetActive(instance.nodeId, 'time')) {
@@ -1380,7 +1395,7 @@ function updateEffectInstance(
       ) {
         applyWet(wet);
       }
-      instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
+      instance.lastParams = { ...instance.lastParams, ...nextParams, time, feedback, wet, enabled };
       break;
     }
     case 'tone-reverb': {
@@ -1603,9 +1618,10 @@ function createPlayerInstance(
 ): TonePlayerInstance {
   const bus = getOrCreateBus(busName);
   const gain = new toneModule!.Gain({ gain: params.volume as number });
+  const playbackRate = toNonNegativeNumber(params.playbackRate, 1);
   const player = new toneModule!.Player({
     loop: params.loop as boolean,
-    playbackRate: params.playbackRate as number,
+    playbackRate,
     detune: params.detune as number,
     autostart: false,
   } as any);
@@ -1638,7 +1654,7 @@ function createPlayerInstance(
     failedUrl: null,
     lastClip: null,
     lastCursorSec: null,
-    lastParams: { ...params },
+    lastParams: { ...params, playbackRate },
   };
 
   player.onstop = () => {
@@ -2506,18 +2522,18 @@ export function registerToneClientDefinitions(
     category: 'Audio',
     inputs: [
       { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-      { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
-      { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
-      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: MIN_TONE_DELAY_TIME_SECONDS },
+      { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
+      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
       { id: 'bus', label: 'Bus', type: 'string' },
       { id: 'order', label: 'Order', type: 'number' },
       { id: 'enabled', label: 'Enabled', type: 'boolean' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
-      { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
-      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+      { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: MIN_TONE_DELAY_TIME_SECONDS },
+      { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
+      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       { key: 'order', label: 'Order', type: 'number', defaultValue: 10 },
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
@@ -2804,7 +2820,7 @@ export function registerToneClientDefinitions(
         const baseUrlRaw = opts.resolveBaseUrlRaw(inputs, config);
         const url = deps.resolveAssetRef ? deps.resolveAssetRef(baseUrlRaw) : baseUrlRaw;
 
-        const playbackRate = toNumber(inputs.playbackRate ?? config.playbackRate, 1);
+        const playbackRate = toNonNegativeNumber(inputs.playbackRate ?? config.playbackRate, 1);
         const detune = toNumber(inputs.detune ?? config.detune, 0);
         const volume = toAssetVolumeGain(inputs.volume ?? config.volume);
         const loop = toBoolean(inputs.loop, false);
@@ -3340,7 +3356,7 @@ export function registerToneClientDefinitions(
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
@@ -3353,7 +3369,7 @@ export function registerToneClientDefinitions(
         assetKind: 'audio',
         defaultValue: '',
       },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -3394,7 +3410,7 @@ export function registerToneClientDefinitions(
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
@@ -3407,7 +3423,7 @@ export function registerToneClientDefinitions(
         assetKind: 'audio',
         defaultValue: '',
       },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },

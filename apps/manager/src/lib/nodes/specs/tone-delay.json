@@ -5,15 +5,15 @@
   "category": "Audio",
   "inputs": [
     { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
-    { "id": "time", "label": "Time (s)", "type": "number", "defaultValue": 0.25 },
-    { "id": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0.35 },
-    { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
+    { "id": "time", "label": "Time (s)", "type": "number", "defaultValue": 0.25, "min": 0.001 },
+    { "id": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0.35, "min": 0, "max": 1 },
+    { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3, "min": 0, "max": 1 }
   ],
   "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
   "configSchema": [
-    { "key": "time", "label": "Time (s)", "type": "number", "defaultValue": 0.25 },
-    { "key": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0.35 },
-    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 },
+    { "key": "time", "label": "Time (s)", "type": "number", "defaultValue": 0.25, "min": 0.001 },
+    { "key": "feedback", "label": "Feedback", "type": "number", "defaultValue": 0.35, "min": 0, "max": 1 },
+    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3, "min": 0, "max": 1 },
     { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
     { "key": "order", "label": "Order", "type": "number", "defaultValue": 10 },
     { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }

@@ -10,6 +10,8 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
   import { toneAudioEngine } from '@shugu/multimedia-core';
   import {
     audioState,
+    mode,
+    serverState,
     videoState,
     imageState,
     screenOverlay,
@@ -23,6 +25,9 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
   let serverUrl = 'https://localhost:3001';
   let assetReadToken = '';
   let pairToken = '';
+  let isConnected = false;
+
+  $: isConnected = $mode === 'local' || $serverState.status === 'connected';
 
   onMount(() => {
     const params = new URLSearchParams(window.location.search);
@@ -57,7 +62,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     if (!$audioState.enabled) void enableAudio();
   }}
 >
-  {#if $videoState.url}
+  {#if isConnected && $videoState.url}
     <VideoPlayer
       url={$videoState.url}
       playing={$videoState.playing}
@@ -74,7 +79,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     />
   {/if}
 
-  {#if $imageState.url}
+  {#if isConnected && $imageState.url}
     <ImageDisplay
       url={$imageState.url}
       duration={$imageState.duration}
@@ -83,7 +88,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
     />
   {/if}
 
-  {#if $screenOverlay.visible}
+  {#if isConnected && $screenOverlay.visible}
     <div
       class="screen-overlay"
       style={`background:${$screenOverlay.color}; opacity:${$screenOverlay.opacity}`}

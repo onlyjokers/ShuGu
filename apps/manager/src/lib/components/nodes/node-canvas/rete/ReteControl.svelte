@@ -675,11 +675,15 @@
     const kind = inferAssetKind(file.type);
     if (kind) formData.set('kind', kind);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+
     const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -714,8 +718,12 @@
       if (!uploaded) return;
       data?.setValue?.(`asset:${uploaded.assetId}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      fileUploadError = `Upload failed: ${message}`;
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        fileUploadError = 'Upload timed out. Please retry.';
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        fileUploadError = `Upload failed: ${message}`;
+      }
       console.warn('[file-picker] Upload failed', err);
     } finally {
       fileIsUploading = false;

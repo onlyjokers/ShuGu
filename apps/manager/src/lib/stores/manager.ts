@@ -116,7 +116,31 @@ if (typeof window !== 'undefined') {
         // ignore
     }
 
+    let lastSendToDisplayEnabled: boolean | null = null;
     sendToDisplayEnabled.subscribe((enabled) => {
+        // When disconnecting from Display mirroring, clear any long-lived effects so Display doesn't stay stuck.
+        if (lastSendToDisplayEnabled === true && !enabled) {
+            const bridge = get(displayBridgeState);
+            const hasLocal = bridge.status === 'connected';
+            const hasRemote = get(displayClients).length > 0;
+
+            if (hasLocal) {
+                sendLocalDisplayControl('stopMedia', {}, undefined);
+                sendLocalDisplayControl('hideImage', {}, undefined);
+                sendLocalDisplayControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
+            } else if (hasRemote && sdk) {
+                sdk.sendControl(targetGroup('display'), 'stopMedia', {}, undefined);
+                sdk.sendControl(targetGroup('display'), 'hideImage', {}, undefined);
+                sdk.sendControl(
+                    targetGroup('display'),
+                    'screenColor',
+                    { color: '#000000', opacity: 0, mode: 'solid' } as any,
+                    undefined
+                );
+            }
+        }
+        lastSendToDisplayEnabled = enabled;
+
         try {
             window.localStorage.setItem(SEND_TO_DISPLAY_STORAGE_KEY, enabled ? '1' : '0');
         } catch {

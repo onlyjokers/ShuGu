@@ -277,6 +277,24 @@ function stopCloseWatch(): void {
 }
 
 function teardownPort(): void {
+  // Best-effort: clear any long-lived effects so an unpaired Display doesn't stay "stuck" showing old content.
+  if (controlPort) {
+    try {
+      const cleanup: DisplayControlMessage[] = [
+        { type: 'shugu:display:control', action: 'stopMedia', payload: {} },
+        { type: 'shugu:display:control', action: 'hideImage', payload: {} },
+        {
+          type: 'shugu:display:control',
+          action: 'screenColor',
+          payload: { color: '#000000', opacity: 0, mode: 'solid' } as any,
+        },
+      ];
+      for (const msg of cleanup) controlPort.postMessage(msg);
+    } catch {
+      // ignore
+    }
+  }
+
   if (manifestUnsub) {
     manifestUnsub();
     manifestUnsub = null;

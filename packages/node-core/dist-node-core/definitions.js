@@ -378,8 +378,8 @@ function computeLoadAudioFinished(opts) {
     const durationSec = opts.reverse
         ? Math.max(0, startPos - opts.clipStart)
         : Math.max(0, resolvedClipEnd - startPos);
-    const rateRaw = Math.abs(opts.playbackRate);
-    const rate = Number.isFinite(rateRaw) && rateRaw > 0 ? rateRaw : 1;
+    const rateRaw = opts.playbackRate;
+    const rate = Number.isFinite(rateRaw) ? Math.max(0, rateRaw) : 1;
     const dtSec = Number.isFinite(opts.deltaTimeMs) ? Math.max(0, opts.deltaTimeMs) / 1000 : 0;
     if (durationSec <= 0) {
         state.ended = true;
@@ -413,7 +413,7 @@ function createLoadAudioFromAssetsNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             {
                 id: 'volume',
@@ -438,7 +438,7 @@ function createLoadAudioFromAssetsNode() {
                 assetKind: 'audio',
                 defaultValue: '',
             },
-            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -456,7 +456,7 @@ function createLoadAudioFromAssetsNode() {
             const play = coerceBoolean(inputs.play);
             const loop = coerceBoolean(inputs.loop);
             const reverse = coerceBoolean(inputs.reverse);
-            const playbackRate = coerceNumber(inputs.playbackRate ?? config.playbackRate, 1);
+            const playbackRate = Math.max(0, coerceNumber(inputs.playbackRate ?? config.playbackRate, 1));
             const clipStart = Math.max(0, coerceNumber(inputs.startSec, 0));
             const clipEndRaw = coerceNumber(inputs.endSec, -1);
             const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
@@ -511,7 +511,7 @@ function createLoadAudioFromLocalNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             {
                 id: 'volume',
@@ -536,7 +536,7 @@ function createLoadAudioFromLocalNode() {
                 assetKind: 'audio',
                 defaultValue: '',
             },
-            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+            { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -558,7 +558,7 @@ function createLoadAudioFromLocalNode() {
             const play = coerceBoolean(inputs.play);
             const loop = coerceBoolean(inputs.loop);
             const reverse = coerceBoolean(inputs.reverse);
-            const playbackRate = coerceNumber(inputs.playbackRate ?? config.playbackRate, 1);
+            const playbackRate = Math.max(0, coerceNumber(inputs.playbackRate ?? config.playbackRate, 1));
             const clipStart = Math.max(0, coerceNumber(inputs.startSec, 0));
             const clipEndRaw = coerceNumber(inputs.endSec, -1);
             const clipEnd = Number.isFinite(clipEndRaw) && clipEndRaw >= 0 ? Math.max(clipStart, clipEndRaw) : -1;
@@ -2099,18 +2099,18 @@ function createToneDelayNode() {
         category: 'Audio',
         inputs: [
             { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-            { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
-            { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
-            { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+            { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: 0.001 },
+            { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
+            { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
             { id: 'bus', label: 'Bus', type: 'string' },
             { id: 'order', label: 'Order', type: 'number' },
             { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
-            { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25 },
-            { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35 },
-            { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
+            { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: 0.001 },
+            { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
+            { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
             { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             { key: 'order', label: 'Order', type: 'number', defaultValue: 10 },
             { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
@@ -2473,31 +2473,23 @@ function createShowImageProcessorNode() {
         }
         return '';
     };
-    const toFiniteNumber = (value, fallback) => {
-        const n = typeof value === 'number' ? value : Number(value);
-        return Number.isFinite(n) ? n : fallback;
-    };
     return {
         type: 'proc-show-image',
         label: 'Dynamic Image Player',
         category: 'Player',
         inputs: [{ id: 'in', label: 'In', type: 'image' }],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
-        configSchema: [
-            { key: 'durationMs', label: 'Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 1 },
-        ],
-        process: (inputs, config, context) => {
+        configSchema: [],
+        process: (inputs, _config, context) => {
             const url = resolveUrl(inputs.in);
-            const durationRaw = toFiniteNumber(config.durationMs, 0);
-            const durationMs = Math.max(0, Math.floor(durationRaw));
-            const signature = `${url}|${durationMs}`;
+            const signature = url;
             const cached = showImageCommandCache.get(context.nodeId);
             if (cached && cached.signature === signature)
                 return { cmd: cached.cmd };
             const cmd = url
                 ? {
                     action: 'showImage',
-                    payload: { url, ...(durationMs > 0 ? { duration: durationMs } : {}) },
+                    payload: { url },
                 }
                 : { action: 'hideImage', payload: {} };
             showImageCommandCache.set(context.nodeId, { signature, cmd });
