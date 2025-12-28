@@ -30,6 +30,10 @@ export class NodeRuntime {
     // Cache last computed non-sink inputs so sinks can react to connected values (which are not stored in node.inputValues).
     lastComputedInputsByNode = new Map();
     lastOnSinkStateByNode = new Map();
+    // Track whether a node had any sink connections in the previous tick.
+    // This lets us fire `onDisable` (cleanup) when a sink is unplugged, and also ensures sinks re-run
+    // when they get reconnected even if the value didn't change.
+    lastHadSinkConnectionsByNode = new Map();
     constructor(registry, options) {
         this.registry = registry;
         if (typeof options?.tickIntervalMs === 'number' && Number.isFinite(options.tickIntervalMs)) {
@@ -121,6 +125,7 @@ export class NodeRuntime {
         this.lastComputedInputsByNode.clear();
         this.lastOnSinkStateByNode.clear();
         this.lastEnabledStateByNode.clear();
+        this.lastHadSinkConnectionsByNode.clear();
     }
     getNode(nodeId) {
         return this.nodes.get(nodeId);
@@ -167,6 +172,7 @@ export class NodeRuntime {
         this.lastComputedInputsByNode.clear();
         this.lastOnSinkStateByNode.clear();
         this.lastEnabledStateByNode.clear();
+        this.lastHadSinkConnectionsByNode.clear();
         this.lastTickTime = 0;
         clearInterval(this.timer);
         this.timer = null;
@@ -183,6 +189,7 @@ export class NodeRuntime {
         this.lastComputedInputsByNode.clear();
         this.lastOnSinkStateByNode.clear();
         this.lastEnabledStateByNode.clear();
+        this.lastHadSinkConnectionsByNode.clear();
     }
     runDisableHooks(now) {
         const nodesInOrder = this.executionOrder.length > 0 ? this.executionOrder : Array.from(this.nodes.values());
@@ -548,6 +555,9 @@ export class NodeRuntime {
                     }
                 }
                 this.lastEnabledStateByNode.set(node.id, false);
+                // Reset sink state so re-enabling triggers `onSink` even if the inputs didn't change.
+                this.lastOnSinkStateByNode.delete(node.id);
+                this.lastHadSinkConnectionsByNode.set(node.id, false);
                 node.outputValues = this.computeDisabledBypassOutputs(node) ?? {};
                 continue;
             }
@@ -600,12 +610,14 @@ export class NodeRuntime {
             if (this.isSinkEnabled && !this.isSinkEnabled(node.id))
                 continue;
             const sinkValues = {};
+            let sinkConnectionCount = 0;
             for (const conn of this.connections) {
                 if (conn.targetNodeId !== node.id)
                     continue;
                 const port = def.inputs.find((p) => p.id === conn.targetPortId);
                 if (!port || port.kind !== 'sink')
                     continue;
+                sinkConnectionCount += 1;
                 const sourceNode = this.nodes.get(conn.sourceNodeId);
                 if (!sourceNode)
                     continue;
@@ -618,8 +630,43 @@ export class NodeRuntime {
                 else
                     sinkValues[conn.targetPortId] = [prev, value];
             }
-            if (Object.keys(sinkValues).length === 0)
+            if (sinkConnectionCount === 0) {
+                const hadSink = this.lastHadSinkConnectionsByNode.get(node.id) ?? false;
+                if (hadSink) {
+                    // The sink was unplugged: fire cleanup and drop cached sink state so reconnecting
+                    // replays the sink even when the payload is identical.
+                    const computedInputs = this.lastComputedInputsByNode.get(node.id) ?? null;
+                    const fullInputs = {};
+                    for (const port of def.inputs) {
+                        if (port.kind === 'sink') {
+                            fullInputs[port.id] = node.inputValues[port.id];
+                            continue;
+                        }
+                        if (computedInputs && Object.prototype.hasOwnProperty.call(computedInputs, port.id)) {
+                            fullInputs[port.id] = computedInputs[port.id];
+                        }
+                        else {
+                            fullInputs[port.id] = node.inputValues[port.id] ?? port.defaultValue;
+                        }
+                    }
+                    try {
+                        if (def.onDisable) {
+                            context.nodeId = node.id;
+                            const effectiveConfig = this.getEffectiveConfig(node.id, node.config, now);
+                            def.onDisable(fullInputs, effectiveConfig, context);
+                        }
+                    }
+                    catch (err) {
+                        console.error(`[NodeRuntime] onDisable error in ${node.type} (${node.id})`, err);
+                    }
+                    finally {
+                        this.lastOnSinkStateByNode.delete(node.id);
+                    }
+                }
+                this.lastHadSinkConnectionsByNode.set(node.id, false);
                 continue;
+            }
+            this.lastHadSinkConnectionsByNode.set(node.id, true);
             const computedInputs = this.lastComputedInputsByNode.get(node.id) ?? null;
             const fullInputs = {};
             for (const port of def.inputs) {

@@ -27,6 +27,7 @@ export declare class NodeRuntime {
     private sinkSignatureHistory;
     private lastComputedInputsByNode;
     private lastOnSinkStateByNode;
+    private lastHadSinkConnectionsByNode;
     constructor(registry: NodeRegistry, options?: {
         tickIntervalMs?: number;
         onTick?: (info: {
