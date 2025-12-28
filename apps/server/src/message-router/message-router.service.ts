@@ -63,10 +63,7 @@ export class MessageRouterService {
     private routeControlMessage(message: ControlMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
         console.log(`[Router] Control message "${message.action}" -> ${socketIds.length} clients`);
-
-        socketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(socketIds, message);
     }
 
     /**
@@ -75,11 +72,7 @@ export class MessageRouterService {
      */
     private routeSensorDataMessage(message: SensorDataMessage): void {
         const managerSocketIds = this.clientRegistry.getAllManagerSocketIds();
-
-        // Forward to all managers
-        managerSocketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(managerSocketIds, message);
     }
 
     /**
@@ -88,10 +81,7 @@ export class MessageRouterService {
     private routeMediaMessage(message: MediaMetaMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
         console.log(`[Router] Media message -> ${socketIds.length} clients`);
-
-        socketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(socketIds, message);
     }
 
     /**
@@ -100,10 +90,7 @@ export class MessageRouterService {
     private routePluginMessage(message: PluginControlMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
         console.log(`[Router] Plugin message "${message.pluginId}:${message.command}" -> ${socketIds.length} clients`);
-
-        socketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(socketIds, message);
     }
 
     /**
@@ -153,9 +140,7 @@ export class MessageRouterService {
             payload: { clients },
         }, Date.now());
 
-        managerSocketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(managerSocketIds, message);
     }
 
     /**
@@ -172,9 +157,7 @@ export class MessageRouterService {
             payload: { clientId },
         }, Date.now());
 
-        managerSocketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(managerSocketIds, message);
 
         // Also send full client list
         this.broadcastClientListUpdate();
@@ -194,9 +177,7 @@ export class MessageRouterService {
             payload: { clientId },
         }, Date.now());
 
-        managerSocketIds.forEach(socketId => {
-            this.server!.to(socketId).emit('msg', message);
-        });
+        this.emitToSockets(managerSocketIds, message);
 
         // Also send full client list
         this.broadcastClientListUpdate();
@@ -216,5 +197,12 @@ export class MessageRouterService {
         }, Date.now());
 
         this.server.to(socketId).emit('msg', message);
+    }
+
+    private emitToSockets(socketIds: string[], message: Message): void {
+        if (!this.server) return;
+        if (socketIds.length === 0) return;
+        // Note: this still sends one packet per connection, but avoids per-socket JS loop jitter.
+        this.server.to(socketIds).emit('msg', message);
     }
 }

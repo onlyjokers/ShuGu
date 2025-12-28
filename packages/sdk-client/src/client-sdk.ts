@@ -35,6 +35,8 @@ export interface ClientState {
 
 export type MessageHandler<T = Message> = (message: T) => void;
 
+export type SocketTransport = 'polling' | 'websocket';
+
 export type LatestSensorData = {
     sensorType: SensorType;
     payload: SensorPayload;
@@ -76,6 +78,12 @@ export interface ClientSDKConfig {
     timeSyncInterval?: number;
     identity?: ClientIdentity;
     /**
+     * Socket.io transports preference.
+     * - Default: `['polling', 'websocket']` (best compatibility)
+     * - Performance mode: `['websocket']` (less jitter, but may fail on restrictive networks)
+     */
+    transports?: SocketTransport[];
+    /**
      * Optional Socket.io query parameters appended to the connection URL.
      * Note: `role` is always forced to `client` by the SDK.
      */
@@ -89,6 +97,7 @@ type ClientSDKInternalConfig = {
     reconnectionDelay: number;
     timeSyncInterval: number;
     identity?: ClientIdentity;
+    transports: SocketTransport[];
     query?: Record<string, string>;
 };
 
@@ -105,6 +114,13 @@ export class ClientSDK {
     private latestSensorData: LatestSensorData | null = null;
 
     constructor(config: ClientSDKConfig) {
+        const transports = (() => {
+            const raw = Array.isArray(config.transports) ? config.transports : ['polling', 'websocket'];
+            const normalized = raw.filter((t): t is SocketTransport => t === 'polling' || t === 'websocket');
+            const unique = Array.from(new Set(normalized));
+            return unique.length > 0 ? unique : ['polling', 'websocket'];
+        })();
+
         this.config = {
             serverUrl: config.serverUrl,
             autoReconnect: config.autoReconnect ?? true,
@@ -113,6 +129,7 @@ export class ClientSDK {
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
             identity: config.identity,
+            transports,
             query: config.query,
         };
 
@@ -142,8 +159,7 @@ export class ClientSDK {
         this.socket = io(this.config.serverUrl, {
             query: { ...(this.config.query ?? {}), role: 'client' },
             auth,
-            // Use polling first for better mobile compatibility, then upgrade to websocket
-            transports: ['polling', 'websocket'],
+            transports: this.config.transports,
             // Increase timeouts for mobile networks
             timeout: 20000,
             // Reconnection settings

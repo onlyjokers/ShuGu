@@ -33,6 +33,7 @@ export class MelSpectrogramScene implements VisualScene {
     private accumulator = 0;
     private palette: [number, number, number][];
     private resizeObserver: ResizeObserver | null = null;
+    private columnImage: ImageData | null = null;
 
     constructor(options: MelSceneOptions = {}) {
         this.options = {
@@ -88,6 +89,7 @@ export class MelSpectrogramScene implements VisualScene {
         this.container = null;
         this.smoothedBands = [];
         this.accumulator = 0;
+        this.columnImage = null;
     }
 
     update(dt: number, context: VisualContext): void {
@@ -148,10 +150,16 @@ export class MelSpectrogramScene implements VisualScene {
 
     private setSize(width: number, height: number): void {
         if (!this.canvas) return;
-        this.width = Math.max(1, Math.floor(width));
-        this.height = Math.max(1, Math.floor(height));
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
+        const nextW = Math.max(1, Math.floor(width));
+        const nextH = Math.max(1, Math.floor(height));
+        const changed = nextW !== this.width || nextH !== this.height;
+        this.width = nextW;
+        this.height = nextH;
+        if (this.canvas.width !== this.width) this.canvas.width = this.width;
+        if (this.canvas.height !== this.height) this.canvas.height = this.height;
+        if (changed && this.ctx) {
+            this.columnImage = this.ctx.createImageData(1, this.height);
+        }
     }
 
     private fillBackground(): void {
@@ -171,8 +179,10 @@ export class MelSpectrogramScene implements VisualScene {
 
         const h = this.height;
         const bandCount = melBands.length;
-        const column = this.ctx.createImageData(1, h);
-        const data = column.data;
+        if (!this.columnImage || this.columnImage.height !== h) {
+            this.columnImage = this.ctx.createImageData(1, h);
+        }
+        const data = this.columnImage.data;
 
         for (let y = 0; y < h; y++) {
             // Map pixel to mel band (low freq at bottom)
@@ -190,7 +200,7 @@ export class MelSpectrogramScene implements VisualScene {
             data[offset + 3] = 255;
         }
 
-        this.ctx.putImageData(column, x, 0);
+        this.ctx.putImageData(this.columnImage, x, 0);
     }
 
     private normalize(value: number): number {

@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { state, playMedia, stopMedia, showImage, hideImage } from '$lib/stores/manager';
+  import {
+    state,
+    clientToneReadiness,
+    playMedia,
+    stopMedia,
+    showImage,
+    hideImage,
+  } from '$lib/stores/manager';
   import { interruptMedia } from '$lib/stores/manager';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -10,6 +17,7 @@
 
   export let useSync = true;
   export let syncDelay = 500;
+  export let requireToneReady = false;
 
   let mediaUrl = '';
   let mediaVolume = 1;
@@ -30,6 +38,15 @@
   $: detectedType = getDetectedType(mediaUrl, mediaType);
   $: isImage = detectedType === 'image';
   $: isVideo = detectedType === 'video';
+  $: isAudio = detectedType === 'audio';
+
+  $: audienceIds = $state.clients.filter((c) => c.group !== 'display').map((c) => c.clientId);
+  $: selectedNotToneReadyCount = requireToneReady
+    ? $state.selectedClientIds.filter((id) => $clientToneReadiness.get(id)?.enabled !== true).length
+    : 0;
+  $: allNotToneReadyCount = requireToneReady
+    ? audienceIds.filter((id) => $clientToneReadiness.get(id)?.enabled !== true).length
+    : 0;
 
   function getDetectedType(url: string, type: typeof mediaType): 'audio' | 'video' | 'image' {
     if (type !== 'auto') return type as 'audio' | 'video' | 'image';
@@ -116,16 +133,31 @@
     <div class="button-group">
       <Button
         variant="primary"
-        disabled={!hasSelection || !mediaUrl}
+        disabled={
+          !hasSelection ||
+          !mediaUrl ||
+          (requireToneReady && isAudio && selectedNotToneReadyCount > 0)
+        }
         on:click={() => handlePlay(false)}
         fullWidth
       >
         {isImage ? 'Show' : 'Play'} Selected
       </Button>
-      <Button variant="secondary" disabled={!mediaUrl} on:click={() => handlePlay(true)} fullWidth>
+      <Button
+        variant="secondary"
+        disabled={!mediaUrl || (requireToneReady && isAudio && allNotToneReadyCount > 0)}
+        on:click={() => handlePlay(true)}
+        fullWidth
+      >
         {isImage ? 'Show' : 'Play'} All
       </Button>
     </div>
+
+    {#if requireToneReady && isAudio && (selectedNotToneReadyCount > 0 || allNotToneReadyCount > 0)}
+      <p class="tone-hint">
+        Tone gate: {audienceIds.length - allNotToneReadyCount}/{audienceIds.length} audience ready.
+      </p>
+    {/if}
 
     <div class="button-group">
       <Button
@@ -175,5 +207,11 @@
 
   .button-group.single {
     grid-template-columns: 1fr;
+  }
+
+  .tone-hint {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 </style>

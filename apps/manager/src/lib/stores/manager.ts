@@ -68,6 +68,15 @@ export type ClientReadiness = {
 // Per-client readiness (drives "client dot" UI state).
 export const clientReadiness = writable<Map<string, ClientReadiness>>(new Map());
 
+export type ClientToneReadiness = {
+    enabled: boolean | null;
+    error?: string;
+    updatedAt: number;
+};
+
+// Per-client Tone readiness (drives audio gating in show mode).
+export const clientToneReadiness = writable<Map<string, ClientToneReadiness>>(new Map());
+
 export type ClientScreenshotUpload = {
     dataUrl: string;
     mime?: string;
@@ -207,6 +216,7 @@ export function connect(config: ManagerSDKConfig): void {
     sdk.onStateChange((newState) => {
         state.set(newState);
         const ids = new Set((newState.clients ?? []).map((c) => c.clientId));
+        const now = Date.now();
 
         clientReadiness.update((prev) => {
             const next = new Map(prev);
@@ -217,13 +227,25 @@ export function connect(config: ManagerSDKConfig): void {
             }
 
             // Mark new clients as connected (yellow) until they report assets-ready.
-            const now = Date.now();
             for (const id of ids) {
                 if (!next.has(id)) {
                     next.set(id, { status: 'connected', updatedAt: now });
                 }
             }
 
+            return next;
+        });
+
+        clientToneReadiness.update((prev) => {
+            const next = new Map(prev);
+            for (const id of next.keys()) {
+                if (!ids.has(id)) next.delete(id);
+            }
+            for (const id of ids) {
+                if (!next.has(id)) {
+                    next.set(id, { enabled: null, updatedAt: now });
+                }
+            }
             return next;
         });
 
@@ -290,6 +312,19 @@ export function connect(config: ManagerSDKConfig): void {
         // Parse multimedia-core readiness events (custom sensor channel).
         if (data.sensorType === 'custom') {
             const payload = (data.payload ?? {}) as Record<string, unknown>;
+
+            if (payload?.kind === 'tone' && payload?.event === 'ready') {
+                const enabled = typeof payload.enabled === 'boolean' ? payload.enabled : null;
+                const error = payload.error ? String(payload.error) : undefined;
+                const now = Date.now();
+
+                clientToneReadiness.update((prev) => {
+                    const next = new Map(prev);
+                    const current = next.get(data.clientId) ?? { enabled: null, updatedAt: now };
+                    next.set(data.clientId, { ...current, enabled, error, updatedAt: now });
+                    return next;
+                });
+            }
 
             if (payload?.kind === 'node-media') {
                 const event = typeof payload.event === 'string' ? payload.event : '';
@@ -377,6 +412,7 @@ export function disconnect(): void {
     sdk = null;
     sensorData.set(new Map());
     clientReadiness.set(new Map());
+    clientToneReadiness.set(new Map());
     clientScreenshotUploads.set(new Map());
     nodeMediaSignals.set(new Map());
     parameterRegistry.clear();
