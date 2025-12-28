@@ -167,8 +167,8 @@
     <div class="section">
       <Slider
         label="ASCII Resolution"
-        min={6}
-        max={24}
+        min={1}
+        max={100}
         step={1}
         value={$controlState.asciiResolution}
         suffix=" px"

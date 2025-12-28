@@ -395,7 +395,7 @@
     if (asciiCanvas.style.width !== `${width}px`) asciiCanvas.style.width = `${width}px`;
     if (asciiCanvas.style.height !== `${height}px`) asciiCanvas.style.height = `${height}px`;
 
-    const cellSize = Math.max(6, Math.min(24, $asciiResolution));
+    const cellSize = Math.max(1, Math.min(100, $asciiResolution));
     const cols = Math.max(24, Math.floor(width / cellSize));
     const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
 

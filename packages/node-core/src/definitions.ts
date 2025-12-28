@@ -3123,12 +3123,12 @@ function createAsciiEffectProcessorNode(): NodeDefinition {
     category: 'Processors',
     inputs: [
       { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-      { id: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+      { id: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 1, max: 100, step: 1 },
     ],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-      { key: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+      { key: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 1, max: 100, step: 1 },
     ],
     process: (inputs, config) => {
       const enabled = (() => {
@@ -3145,7 +3145,7 @@ function createAsciiEffectProcessorNode(): NodeDefinition {
         const fromInput = inputs.resolution;
         const fromConfig = (config as any).resolution;
         const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 11);
-        const clamped = Number.isFinite(raw) ? Math.max(6, Math.min(24, raw)) : 11;
+        const clamped = Number.isFinite(raw) ? Math.max(1, Math.min(100, raw)) : 11;
         return Math.round(clamped);
       })();
 
