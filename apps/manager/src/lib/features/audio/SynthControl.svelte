@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { state, modulateSound, modulateSoundUpdate, stopSound } from '$lib/stores/manager';
+  import {
+    state,
+    clientToneReadiness,
+    modulateSound,
+    modulateSoundUpdate,
+    stopSound,
+  } from '$lib/stores/manager';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import { ParameterControl } from '$lib/components/parameters';
@@ -8,6 +14,7 @@
 
   export let useSync = true;
   export let syncDelay = 500;
+  export let requireToneReady = false;
 
   let playingStartAt = 0;
   let playingUntil = 0;
@@ -23,6 +30,15 @@
   const waveform = parameterWritable(parameterRegistry.get<SynthWaveform>('controls/synth/waveform')!);
 
   $: hasSelection = $state.selectedClientIds.length > 0;
+  $: audienceIds = $state.clients.filter((c) => c.group !== 'display').map((c) => c.clientId);
+  $: selectedIds = $state.selectedClientIds;
+
+  $: selectedNotToneReadyCount = requireToneReady
+    ? selectedIds.filter((id) => $clientToneReadiness.get(id)?.enabled !== true).length
+    : 0;
+  $: allNotToneReadyCount = requireToneReady
+    ? audienceIds.filter((id) => $clientToneReadiness.get(id)?.enabled !== true).length
+    : 0;
 
   function getExecuteAt() {
     if (!useSync) return undefined;
@@ -128,13 +144,18 @@
     <div class="button-group">
       <Button
         variant="primary"
-        disabled={!hasSelection}
+        disabled={!hasSelection || (requireToneReady && selectedNotToneReadyCount > 0)}
         on:click={() => handleModulateSound(false)}
         fullWidth
       >
         Play Selected
       </Button>
-      <Button variant="secondary" on:click={() => handleModulateSound(true)} fullWidth>
+      <Button
+        variant="secondary"
+        disabled={requireToneReady && allNotToneReadyCount > 0}
+        on:click={() => handleModulateSound(true)}
+        fullWidth
+      >
         Play All
       </Button>
       <Button
@@ -160,6 +181,12 @@
         Stop All
       </Button>
     </div>
+
+    {#if requireToneReady && (selectedNotToneReadyCount > 0 || allNotToneReadyCount > 0)}
+      <p class="tone-hint">
+        Tone gate: {audienceIds.length - allNotToneReadyCount}/{audienceIds.length} audience ready.
+      </p>
+    {/if}
   </div>
 </Card>
 
@@ -189,5 +216,11 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--space-sm);
+  }
+
+  .tone-hint {
+    margin: 0;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
   }
 </style>

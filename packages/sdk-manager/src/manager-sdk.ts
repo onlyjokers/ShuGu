@@ -44,6 +44,8 @@ export interface ManagerState {
 
 export type MessageHandler<T = Message> = (message: T) => void;
 
+export type SocketTransport = 'polling' | 'websocket';
+
 /**
  * Configuration for ManagerSDK
  */
@@ -53,6 +55,12 @@ export interface ManagerSDKConfig {
     reconnectionAttempts?: number;
     reconnectionDelay?: number;
     timeSyncInterval?: number;
+    /**
+     * Socket.io transports preference.
+     * - Default: `['polling', 'websocket']` (best compatibility)
+     * - Performance mode: `['websocket']` (less jitter, but may fail on restrictive networks)
+     */
+    transports?: SocketTransport[];
 }
 
 /**
@@ -74,6 +82,13 @@ export class ManagerSDK {
     private pendingControlFlushScheduled = false;
 
     constructor(config: ManagerSDKConfig) {
+        const transports = (() => {
+            const raw = Array.isArray(config.transports) ? config.transports : ['polling', 'websocket'];
+            const normalized = raw.filter((t): t is SocketTransport => t === 'polling' || t === 'websocket');
+            const unique = Array.from(new Set(normalized));
+            return unique.length > 0 ? unique : ['polling', 'websocket'];
+        })();
+
         this.config = {
             serverUrl: config.serverUrl,
             autoReconnect: config.autoReconnect ?? true,
@@ -81,6 +96,7 @@ export class ManagerSDK {
             reconnectionAttempts: config.reconnectionAttempts ?? Number.POSITIVE_INFINITY,
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
+            transports,
         };
 
         this.state = {
@@ -108,8 +124,7 @@ export class ManagerSDK {
 
         this.socket = io(this.config.serverUrl, {
             query: { role: 'manager' },
-            // Use polling first for better compatibility, then upgrade to websocket
-            transports: ['polling', 'websocket'],
+            transports: this.config.transports,
             // Increase timeouts
             timeout: 20000,
             // Reconnection settings

@@ -46,6 +46,7 @@
   let convWorkW = 0;
   let convWorkH = 0;
   let lastConvDraw = 0;
+  let lastAsciiDraw = 0;
   let sourceCanvas: HTMLCanvasElement | null = null;
   let mediaCanvas: HTMLCanvasElement | null = null;
   let mediaCtx: CanvasRenderingContext2D | null = null;
@@ -91,10 +92,10 @@
     // ASCII overlay setup
     asciiCtx = asciiCanvas.getContext('2d');
     tinyCanvas = document.createElement('canvas');
-    tinyCtx = tinyCanvas.getContext('2d');
+    tinyCtx = tinyCanvas.getContext('2d', { willReadFrequently: true });
     convCtx = convolutionCanvas.getContext('2d');
     convWorkCanvas = document.createElement('canvas');
-    convWorkCtx = convWorkCanvas.getContext('2d');
+    convWorkCtx = convWorkCanvas.getContext('2d', { willReadFrequently: true });
     handleResize();
 
     // Set up device orientation listener
@@ -238,6 +239,7 @@
     }
 
     if ($asciiEnabled) {
+      setBaseCanvasVisibility(false);
       if (asciiCanvas) asciiCanvas.style.visibility = 'visible';
       if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
     } else if ($convolution.enabled) {
@@ -376,6 +378,7 @@
   function drawAsciiOverlay() {
     if (!asciiCtx || !tinyCtx || !tinyCanvas) return;
 
+    const now = performance.now();
     const src = $convolution.enabled ? convolutionCanvas : ensureSourceCanvas();
     const width = container?.clientWidth ?? 0;
     const height = container?.clientHeight ?? 0;
@@ -385,17 +388,27 @@
     }
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    asciiCanvas.width = Math.floor(width * dpr);
-    asciiCanvas.height = Math.floor(height * dpr);
-    asciiCanvas.style.width = `${width}px`;
-    asciiCanvas.style.height = `${height}px`;
+    const targetW = Math.floor(width * dpr);
+    const targetH = Math.floor(height * dpr);
+    if (asciiCanvas.width !== targetW) asciiCanvas.width = targetW;
+    if (asciiCanvas.height !== targetH) asciiCanvas.height = targetH;
+    if (asciiCanvas.style.width !== `${width}px`) asciiCanvas.style.width = `${width}px`;
+    if (asciiCanvas.style.height !== `${height}px`) asciiCanvas.style.height = `${height}px`;
 
     const cellSize = Math.max(6, Math.min(24, $asciiResolution));
     const cols = Math.max(24, Math.floor(width / cellSize));
     const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
 
-    tinyCanvas.width = cols;
-    tinyCanvas.height = rows;
+    const cellCount = cols * rows;
+    const targetAsciiFps = (() => {
+      if ($currentScene === 'mel-scene') return cellCount >= 12_000 ? 10 : 15;
+      return cellCount >= 18_000 ? 15 : 30;
+    })();
+    if (now - lastAsciiDraw < 1000 / targetAsciiFps) return;
+    lastAsciiDraw = now;
+
+    if (tinyCanvas.width !== cols) tinyCanvas.width = cols;
+    if (tinyCanvas.height !== rows) tinyCanvas.height = rows;
     try {
       tinyCtx.drawImage(src, 0, 0, cols, rows);
     } catch (e) {
@@ -411,7 +424,6 @@
       return;
     }
 
-    asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     asciiCtx.fillStyle = '#0a0a0f';
     asciiCtx.fillRect(0, 0, width, height);
@@ -463,7 +475,6 @@
     }
 
     drawBorder(asciiCtx, width, height, cols, rows);
-    setBaseCanvasVisibility(false);
   }
 
   function setBaseCanvasVisibility(show: boolean) {
@@ -479,9 +490,6 @@
     if (!convCtx || !convolutionCanvas || !convWorkCanvas || !convWorkCtx) return;
 
     const now = performance.now();
-    if (now - lastConvDraw < 1000 / 30) return;
-    lastConvDraw = now;
-
     const width = container?.clientWidth ?? 0;
     const height = container?.clientHeight ?? 0;
     if (width === 0 || height === 0) return;
@@ -493,14 +501,28 @@
     }
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    convolutionCanvas.width = Math.floor(width * dpr);
-    convolutionCanvas.height = Math.floor(height * dpr);
-    convolutionCanvas.style.width = `${width}px`;
-    convolutionCanvas.style.height = `${height}px`;
+    const targetW = Math.floor(width * dpr);
+    const targetH = Math.floor(height * dpr);
+    if (convolutionCanvas.width !== targetW) convolutionCanvas.width = targetW;
+    if (convolutionCanvas.height !== targetH) convolutionCanvas.height = targetH;
+    if (convolutionCanvas.style.width !== `${width}px`) convolutionCanvas.style.width = `${width}px`;
+    if (convolutionCanvas.style.height !== `${height}px`) convolutionCanvas.style.height = `${height}px`;
 
     const scale = Math.max(0.1, Math.min(1, $convolution.scale));
-    const procW = Math.max(48, Math.floor(width * scale));
-    const procH = Math.max(48, Math.floor(height * scale));
+    let procW = Math.max(48, Math.floor(width * scale));
+    let procH = Math.max(48, Math.floor(height * scale));
+
+    const maxPixels = 260_000;
+    const pixels = procW * procH;
+    if (pixels > maxPixels) {
+      const ratio = Math.sqrt(maxPixels / pixels);
+      procW = Math.max(48, Math.floor(procW * ratio));
+      procH = Math.max(48, Math.floor(procH * ratio));
+    }
+
+    const targetFps = procW * procH > 180_000 ? 15 : 30;
+    if (now - lastConvDraw < 1000 / targetFps) return;
+    lastConvDraw = now;
 
     if (convWorkW !== procW || convWorkH !== procH) {
       convWorkW = procW;

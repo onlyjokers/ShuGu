@@ -132,6 +132,31 @@ const storedAudioEnabled =
 // Tone.js audio enablement state (requires user gesture to flip to true).
 export const audioEnabled = writable<boolean>(storedAudioEnabled);
 
+type ToneReadyPayload = {
+  kind: 'tone';
+  event: 'ready';
+  enabled: boolean;
+  error?: string;
+  updatedAt: number;
+};
+
+// Latest Tone readiness snapshot (used for reconnect + manager-side "Tone Ready gate").
+let lastToneReadyPayload: ToneReadyPayload | null = null;
+
+function reportToneReady(payload: ToneReadyPayload): void {
+  lastToneReadyPayload = payload;
+
+  try {
+    const sdkNow = sdk;
+    const connected =
+      Boolean(sdkNow?.getState?.().clientId) && sdkNow?.getState?.().status === 'connected';
+    if (!connected) return;
+    sdkNow?.sendSensorData('custom', payload as any, { trackLatest: false });
+  } catch {
+    // ignore
+  }
+}
+
 type MediaClipParams = {
   baseUrl: string;
   startSec: number;
@@ -351,8 +376,18 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
     // MultimediaCore finishes preload before clientId is assigned).
     if (newState.status === 'connected' && newState.clientId) {
       const snapshot = multimediaCore?.getState?.();
-      if (!snapshot) return;
       try {
+        const tonePayload =
+          lastToneReadyPayload ??
+          ({
+            kind: 'tone',
+            event: 'ready',
+            enabled: toneAudioEngine.isEnabled(),
+            updatedAt: Date.now(),
+          } satisfies ToneReadyPayload);
+        reportToneReady(tonePayload);
+
+        if (!snapshot) return;
         sdk?.sendSensorData(
           'custom',
           {
@@ -551,10 +586,30 @@ function persistAudioEnabled(enabled: boolean): void {
  * Enable Tone.js audio (must be called from a user gesture).
  */
 export async function enableAudio(): Promise<{ enabled: boolean; error?: string } | null> {
-  const result = await toneAudioEngine.start();
-  audioEnabled.set(result.enabled);
-  persistAudioEnabled(result.enabled);
-  return result;
+  try {
+    const result = await toneAudioEngine.start();
+    audioEnabled.set(result.enabled);
+    persistAudioEnabled(result.enabled);
+    reportToneReady({
+      kind: 'tone',
+      event: 'ready',
+      enabled: result.enabled,
+      ...(result.error ? { error: result.error } : {}),
+      updatedAt: Date.now(),
+    });
+    return result;
+  } catch (err) {
+    audioEnabled.set(false);
+    persistAudioEnabled(false);
+    reportToneReady({
+      kind: 'tone',
+      event: 'ready',
+      enabled: false,
+      error: err instanceof Error ? err.message : String(err),
+      updatedAt: Date.now(),
+    });
+    return { enabled: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
@@ -1073,7 +1128,18 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
   if (executeAt && sdk) {
     // Special efficient path for audio: use Web Audio scheduling
-    if (action === 'modulateSound' || action === 'playSound') {
+    const shouldUseAudioScheduling =
+      action === 'modulateSound' ||
+      action === 'playSound' ||
+      (action === 'playMedia' && (() => {
+        const mediaType = (payload as any)?.mediaType;
+        if (mediaType === 'video') return false;
+        const rawUrl = (payload as any)?.url;
+        const url = typeof rawUrl === 'string' ? rawUrl : String(rawUrl ?? '');
+        return !/\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(url);
+      })());
+
+    if (shouldUseAudioScheduling) {
       const delayMs = sdk.getDelayUntil(executeAt);
       const delaySeconds = Math.max(0, delayMs / 1000);
 
