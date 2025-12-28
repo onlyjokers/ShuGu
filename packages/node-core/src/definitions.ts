@@ -301,7 +301,7 @@ export function registerDefaultNodeDefinitions(
   registry.register(createToneReverbNode());
   registry.register(createToneGranularNode());
   registry.register(createAudioDataNode());
-  // Media playback helpers.
+  // Player helpers.
   registry.register(createLoadAudioFromAssetsNode());
   registry.register(createLoadAudioFromLocalNode());
   registry.register(createLoadImageFromAssetsNode());
@@ -1195,8 +1195,8 @@ function createLoadVideoFromLocalNode(): NodeDefinition {
 function createAudioOutNode(): NodeDefinition {
   return {
     type: 'audio-out',
-    label: 'Audio Patch to Client',
-    category: 'Media',
+    label: 'Static Audio Player',
+    category: 'Player',
     inputs: [{ id: 'in', label: 'In', type: 'audio', kind: 'sink' }],
     outputs: [
       // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
@@ -1233,8 +1233,8 @@ function createImageOutNode(deps: ClientObjectDeps): NodeDefinition {
 
   return {
     type: 'image-out',
-    label: 'Image to Client',
-    category: 'Media',
+    label: 'Static Image Player',
+    category: 'Player',
     inputs: [{ id: 'in', label: 'In', type: 'image', kind: 'sink' }],
     outputs: [
       // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
@@ -1318,8 +1318,8 @@ function createVideoOutNode(deps: ClientObjectDeps): NodeDefinition {
 
   return {
     type: 'video-out',
-    label: 'Video to Client',
-    category: 'Media',
+    label: 'Static Video Player',
+    category: 'Player',
     inputs: [{ id: 'in', label: 'In', type: 'video', kind: 'sink' }],
     outputs: [
       // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
@@ -2700,7 +2700,7 @@ function createPushImageUploadNode(): NodeDefinition {
     type: 'proc-push-image-upload',
     label: 'Push Image Upload',
     category: 'Processors',
-    inputs: [{ id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0, min: 0, max: 1, step: 1 }],
+    inputs: [{ id: 'trigger', label: 'Push', type: 'boolean', defaultValue: false }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [
       {
@@ -2718,8 +2718,7 @@ function createPushImageUploadNode(): NodeDefinition {
       { key: 'maxWidth', label: 'Max Width', type: 'number', defaultValue: 960, min: 128, step: 1 },
     ],
     process: (inputs, config, context) => {
-      const triggerRaw = inputs.trigger;
-      const triggerActive = typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);
+      const triggerActive = coerceBooleanOr(inputs.trigger, false);
 
       const prev = pushImageUploadTriggerState.get(context.nodeId) ?? false;
       pushImageUploadTriggerState.set(context.nodeId, triggerActive);
@@ -2748,6 +2747,9 @@ function createPushImageUploadNode(): NodeDefinition {
       };
 
       return { cmd };
+    },
+    onDisable: (_inputs, _config, context) => {
+      pushImageUploadTriggerState.delete(context.nodeId);
     },
   };
 }
@@ -2780,8 +2782,8 @@ function createShowImageProcessorNode(): NodeDefinition {
 
   return {
     type: 'proc-show-image',
-    label: 'Show Image',
-    category: 'Processors',
+    label: 'Dynamic Image Player',
+    category: 'Player',
     inputs: [{ id: 'in', label: 'In', type: 'image' }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [

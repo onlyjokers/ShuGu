@@ -232,6 +232,10 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
             },
           });
           control.inline = true;
+          if (instance.type === 'proc-push-image-upload' && input.id === 'trigger') {
+            control.button = true;
+            control.buttonLabel = String(input.label ?? 'Push');
+          }
           inp.addControl(control);
         }
         inp.showControl = true;

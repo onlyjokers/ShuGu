@@ -99,6 +99,8 @@ const DISPLAY_DEV_PORT = 5175;
 const DEFAULT_SERVER_PORT = 3001;
 const ASSET_READ_TOKEN_STORAGE_KEY = 'shugu-asset-read-token';
 const DISPLAY_BASE_PATH = '/display';
+const LOCAL_MEDIA_BROADCAST_CHANNEL = 'shugu:display:local-media';
+const LOCAL_MEDIA_BROADCAST_DEDUP_MS = 1500;
 
 let displayWindow: Window | null = null;
 let controlPort: MessagePort | null = null;
@@ -106,6 +108,132 @@ let closeWatchTimer: ReturnType<typeof setInterval> | null = null;
 let manifestUnsub: (() => void) | null = null;
 let lastManifestIdSentToLocal: string | null = null;
 let registeredDisplayFileIds = new Set<string>();
+let localMediaBroadcast: BroadcastChannel | null = null;
+const localMediaBroadcastLastSentById = new Map<string, number>();
+
+type LocalMediaBroadcastMessage = {
+  type: 'shugu:display:local-media';
+  command: 'register' | 'clear';
+  payload?: Record<string, unknown>;
+};
+
+function getLocalMediaBroadcast(): BroadcastChannel | null {
+  if (typeof window === 'undefined') return null;
+  if (typeof BroadcastChannel === 'undefined') return null;
+  if (localMediaBroadcast) return localMediaBroadcast;
+
+  try {
+    localMediaBroadcast = new BroadcastChannel(LOCAL_MEDIA_BROADCAST_CHANNEL);
+  } catch {
+    localMediaBroadcast = null;
+  }
+  return localMediaBroadcast;
+}
+
+function broadcastLocalMedia(command: LocalMediaBroadcastMessage['command'], payload?: Record<string, unknown>): void {
+  const channel = getLocalMediaBroadcast();
+  if (!channel) return;
+
+  const message: LocalMediaBroadcastMessage = {
+    type: 'shugu:display:local-media',
+    command,
+    ...(payload ? { payload } : {}),
+  };
+
+  try {
+    channel.postMessage(message);
+  } catch (error) {
+    console.warn('[display-bridge] BroadcastChannel postMessage failed:', error);
+  }
+}
+
+function collectDisplayFileRefsDeep(value: unknown): string[] {
+  const refs = new Set<string>();
+  const visited = new WeakSet<object>();
+
+  const walk = (current: unknown, depth: number) => {
+    if (depth > 8) return;
+    if (typeof current === 'string') {
+      if (current.trim().startsWith('displayfile:')) refs.add(current.trim());
+      return;
+    }
+    if (!current || typeof current !== 'object') return;
+    if (visited.has(current)) return;
+    visited.add(current);
+
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item, depth + 1);
+      return;
+    }
+
+    for (const item of Object.values(current as Record<string, unknown>)) {
+      walk(item, depth + 1);
+    }
+  };
+
+  walk(value, 0);
+  return Array.from(refs);
+}
+
+/**
+ * Ensure Display-local files referenced by `displayfile:<id>` are registered on Display.
+ *
+ * - Paired mode: sends `local-media/register` via MessagePort (no server upload).
+ * - Fallback mode: broadcasts the `File` over `BroadcastChannel` (same origin + same browser profile).
+ */
+export function ensureDisplayLocalFilesRegisteredFromValue(value: unknown): void {
+  const refs = collectDisplayFileRefsDeep(value);
+  if (refs.length === 0) return;
+  ensureDisplayLocalFilesRegistered(refs);
+}
+
+export function ensureDisplayLocalFilesRegistered(refs: string[]): void {
+  const now = Date.now();
+  const ids = new Set<string>();
+
+  for (const raw of refs ?? []) {
+    const ref = typeof raw === 'string' ? raw.trim() : '';
+    if (!ref) continue;
+
+    const displayFileId = parseDisplayFileId(ref);
+    if (!displayFileId || ids.has(displayFileId)) continue;
+    ids.add(displayFileId);
+
+    const entry = localDisplayMediaStore.getFileById(displayFileId);
+    if (!entry?.file) {
+      console.warn('[display-bridge] missing local display file for ref:', ref);
+      continue;
+    }
+
+    // Paired local MessagePort mode.
+    if (controlPort && !registeredDisplayFileIds.has(displayFileId)) {
+      sendPlugin('local-media', 'register', {
+        id: entry.id,
+        kind: entry.kind,
+        name: entry.name,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.sizeBytes,
+        lastModified: entry.lastModified,
+        file: entry.file,
+      });
+      registeredDisplayFileIds.add(displayFileId);
+    }
+
+    // Same-origin BroadcastChannel fallback (works even when Display isn't paired).
+    const lastSentAt = localMediaBroadcastLastSentById.get(displayFileId) ?? 0;
+    if (now - lastSentAt < LOCAL_MEDIA_BROADCAST_DEDUP_MS) continue;
+    localMediaBroadcastLastSentById.set(displayFileId, now);
+    broadcastLocalMedia('register', {
+      id: entry.id,
+      kind: entry.kind,
+      name: entry.name,
+      mimeType: entry.mimeType,
+      sizeBytes: entry.sizeBytes,
+      lastModified: entry.lastModified,
+      file: entry.file,
+    });
+  }
+}
 
 function createRandomToken(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -155,6 +283,7 @@ function teardownPort(): void {
   }
   lastManifestIdSentToLocal = null;
   registeredDisplayFileIds.clear();
+  localMediaBroadcastLastSentById.clear();
   displayBridgeNodeMedia.set(null);
 
   if (!controlPort) return;
@@ -372,6 +501,7 @@ export function pairDisplay(options?: {
     // New local session: clear any previous display-local file registry on the Display side.
     registeredDisplayFileIds.clear();
     sendPlugin('local-media', 'clear');
+    broadcastLocalMedia('clear');
     startManifestSync();
   } catch (error) {
     teardownPort();
@@ -397,26 +527,7 @@ export function sendControl(action: ControlAction, payload: ControlPayload, exec
   if (!controlPort) return;
 
   // If the payload references a Display-local file, register it first via MessagePort (no server upload).
-  const urlRaw = (payload as any)?.url;
-  const url = typeof urlRaw === 'string' ? urlRaw.trim() : '';
-  const displayFileId = url ? parseDisplayFileId(url) : null;
-  if (displayFileId && !registeredDisplayFileIds.has(displayFileId)) {
-    const entry = localDisplayMediaStore.getFileById(displayFileId);
-    if (entry?.file) {
-      sendPlugin('local-media', 'register', {
-        id: entry.id,
-        kind: entry.kind,
-        name: entry.name,
-        mimeType: entry.mimeType,
-        sizeBytes: entry.sizeBytes,
-        lastModified: entry.lastModified,
-        file: entry.file,
-      });
-      registeredDisplayFileIds.add(displayFileId);
-    } else {
-      console.warn('[display-bridge] missing local display file for ref:', displayFileId);
-    }
-  }
+  ensureDisplayLocalFilesRegisteredFromValue(payload);
 
   const message: DisplayControlMessage = {
     type: 'shugu:display:control',

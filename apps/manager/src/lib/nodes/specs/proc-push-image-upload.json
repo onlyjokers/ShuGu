@@ -3,7 +3,6 @@
   "type": "proc-push-image-upload",
   "label": "Push Image Upload",
   "category": "Processors",
-  "inputs": [{ "id": "trigger", "label": "Push", "type": "number", "min": 0, "max": 1, "step": 1 }],
+  "inputs": [{ "id": "trigger", "label": "Push", "type": "boolean" }],
   "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }]
 }
-

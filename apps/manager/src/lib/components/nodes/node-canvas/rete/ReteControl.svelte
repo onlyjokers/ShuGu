@@ -43,9 +43,10 @@
     data instanceof ClassicPreset.InputControl && data.type === 'number'
       ? ((data as any).step ?? 'any')
       : undefined;
-  $: isMomentaryButton =
-    data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
-  $: momentaryButtonLabel = isMomentaryButton ? String((data as any).buttonLabel ?? 'Push') : 'Push';
+  $: isMomentaryButton = data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
+  $: momentaryButtonLabel = isMomentaryButton
+    ? String((data as any).buttonLabel ?? data?.label ?? 'Push')
+    : 'Push';
   const graphStateStore = nodeEngine.graphState;
   const isRunningStore = nodeEngine.isRunning;
   const tickTimeStore = nodeEngine.tickTime;
@@ -103,6 +104,7 @@
   }
 
   let momentaryInputResetTimer: ReturnType<typeof setTimeout> | null = null;
+  let momentaryBooleanResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   function pressMomentaryInput(): void {
     if (!(data instanceof ClassicPreset.InputControl)) return;
@@ -115,6 +117,20 @@
     momentaryInputResetTimer = setTimeout(() => {
       momentaryInputResetTimer = null;
       data.setValue(0);
+    }, 120);
+  }
+
+  function pressMomentaryBooleanInput(): void {
+    if (!data || data.controlType !== 'boolean') return;
+    if (!data.button) return;
+    if (data.readonly) return;
+
+    if (momentaryBooleanResetTimer) clearTimeout(momentaryBooleanResetTimer);
+    data.setValue(true);
+    // Keep the trigger high long enough for at least one graph tick to observe it.
+    momentaryBooleanResetTimer = setTimeout(() => {
+      momentaryBooleanResetTimer = null;
+      data.setValue(false);
     }, 120);
   }
 
@@ -159,6 +175,7 @@
 
   let didRefreshLocalMedia = false;
 
+  let isLocalDisplayConnected = false;
   $: isLocalDisplayConnected = $displayBridgeState?.status === 'connected';
 
   function buildAssetOptions(kind: string): { value: string; label: string }[] {
@@ -203,7 +220,6 @@
   let localAssetDraftDirty = false;
   let localAssetError: string | null = null;
   let localAssetValidating = false;
-  let isLocalDisplayConnected = false;
   let localAssetPickerKind: LocalMediaKind | null = null;
   let localAssetSource: 'display' | 'server' = 'display';
   let localAssetSourceInitialized = false;
@@ -1025,6 +1041,7 @@
   onDestroy(() => {
     stopTimeRangePlayback();
     if (momentaryInputResetTimer) clearTimeout(momentaryInputResetTimer);
+    if (momentaryBooleanResetTimer) clearTimeout(momentaryBooleanResetTimer);
     if (lastTimelineDisplayFileUrl) {
       try {
         URL.revokeObjectURL(lastTimelineDisplayFileUrl);
@@ -1362,22 +1379,36 @@
     </select>
   </div>
 {:else if data?.controlType === 'boolean'}
-  <div class="control-field boolean-field {isInline ? 'inline' : ''}">
-    <label class="toggle {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
-      <input
-        type="checkbox"
-        checked={Boolean(data.value)}
+  {#if Boolean(data.button)}
+    <div class="control-field {isInline ? 'inline' : ''}">
+      <button
+        type="button"
+        class="control-btn {isInline ? 'inline' : ''}"
         disabled={data.readonly}
-        on:change={changeBoolean}
-      />
-      <span class="toggle-track">
-        <span class="toggle-thumb"></span>
-      </span>
-      {#if hasLabel}
-        <span class="toggle-label">{data.label}</span>
-      {/if}
-    </label>
-  </div>
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={pressMomentaryBooleanInput}
+      >
+        {data.buttonLabel ?? data.label ?? 'Push'}
+      </button>
+    </div>
+  {:else}
+    <div class="control-field boolean-field {isInline ? 'inline' : ''}">
+      <label class="toggle {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
+        <input
+          type="checkbox"
+          checked={Boolean(data.value)}
+          disabled={data.readonly}
+          on:change={changeBoolean}
+        />
+        <span class="toggle-track">
+          <span class="toggle-thumb"></span>
+        </span>
+        {#if hasLabel}
+          <span class="toggle-label">{data.label}</span>
+        {/if}
+      </label>
+    </div>
+  {/if}
 {:else if data?.controlType === 'note'}
   <div class="control-field note-field {isInline ? 'inline' : ''}">
     {#if hasLabel}
@@ -1672,7 +1703,9 @@
       </select>
 
       {#if !isLocalDisplayConnected}
-        <div class="local-asset-hint">Display is not paired yet. Open Display first.</div>
+        <div class="local-asset-hint">
+          Display is not paired. If Display is open in the same browser (same origin), local files can still work; otherwise click Open Display.
+        </div>
       {/if}
       <div class="local-asset-hint">
         Browser security: a deployed website cannot read arbitrary paths like <code>/Users/...</code>. Use the file picker.

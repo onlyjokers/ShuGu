@@ -1,8 +1,8 @@
 {
-  "__purpose": "Processor node: convert an incoming image url (including data URLs) into showImage/hideImage commands for routing to Client/Display sinks.",
+  "__purpose": "Player node: convert an incoming image url (including data URLs) into showImage/hideImage commands for routing to Client/Display sinks.",
   "type": "proc-show-image",
-  "label": "Show Image",
-  "category": "Processors",
+  "label": "Dynamic Image Player",
+  "category": "Player",
   "inputs": [{ "id": "in", "label": "In", "type": "image" }],
   "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }]
 }
