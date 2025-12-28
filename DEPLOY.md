@@ -97,8 +97,10 @@ pm2 startup
 
 Nginx will serve as the reverse proxy, handling HTTPS and routing traffic.
 - Root `/`: Client App
+- `/display`: Display App
 - `/manager`: Manager App
-- `/socket.io`: Server
+- `/api/*`: Server HTTP API (assets/local-media/etc.)
+- `/socket.io`: Server (Socket.io)
 
 1.  Copy the example config or create a new one:
     ```bash
@@ -169,4 +171,4 @@ If you see an old project or the "Welcome to nginx" page instead of ShuGu:
     -   Nginx logs: `sudo tail -f /var/log/nginx/error.log`
 -   **Ports:**
     -   Ensure your server's firewall allows ports 80 and 443.
-    -   The internal apps run on localhost:3000 (Client) and localhost:3001 (Server). These do NOT need to be exposed publicly if Nginx is configured correctly.
+    -   The internal apps run on localhost:3000 (Client), localhost:3002 (Manager), localhost:3003 (Display) and localhost:3001 (Server). These do NOT need to be exposed publicly if Nginx is configured correctly.

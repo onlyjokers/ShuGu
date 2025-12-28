@@ -1137,8 +1137,13 @@
       const runtimeNode = nodeEngine.getNode(nodeId);
       if (!runtimeNode) return [];
       const computed = nodeEngine.getLastComputedInputs(nodeId);
-      const getComputedOrStoredInput = (portId: string): unknown => {
-        if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+      const isPortConnected = (portId: string) =>
+        connections.some(
+          (c) => String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === String(portId)
+        );
+      const getEffectiveInput = (portId: 'index' | 'range' | 'random'): unknown => {
+        const connected = isPortConnected(portId);
+        if (connected && computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
           return (computed as any)[portId];
         }
         return (runtimeNode.inputValues as any)?.[portId];
@@ -1148,12 +1153,12 @@
       const total = clients.length;
       if (total === 0) return [];
 
-      const randomRaw = getComputedOrStoredInput('random');
+      const randomRaw = getEffectiveInput('random');
       const random = coerceBoolean(randomRaw, false);
       const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
 
       const primaryId = resolveClientId(nodeId, 'out');
-      const indexRaw = getComputedOrStoredInput('index');
+      const indexRaw = getEffectiveInput('index');
       const indexCandidate = toFiniteNumber(indexRaw, Number.NaN);
       const indexFromInput = Number.isFinite(indexCandidate)
         ? clampInt(indexCandidate, 1, total)
@@ -1161,7 +1166,7 @@
       const indexFromPrimary = primaryId ? ordered.indexOf(primaryId) + 1 : 0;
       const index = indexFromInput ?? (indexFromPrimary > 0 ? indexFromPrimary : 1);
 
-      const rangeRaw = getComputedOrStoredInput('range');
+      const rangeRaw = getEffectiveInput('range');
       const rangeCandidate = toFiniteNumber(rangeRaw, 1);
       const range = clampInt(rangeCandidate, 1, total);
 
@@ -1724,26 +1729,96 @@
     const node = nodeEngine.getNode(nodeId);
     if (!node || node.type !== 'client-object') return;
 
-    const currentIndexRaw = toFiniteNumber((node.inputValues as any)?.index, 1);
-    const currentRangeRaw = toFiniteNumber((node.inputValues as any)?.range, 1);
-    const currentRandomRaw = (node.inputValues as any)?.random;
+    const computed = nodeEngine.getLastComputedInputs(nodeId);
+    const getEffectiveInput = (portId: 'index' | 'range' | 'random'): unknown => {
+      const connected = isInputConnected(nodeId, portId);
+      if (connected && computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+        return (computed as any)[portId];
+      }
+      return (node.inputValues as any)?.[portId];
+    };
 
-    const desiredRange = typeof next.range === 'number' ? next.range : currentRangeRaw;
+    const currentIndexRaw = toFiniteNumber(getEffectiveInput('index'), 1);
+    const currentRangeRaw = toFiniteNumber(getEffectiveInput('range'), 1);
+    const currentRandomRaw = getEffectiveInput('random');
+
     const desiredRandom =
       typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
-    const desiredIndex =
-      typeof next.index === 'number'
-        ? next.index
-        : typeof next.clientId === 'string' && next.clientId
-          ? (() => {
-              const ordered = desiredRandom ? buildStableRandomOrder(nodeId, clients) : clients;
-              const pos = ordered.indexOf(next.clientId);
-              return pos >= 0 ? pos + 1 : currentIndexRaw;
-            })()
-          : currentIndexRaw;
+
+    let desiredIndex =
+      typeof next.index === 'number' && Number.isFinite(next.index) ? next.index : currentIndexRaw;
+    let desiredRange =
+      typeof next.range === 'number' && Number.isFinite(next.range) ? next.range : currentRangeRaw;
+
+    // Client picker binding: treat clicks as "toggle this client in the range selection" and
+    // translate them to index/range updates (single source of truth per node). If index/range are
+    // externally connected, the picker becomes display-only.
+    if (
+      typeof next.clientId === 'string' &&
+      next.clientId &&
+      !(typeof next.index === 'number') &&
+      !(typeof next.range === 'number')
+    ) {
+      if (isInputConnected(nodeId, 'index') || isInputConnected(nodeId, 'range')) return;
+
+      const total = clients.length;
+      const ordered = desiredRandom ? buildStableRandomOrder(nodeId, clients) : clients;
+      const clickedPos = ordered.indexOf(next.clientId);
+      if (clickedPos >= 0 && total > 0) {
+        const dist = (from: number, to: number) => (to - from + total) % total;
+        const currentIndex = clampInt(currentIndexRaw, 1, total);
+        const currentRange = clampInt(currentRangeRaw, 1, total);
+        const startPos = currentIndex - 1;
+        const endPos = (startPos + currentRange - 1) % total;
+
+        const offset = dist(startPos, clickedPos);
+        const isSelected = offset < currentRange;
+
+        if (!isSelected) {
+          const extendRange = offset + 1; // include clicked by extending end forward
+          const shiftRange = dist(clickedPos, endPos) + 1; // include clicked by shifting start back
+          if (shiftRange < extendRange) {
+            desiredIndex = clickedPos + 1;
+            desiredRange = shiftRange;
+          } else {
+            desiredIndex = currentIndex;
+            desiredRange = extendRange;
+          }
+        } else {
+          const prefixLen = offset; // clients before clicked in current selection
+          const suffixLen = dist(clickedPos, endPos); // clients after clicked in current selection
+
+          if (prefixLen === 0 && suffixLen === 0) {
+            // Can't represent an empty selection; move the window forward so the clicked client
+            // is no longer selected while keeping range=1.
+            desiredIndex = ((startPos + 1) % total) + 1;
+            desiredRange = 1;
+          } else if (suffixLen > prefixLen) {
+            desiredIndex = ((clickedPos + 1) % total) + 1;
+            desiredRange = suffixLen;
+          } else {
+            desiredIndex = currentIndex;
+            desiredRange = prefixLen;
+          }
+        }
+      }
+    }
 
     const slice = computeClientSlice(nodeId, desiredIndex, desiredRange, desiredRandom);
     if (!slice) return;
+
+    // When the picker drives index/range, also forward overrides to any deployed loop/patch runtime.
+    // (Input controls already do this via their own change handlers.)
+    const pickerOnlyChange =
+      typeof next.clientId === 'string' &&
+      next.clientId &&
+      typeof next.index !== 'number' &&
+      typeof next.range !== 'number' &&
+      typeof next.random !== 'boolean';
+    if (pickerOnlyChange) {
+      sendNodeOverride(nodeId, 'input', 'index', slice.index);
+      sendNodeOverride(nodeId, 'input', 'range', slice.range);
+    }
 
     await syncClientNodeUi(nodeId, slice);
   };
@@ -1758,20 +1833,23 @@
       const nodeId = String(node.id);
       const nodeInstance = nodeEngine.getNode(nodeId);
       const computed = nodeEngine.getLastComputedInputs(nodeId);
+      const useComputedIndex = isInputConnected(nodeId, 'index');
+      const useComputedRange = isInputConnected(nodeId, 'range');
+      const useComputedRandom = isInputConnected(nodeId, 'random');
       const indexRaw = toFiniteNumber(
-        computed && Object.prototype.hasOwnProperty.call(computed, 'index')
+        useComputedIndex && computed && Object.prototype.hasOwnProperty.call(computed, 'index')
           ? (computed as any).index
           : (nodeInstance?.inputValues as any)?.index,
         1
       );
       const rangeRaw = toFiniteNumber(
-        computed && Object.prototype.hasOwnProperty.call(computed, 'range')
+        useComputedRange && computed && Object.prototype.hasOwnProperty.call(computed, 'range')
           ? (computed as any).range
           : (nodeInstance?.inputValues as any)?.range,
         1
       );
       const randomRaw =
-        computed && Object.prototype.hasOwnProperty.call(computed, 'random')
+        useComputedRandom && computed && Object.prototype.hasOwnProperty.call(computed, 'random')
           ? (computed as any).random
           : (nodeInstance?.inputValues as any)?.random;
       const slice = computeClientSlice(nodeId, indexRaw, rangeRaw, randomRaw);
@@ -1796,7 +1874,18 @@
 
     const loop = loopController?.loopActions.getDeployedLoopForNode(nodeId);
     if (loop) {
-      const clientId = loopController?.loopActions.getLoopClientId(loop);
+      // Important: once a loop is deployed, the executor client is the "source of truth" for where to send overrides.
+      // Using the current `client-object.config.clientId` is incorrect because Index/Range changes can retarget the
+      // picker selection without redeploying the loop.
+      const deployedClientId = (() => {
+        const statusMap = get(executorStatusByClient);
+        for (const [cid, status] of statusMap.entries()) {
+          if (String((status as any)?.loopId ?? '') === String(loop.id)) return String(cid);
+        }
+        return '';
+      })();
+
+      const clientId = deployedClientId || loopController?.loopActions.getLoopClientId(loop);
       if (!clientId) return;
 
       sdk.sendPluginControl(

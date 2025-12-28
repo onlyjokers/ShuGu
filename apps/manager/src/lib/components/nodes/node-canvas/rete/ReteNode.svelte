@@ -26,12 +26,28 @@
 
   let nodeEl: HTMLDivElement | null = null;
 
+  // Feature: Node minimize/collapse UI (manager-only visual state).
+  // Collapsing only affects layout/visibility; graph execution + connections remain intact.
+  let isCollapsed = false;
+
+  const toggleCollapsed = (event: Event) => {
+    event.stopPropagation();
+    const next = !isCollapsed;
+    isCollapsed = next;
+    (data as any).collapsed = next;
+  };
+
   $: width = Number.isFinite(data.width) ? `${data.width}px` : '';
-  $: height = Number.isFinite(data.height) ? `${data.height}px` : '';
+  $: height = !isCollapsed && Number.isFinite(data.height) ? `${data.height}px` : '';
 
   $: inputs = sortByIndex(Object.entries(data.inputs));
   $: controls = sortByIndex(Object.entries(data.controls));
   $: outputs = sortByIndex(Object.entries(data.outputs));
+
+  $: {
+    const next = Boolean((data as any)?.collapsed);
+    if (next !== isCollapsed) isCollapsed = next;
+  }
   function any<T>(arg: T): any {
     return arg;
   }
@@ -353,7 +369,7 @@
 
 <div
   bind:this={nodeEl}
-  class="node {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate' ? 'group-port-activate' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
+  class="node {isCollapsed ? 'collapsed' : ''} {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate' ? 'group-port-activate' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"
@@ -369,46 +385,58 @@
     </svg>
   {/if}
 
-  <div class="title" data-testid="title">{data.label}</div>
+  <div class="title" data-testid="title">
+    <button
+      type="button"
+      class="collapse-toggle"
+      aria-label={isCollapsed ? 'Expand node' : 'Minimize node'}
+      aria-pressed={isCollapsed}
+      title={isCollapsed ? 'Expand' : 'Minimize'}
+      on:pointerdown|stopPropagation|preventDefault
+      on:click={toggleCollapsed}
+    ></button>
+    <span class="title-label">{data.label}</span>
+  </div>
 
-  {#if controls.length}
-    <div class="controls">
-      {#each controls as [key, control]}
-        <Ref
-          class="control"
-          data-testid={"control-" + key}
-          init={(element) =>
-            emit({
-              type: 'render',
-              data: {
-                type: 'control',
-                element,
-                payload: control,
-              },
-            })}
-          unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-        />
-      {/each}
-    </div>
-  {/if}
+  {#if !isCollapsed}
+    {#if controls.length}
+      <div class="controls">
+        {#each controls as [key, control]}
+          <Ref
+            class="control"
+            data-testid={"control-" + key}
+            init={(element) =>
+              emit({
+                type: 'render',
+                data: {
+                  type: 'control',
+                  element,
+                  payload: control,
+                },
+              })}
+            unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+          />
+        {/each}
+      </div>
+    {/if}
 
-  {#if isCmdAggregator}
-    <div class="cmd-aggregator-controls">
-      <button
-        class="cmd-aggregator-add"
-        disabled={cmdAggregatorCurrentInputs >= cmdAggregatorMax}
-        on:pointerdown|stopPropagation
-        on:click={addCmdAggregatorInput}
-      >
-        Add In
-      </button>
-    </div>
-  {/if}
+    {#if isCmdAggregator}
+      <div class="cmd-aggregator-controls">
+        <button
+          class="cmd-aggregator-add"
+          disabled={cmdAggregatorCurrentInputs >= cmdAggregatorMax}
+          on:pointerdown|stopPropagation
+          on:click={addCmdAggregatorInput}
+        >
+          Add In
+        </button>
+      </div>
+    {/if}
 
-  <div class="ports">
-    {#if inputs.length}
-      <div class="inputs">
-        {#each inputs as [key, input]}
+    <div class="ports">
+      {#if inputs.length}
+        <div class="inputs">
+          {#each inputs as [key, input]}
           <div
             class="port-row input {activeInputs.has(String(key)) ? 'active' : ''}"
             data-testid={"input-" + key}
@@ -460,13 +488,13 @@
               </div>
             </div>
           </div>
-        {/each}
-      </div>
-    {/if}
+          {/each}
+        </div>
+      {/if}
 
-    {#if outputs.length}
-      <div class="outputs">
-        {#each outputs as [key, output]}
+      {#if outputs.length}
+        <div class="outputs">
+          {#each outputs as [key, output]}
           <div
             class="port-row output {activeOutputs.has(String(key)) ? 'active' : ''}"
             data-testid={"output-" + key}
@@ -519,10 +547,67 @@
               unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
             />
           </div>
-        {/each}
-      </div>
-    {/if}
-  </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <div class="collapsed-sockets" aria-hidden="true">
+      {#each inputs as [key, input]}
+        <div
+          class="collapsed-socket input"
+          data-rete-node-id={data.id}
+          data-rete-port-side="input"
+          data-rete-port-key={key}
+        >
+          <Ref
+            class="input-socket"
+            data-port-id={key}
+            init={(element) =>
+              emit({
+                type: 'render',
+                data: {
+                  type: 'socket',
+                  side: 'input',
+                  key,
+                  nodeId: data.id,
+                  element,
+                  payload: input.socket,
+                },
+              })}
+            unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+          />
+        </div>
+      {/each}
+
+      {#each outputs as [key, output]}
+        <div
+          class="collapsed-socket output"
+          data-rete-node-id={data.id}
+          data-rete-port-side="output"
+          data-rete-port-key={key}
+        >
+          <Ref
+            class={`output-socket ${any(output).disabled ? 'socket-disabled' : ''}`}
+            data-port-id={key}
+            init={(element) =>
+              emit({
+                type: 'render',
+                data: {
+                  type: 'socket',
+                  side: 'output',
+                  key,
+                  nodeId: data.id,
+                  element,
+                  payload: output.socket,
+                },
+              })}
+            unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+          />
+        </div>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -562,12 +647,83 @@
 
   .title {
     position: relative;
-    z-index: 1;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: visible;
     padding: 10px 12px;
     font-weight: 700;
     letter-spacing: 0.2px;
     color: rgba(255, 255, 255, 0.92);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .node.collapsed .title {
+    border-bottom: none !important;
+  }
+
+  .collapse-toggle {
+    appearance: none;
+    position: relative;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(148, 163, 184, 0.55);
+    background: rgba(148, 163, 184, 0.35);
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    padding: 0;
+    flex: 0 0 auto;
+    cursor: pointer;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.2),
+      0 4px 10px rgba(0, 0, 0, 0.3);
+  }
+
+  .collapse-toggle:hover {
+    background: rgba(148, 163, 184, 0.5);
+    border-color: rgba(148, 163, 184, 0.7);
+  }
+
+  .collapse-toggle:active {
+    transform: scale(0.95);
+  }
+
+  .title-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  .collapsed-sockets {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  .collapsed-socket {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .collapsed-socket.input {
+    left: 0;
+  }
+
+  .collapsed-socket.output {
+    right: 0;
+  }
+
+  .collapsed-sockets :global(.socket) {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .controls {

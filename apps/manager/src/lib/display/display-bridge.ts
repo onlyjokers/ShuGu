@@ -17,6 +17,7 @@
 import { get, writable } from 'svelte/store';
 import type { ControlAction, ControlPayload } from '@shugu/protocol';
 import { getLatestManifest, subscribeLatestManifest, type AssetManifest } from '$lib/nodes/asset-manifest-store';
+import { localDisplayMediaStore, parseDisplayFileId } from '$lib/stores/local-display-media';
 
 export type DisplayBridgeStatus = 'idle' | 'opening' | 'pairing' | 'connected' | 'closed' | 'error';
 
@@ -97,12 +98,14 @@ type DisplayNodeMediaMessage = {
 const DISPLAY_DEV_PORT = 5175;
 const DEFAULT_SERVER_PORT = 3001;
 const ASSET_READ_TOKEN_STORAGE_KEY = 'shugu-asset-read-token';
+const DISPLAY_BASE_PATH = '/display';
 
 let displayWindow: Window | null = null;
 let controlPort: MessagePort | null = null;
 let closeWatchTimer: ReturnType<typeof setInterval> | null = null;
 let manifestUnsub: (() => void) | null = null;
 let lastManifestIdSentToLocal: string | null = null;
+let registeredDisplayFileIds = new Set<string>();
 
 function createRandomToken(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -113,8 +116,11 @@ function createRandomToken(prefix: string): string {
 
 function getDefaultDisplayUrl(): URL {
   const base = new URL(window.location.origin);
-  base.port = String(DISPLAY_DEV_PORT);
-  base.pathname = '/';
+  // In dev, Display runs on a dedicated Vite port. In production, it is served under `DISPLAY_BASE_PATH` on the same origin.
+  if (import.meta.env.DEV) {
+    base.port = String(DISPLAY_DEV_PORT);
+  }
+  base.pathname = DISPLAY_BASE_PATH;
   base.search = '';
   base.hash = '';
   return base;
@@ -123,6 +129,10 @@ function getDefaultDisplayUrl(): URL {
 function getDefaultServerUrl(): string {
   const saved = window.localStorage.getItem('shugu-server-url');
   if (saved && saved.trim()) return saved.trim();
+  // When deployed behind HTTPS reverse-proxy, default to same-origin and rely on Nginx to proxy `/socket.io` + `/api/*`.
+  if (window.location.protocol === 'https:' && window.location.port === '') {
+    return window.location.origin;
+  }
   return `https://${window.location.hostname}:${DEFAULT_SERVER_PORT}`;
 }
 
@@ -144,6 +154,7 @@ function teardownPort(): void {
     manifestUnsub = null;
   }
   lastManifestIdSentToLocal = null;
+  registeredDisplayFileIds.clear();
   displayBridgeNodeMedia.set(null);
 
   if (!controlPort) return;
@@ -358,6 +369,9 @@ export function pairDisplay(options?: {
       displayOrigin,
       error: null,
     }));
+    // New local session: clear any previous display-local file registry on the Display side.
+    registeredDisplayFileIds.clear();
+    sendPlugin('local-media', 'clear');
     startManifestSync();
   } catch (error) {
     teardownPort();
@@ -381,6 +395,29 @@ export function closeDisplay(): void {
 
 export function sendControl(action: ControlAction, payload: ControlPayload, executeAtLocal?: number): void {
   if (!controlPort) return;
+
+  // If the payload references a Display-local file, register it first via MessagePort (no server upload).
+  const urlRaw = (payload as any)?.url;
+  const url = typeof urlRaw === 'string' ? urlRaw.trim() : '';
+  const displayFileId = url ? parseDisplayFileId(url) : null;
+  if (displayFileId && !registeredDisplayFileIds.has(displayFileId)) {
+    const entry = localDisplayMediaStore.getFileById(displayFileId);
+    if (entry?.file) {
+      sendPlugin('local-media', 'register', {
+        id: entry.id,
+        kind: entry.kind,
+        name: entry.name,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.sizeBytes,
+        lastModified: entry.lastModified,
+        file: entry.file,
+      });
+      registeredDisplayFileIds.add(displayFileId);
+    } else {
+      console.warn('[display-bridge] missing local display file for ref:', displayFileId);
+    }
+  }
+
   const message: DisplayControlMessage = {
     type: 'shugu:display:control',
     action,

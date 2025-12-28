@@ -23,6 +23,14 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3002
       }
+    },
+    {
+      name: 'shugu-display',
+      script: './apps/display/build-display/index.js',
+      env: {
+        NODE_ENV: 'production',
+        PORT: 3003
+      }
     }
   ]
 };

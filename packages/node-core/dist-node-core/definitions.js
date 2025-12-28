@@ -37,6 +37,11 @@ function coerceBoolean(value) {
     }
     return false;
 }
+function coerceBooleanOr(value, fallback) {
+    if (value === undefined || value === null)
+        return fallback;
+    return coerceBoolean(value);
+}
 function coerceAssetVolumeGain(value) {
     // UI Volume is a relative control in [-1, 2]:
     // -1 => mute, 0 => normal (gain=1), 2 => max (gain=2), >2 => linear gain up to 100.
@@ -86,6 +91,10 @@ function normalizeLocalMediaRef(raw, kind) {
     const s = typeof raw === 'string' ? raw.trim() : '';
     if (!s)
         return '';
+    // Display-local file reference (registered via Manager↔Display local bridge).
+    if (s.startsWith('displayfile:')) {
+        return ensureLocalMediaKindQuery(s, kind);
+    }
     if (s.startsWith('localfile:')) {
         return ensureLocalMediaKindQuery(s, kind);
     }
@@ -202,6 +211,7 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createLogicForNode());
     registry.register(createLogicSleepNode());
     registry.register(createShowAnythingNode());
+    registry.register(createNoteNode());
     registry.register(createNumberNode());
     registry.register(createStringNode());
     registry.register(createBoolNode());
@@ -1770,11 +1780,22 @@ function createShowAnythingNode() {
     return {
         type: 'show-anything',
         label: 'Show Anything',
-        category: 'Logic',
+        category: 'Other',
         inputs: [{ id: 'in', label: 'In', type: 'any' }],
         outputs: [{ id: 'value', label: 'Value', type: 'string' }],
         configSchema: [],
         process: (inputs) => ({ value: formatAnyPreview(inputs.in) }),
+    };
+}
+function createNoteNode() {
+    return {
+        type: 'note',
+        label: 'Note',
+        category: 'Other',
+        inputs: [],
+        outputs: [],
+        configSchema: [{ key: 'text', label: 'Text', type: 'string', defaultValue: '' }],
+        process: () => ({}),
     };
 }
 const TONE_LFO_WAVEFORM_OPTIONS = [
@@ -2374,12 +2395,15 @@ function createFlashlightProcessorNode() {
         label: 'Flashlight',
         category: 'Processors',
         inputs: [
+            { id: 'active', label: 'Active', type: 'boolean' },
             { id: 'mode', label: 'Mode', type: 'string' },
             { id: 'frequencyHz', label: 'Freq', type: 'number' },
             { id: 'dutyCycle', label: 'Duty', type: 'number' },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
+            // `Active=false` sends a one-shot "off" command so effects can be disabled without stopping the graph.
+            { key: 'active', label: 'Active', type: 'boolean', defaultValue: true },
             {
                 key: 'mode',
                 label: 'Mode',
@@ -2391,6 +2415,10 @@ function createFlashlightProcessorNode() {
             { key: 'dutyCycle', label: 'Duty Cycle', type: 'number', defaultValue: 0.5 },
         ],
         process: (inputs, config) => {
+            const active = coerceBooleanOr(inputs.active ?? config.active, true);
+            if (!active) {
+                return { cmd: { action: 'flashlight', payload: { mode: 'off' } } };
+            }
             const fallbackMode = String(config.mode ?? 'blink');
             const mode = (() => {
                 const v = inputs.mode;
@@ -2435,6 +2463,7 @@ function createScreenColorProcessorNode() {
         label: 'Screen Color',
         category: 'Processors',
         inputs: [
+            { id: 'active', label: 'Active', type: 'boolean' },
             { id: 'primary', label: 'Primary', type: 'color' },
             { id: 'secondary', label: 'Secondary', type: 'color' },
             { id: 'waveform', label: 'Wave', type: 'string' },
@@ -2444,6 +2473,8 @@ function createScreenColorProcessorNode() {
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
+            // `Active=false` sends a "solid transparent" payload to stop the animation loop and clear the overlay.
+            { key: 'active', label: 'Active', type: 'boolean', defaultValue: true },
             { key: 'primary', label: 'Primary', type: 'string', defaultValue: '#6366f1' },
             { key: 'secondary', label: 'Secondary', type: 'string', defaultValue: '#ffffff' },
             { key: 'maxOpacity', label: 'Max Opacity', type: 'number', defaultValue: 1 },
@@ -2458,6 +2489,15 @@ function createScreenColorProcessorNode() {
             { key: 'frequencyHz', label: 'Frequency (Hz)', type: 'number', defaultValue: 1.5 },
         ],
         process: (inputs, config) => {
+            const active = coerceBooleanOr(inputs.active ?? config.active, true);
+            if (!active) {
+                return {
+                    cmd: {
+                        action: 'screenColor',
+                        payload: { color: 'transparent', opacity: 0, mode: 'solid' },
+                    },
+                };
+            }
             const primary = typeof inputs.primary === 'string' && inputs.primary
                 ? String(inputs.primary)
                 : String(config.primary ?? '#6366f1');
@@ -2517,6 +2557,7 @@ function createSynthUpdateProcessorNode() {
         label: 'Synth (Update)',
         category: 'Processors',
         inputs: [
+            { id: 'active', label: 'Active', type: 'boolean' },
             { id: 'waveform', label: 'Wave', type: 'string' },
             { id: 'frequency', label: 'Freq', type: 'number' },
             { id: 'volume', label: 'Vol', type: 'number' },
@@ -2526,6 +2567,8 @@ function createSynthUpdateProcessorNode() {
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
+            // `Active=false` sends an update with `durationMs=0` so the client can stop the synth immediately.
+            { key: 'active', label: 'Active', type: 'boolean', defaultValue: true },
             { key: 'frequency', label: 'Freq (Hz)', type: 'number', defaultValue: 180 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0.7 },
             {
@@ -2540,6 +2583,15 @@ function createSynthUpdateProcessorNode() {
             { key: 'durationMs', label: 'Dur (ms)', type: 'number', defaultValue: 200 },
         ],
         process: (inputs, config) => {
+            const active = coerceBooleanOr(inputs.active ?? config.active, true);
+            if (!active) {
+                return {
+                    cmd: {
+                        action: 'modulateSoundUpdate',
+                        payload: { durationMs: 0 },
+                    },
+                };
+            }
             const frequency = typeof inputs.frequency === 'number'
                 ? inputs.frequency
                 : Number(config.frequency ?? 180);
@@ -2596,6 +2648,13 @@ function createSceneSwitchProcessorNode() {
             { id: 'sceneId', label: 'Scene', type: 'string' },
             { id: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
             { id: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+            { id: 'convEnabled', label: 'Convolution', type: 'boolean', defaultValue: false },
+            { id: 'convPreset', label: 'Conv Preset', type: 'string' },
+            { id: 'convMix', label: 'Conv Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            { id: 'convScale', label: 'Conv Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+            { id: 'convBias', label: 'Conv Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+            { id: 'convNormalize', label: 'Conv Normalize', type: 'boolean', defaultValue: true },
+            { id: 'convKernel', label: 'Conv Kernel (3x3)', type: 'string' },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
@@ -2611,6 +2670,33 @@ function createSceneSwitchProcessorNode() {
             },
             { key: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
             { key: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+            { key: 'convEnabled', label: 'Convolution', type: 'boolean', defaultValue: false },
+            {
+                key: 'convPreset',
+                label: 'Conv Preset',
+                type: 'select',
+                defaultValue: 'sharpen',
+                options: [
+                    { value: 'blur', label: 'Blur' },
+                    { value: 'gaussianBlur', label: 'Gaussian Blur' },
+                    { value: 'sharpen', label: 'Sharpen' },
+                    { value: 'edge', label: 'Edge Detect' },
+                    { value: 'emboss', label: 'Emboss' },
+                    { value: 'sobelX', label: 'Sobel X' },
+                    { value: 'sobelY', label: 'Sobel Y' },
+                    { value: 'custom', label: 'Custom Kernel' },
+                ],
+            },
+            { key: 'convMix', label: 'Conv Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            { key: 'convScale', label: 'Conv Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+            { key: 'convBias', label: 'Conv Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+            { key: 'convNormalize', label: 'Conv Normalize', type: 'boolean', defaultValue: true },
+            {
+                key: 'convKernel',
+                label: 'Conv Kernel (3x3)',
+                type: 'string',
+                defaultValue: '0 0 0 0 1 0 0 0 0',
+            },
         ],
         process: (inputs, config) => {
             const sceneId = (() => {
@@ -2644,9 +2730,113 @@ function createSceneSwitchProcessorNode() {
                 const clamped = Number.isFinite(raw) ? Math.max(6, Math.min(24, raw)) : 11;
                 return Math.round(clamped);
             })();
+            const convEnabled = (() => {
+                const fromInput = inputs.convEnabled;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.convEnabled;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return false;
+            })();
+            const convPreset = (() => {
+                const allowed = [
+                    'blur',
+                    'gaussianBlur',
+                    'sharpen',
+                    'edge',
+                    'emboss',
+                    'sobelX',
+                    'sobelY',
+                    'custom',
+                ];
+                const fromInput = inputs.convPreset;
+                const fromConfig = config.convPreset;
+                const raw = typeof fromInput === 'string' && fromInput.trim()
+                    ? fromInput.trim()
+                    : typeof fromConfig === 'string' && fromConfig.trim()
+                        ? fromConfig.trim()
+                        : 'sharpen';
+                return allowed.includes(raw) ? raw : 'sharpen';
+            })();
+            const convMix = (() => {
+                const fromInput = inputs.convMix;
+                const fromConfig = config.convMix;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 1);
+                if (!Number.isFinite(raw))
+                    return 1;
+                return Math.max(0, Math.min(1, raw));
+            })();
+            const convScale = (() => {
+                const fromInput = inputs.convScale;
+                const fromConfig = config.convScale;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0.5);
+                if (!Number.isFinite(raw))
+                    return 0.5;
+                return Math.max(0.1, Math.min(1, raw));
+            })();
+            const convBias = (() => {
+                const fromInput = inputs.convBias;
+                const fromConfig = config.convBias;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0);
+                if (!Number.isFinite(raw))
+                    return 0;
+                return Math.max(-1, Math.min(1, raw));
+            })();
+            const convNormalize = (() => {
+                const fromInput = inputs.convNormalize;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.convNormalize;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return true;
+            })();
+            const convKernel = (() => {
+                const fromInput = inputs.convKernel;
+                const fromConfig = config.convKernel;
+                const raw = typeof fromInput === 'string' && fromInput.trim()
+                    ? fromInput.trim()
+                    : typeof fromConfig === 'string' && fromConfig.trim()
+                        ? fromConfig.trim()
+                        : '';
+                if (!raw)
+                    return undefined;
+                const parts = raw
+                    .split(/[\s,]+/g)
+                    .map((p) => p.trim())
+                    .filter(Boolean)
+                    .slice(0, 9);
+                if (parts.length !== 9)
+                    return undefined;
+                const kernel = parts.map((p) => Number(p));
+                if (kernel.some((n) => !Number.isFinite(n)))
+                    return undefined;
+                return kernel;
+            })();
             return {
                 cmd: [
                     { action: 'visualSceneSwitch', payload: { sceneId } },
+                    {
+                        action: 'convolution',
+                        payload: {
+                            enabled: convEnabled,
+                            preset: convPreset,
+                            ...(convKernel ? { kernel: convKernel } : {}),
+                            mix: convMix,
+                            scale: convScale,
+                            bias: convBias,
+                            normalize: convNormalize,
+                        },
+                    },
                     { action: 'asciiMode', payload: { enabled: asciiEnabled } },
                     { action: 'asciiResolution', payload: { cellSize: asciiResolution } },
                 ],

@@ -2,7 +2,7 @@
   "__purpose": "Manager node spec for show-anything (accepts any input and displays a string preview).",
   "type": "show-anything",
   "label": "Show Anything",
-  "category": "Logic",
+  "category": "Other",
   "inputs": [{ "id": "in", "label": "In", "type": "any" }],
   "outputs": [{ "id": "value", "label": "Value", "type": "string" }],
   "configSchema": []

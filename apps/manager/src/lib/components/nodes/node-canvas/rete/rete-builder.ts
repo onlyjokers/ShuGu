@@ -14,6 +14,7 @@ import {
   AssetPickerControl,
   LocalAssetPickerControl,
   FilePickerControl,
+  NoteControl,
   MidiLearnControl,
   SelectControl,
   TimeRangeControl,
@@ -479,6 +480,18 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         control.nodeType = instance.type;
         control.configKey = key;
         node.addControl(key, control);
+      } else if (instance.type === 'note' && key === 'text') {
+        node.addControl(
+          key,
+          new NoteControl({
+            placeholder: 'Type a note…',
+            initial: typeof current === 'string' ? current : String(current ?? ''),
+            change: (value) => {
+              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+              sendNodeOverride(instance.id, 'config', key, value);
+            },
+          })
+        );
       } else {
         const control: any = new ClassicPreset.InputControl('text', {
           initial: String(current ?? ''),

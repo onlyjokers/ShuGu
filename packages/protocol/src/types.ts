@@ -48,6 +48,7 @@ export type ControlAction =
   | 'hideImage'
   | 'shutdown'
   | 'visualSceneSwitch'
+  | 'convolution'
   | 'setDataReportingRate'
   | 'setSensorState'
   | 'asciiMode'
@@ -178,6 +179,47 @@ export interface AsciiResolutionPayload {
 }
 
 /**
+ * Convolution post-processing payload.
+ *
+ * Applies a 3x3 convolution kernel on the client-rendered output.
+ */
+export interface ConvolutionPayload {
+  enabled: boolean;
+  /**
+   * Optional preset kernel id. Ignored if `kernel` is provided.
+   */
+  preset?:
+    | 'blur'
+    | 'gaussianBlur'
+    | 'sharpen'
+    | 'edge'
+    | 'emboss'
+    | 'sobelX'
+    | 'sobelY'
+    | 'custom';
+  /**
+   * Optional 3x3 kernel values (row-major, length 9).
+   */
+  kernel?: number[];
+  /**
+   * Blend factor 0..1 (0 = original, 1 = fully convolved).
+   */
+  mix?: number;
+  /**
+   * Bias added after convolution in normalized units (-1..1).
+   */
+  bias?: number;
+  /**
+   * When true, normalizes by the kernel sum when non-zero.
+   */
+  normalize?: boolean;
+  /**
+   * Processing scale 0.1..1 (lower = faster).
+   */
+  scale?: number;
+}
+
+/**
  * Visual scene switch payload
  */
 export interface VisualSceneSwitchPayload {
@@ -211,6 +253,7 @@ export type BaseControlPayload =
   | ShowImagePayload
   | AsciiModePayload
   | AsciiResolutionPayload
+  | ConvolutionPayload
   | VisualSceneSwitchPayload
   | DataReportingRatePayload
   | Record<string, unknown>;

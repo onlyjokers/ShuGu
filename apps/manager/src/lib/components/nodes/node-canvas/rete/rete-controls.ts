@@ -179,6 +179,36 @@ export class FilePickerControl extends ClassicPreset.Control {
   }
 }
 
+export class NoteControl extends ClassicPreset.Control {
+  controlType = 'note' as const;
+  label?: string;
+  placeholder?: string;
+  value: string;
+  readonly: boolean;
+  private onChange?: (value: string) => void;
+
+  constructor(opts: {
+    label?: string;
+    placeholder?: string;
+    initial?: string;
+    readonly?: boolean;
+    change?: (value: string) => void;
+  }) {
+    super();
+    this.label = opts.label;
+    this.placeholder = opts.placeholder;
+    this.value = opts.initial ?? '';
+    this.readonly = Boolean(opts.readonly);
+    this.onChange = opts.change;
+  }
+
+  setValue(value: string): void {
+    if (this.readonly) return;
+    this.value = value;
+    this.onChange?.(value);
+  }
+}
+
 export type TimeRangeValue = { startSec: number; endSec: number; cursorSec?: number };
 
 export class TimeRangeControl extends ClassicPreset.Control {

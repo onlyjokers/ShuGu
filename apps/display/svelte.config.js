@@ -7,6 +7,9 @@ const config = {
   kit: {
     outDir: '.svelte-kit-display',
     adapter: adapter({ out: 'build-display' }),
+    paths: {
+      base: '/display',
+    },
     alias: {
       $lib: './src/lib',
       $components: './src/lib/components',
@@ -15,4 +18,3 @@ const config = {
 };
 
 export default config;
-
