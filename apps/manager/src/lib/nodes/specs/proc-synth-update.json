@@ -3,6 +3,7 @@
   "label": "Synth (Update)",
   "category": "Processors",
   "inputs": [
+    { "id": "active", "label": "Active", "type": "boolean" },
     { "id": "waveform", "label": "Wave", "type": "string" },
     { "id": "frequency", "label": "Freq", "type": "number", "min": 0, "step": 1 },
     { "id": "volume", "label": "Vol", "type": "number", "min": 0, "max": 1, "step": 0.01 },
@@ -12,6 +13,7 @@
   ],
   "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
   "configSchema": [
+    { "key": "active", "label": "Active", "type": "boolean", "defaultValue": true },
     { "key": "frequency", "label": "Freq (Hz)", "type": "number", "defaultValue": 180, "min": 0, "step": 1 },
     { "key": "volume", "label": "Volume", "type": "number", "defaultValue": 0.7, "min": 0, "max": 1, "step": 0.01 },
     {

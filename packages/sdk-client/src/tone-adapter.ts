@@ -317,6 +317,9 @@ function normalizeLocalMediaRef(raw: unknown, kind: LocalMediaKind): string {
   const s = typeof raw === 'string' ? raw.trim() : '';
   if (!s) return '';
 
+  // Display-local file reference (registered via Manager↔Display local bridge).
+  if (s.startsWith('displayfile:')) return ensureLocalMediaKindQuery(s, kind);
+
   if (s.startsWith('localfile:')) return ensureLocalMediaKindQuery(s, kind);
 
   const shuguLocalPrefix = 'shugu://local-file/';

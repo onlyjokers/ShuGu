@@ -1273,6 +1273,10 @@ const normalizeLocalMediaRef = (raw: string, kind: 'audio' | 'image' | 'video'):
   const s = raw.trim();
   if (!s) return '';
 
+  if (s.startsWith('displayfile:')) {
+    return ensureLocalMediaKindQuery(s, kind);
+  }
+
   if (s.startsWith('localfile:')) {
     return ensureLocalMediaKindQuery(s, kind);
   }

@@ -129,6 +129,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     'Logic',
     'Parameters',
     'Processors',
+    'Other',
   ] as const;
 
   const categories = derived(itemsByCategory, ($itemsByCategory) => {

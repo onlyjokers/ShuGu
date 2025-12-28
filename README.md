@@ -3,6 +3,7 @@
 A Web-based multi-device real-time interactive system for live performances, consisting of:
 
 - **Manager**: Desktop control panel for performers
+- **Display**: Full-screen media player (video/image) for stage/screen output
 - **Client**: Mobile web app for audience interaction
 - **Server**: Node.js WebSocket server for message routing
 
@@ -22,6 +23,7 @@ A Web-based multi-device real-time interactive system for live performances, con
 shugu3/
 ├── apps/
 │   ├── manager/        # SvelteKit desktop control panel
+│   ├── display/        # SvelteKit full-screen display player
 │   ├── client/         # SvelteKit mobile experience
 │   └── server/         # NestJS + Socket.io server
 ├── packages/
@@ -59,6 +61,7 @@ pnpm run dev:all
 # Or start individually:
 pnpm run dev:server   # Server on https://localhost:3001 (requires secrets/cert.pem + secrets/key.pem)
 pnpm run dev:manager  # Manager on https://localhost:5173 (self-signed via Vite basicSsl)
+pnpm --filter @shugu/display run dev # Display on https://localhost:5175/display (self-signed via Vite basicSsl)
 pnpm run dev:client   # Client on https://localhost:5174 (self-signed via Vite basicSsl)
 ```
 

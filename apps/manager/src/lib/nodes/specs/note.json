@@ -1,0 +1,9 @@
+{
+  "__purpose": "Manager node spec for note (stores free-form text inside the graph; no ports).",
+  "type": "note",
+  "label": "Note",
+  "category": "Other",
+  "inputs": [],
+  "outputs": [],
+  "configSchema": [{ "key": "text", "label": "Text", "type": "string", "defaultValue": "" }]
+}

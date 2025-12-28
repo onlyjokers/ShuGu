@@ -212,6 +212,71 @@ let windowPairListener: ((event: MessageEvent) => void) | null = null;
 let pairTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
 let transportDecision: 'uninitialized' | 'pending' | 'local' | 'server' = 'uninitialized';
 
+type LocalDisplayMediaKind = 'audio' | 'image' | 'video';
+type LocalDisplayMediaEntry = {
+  id: string;
+  kind: LocalDisplayMediaKind;
+  name: string;
+  file: File;
+  objectUrl: string;
+};
+
+// Local-only media registry (Manager ↔ Display same machine via MessagePort).
+const displayLocalMedia = new Map<string, LocalDisplayMediaEntry>();
+
+function parseDisplayFileId(raw: string): string | null {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  if (!s.startsWith('displayfile:')) return null;
+  const rest = s.slice('displayfile:'.length);
+  const id = (rest.split(/[?#]/)[0] ?? '').trim();
+  return id ? id : null;
+}
+
+function resolveDisplayFileUrl(raw: string): string | null {
+  const id = parseDisplayFileId(raw);
+  if (!id) return null;
+  return displayLocalMedia.get(id)?.objectUrl ?? null;
+}
+
+function clearDisplayLocalMedia(): void {
+  for (const entry of displayLocalMedia.values()) {
+    try {
+      URL.revokeObjectURL(entry.objectUrl);
+    } catch {
+      // ignore
+    }
+  }
+  displayLocalMedia.clear();
+}
+
+function registerDisplayLocalMedia(payload: Record<string, unknown> | undefined): void {
+  const id = typeof payload?.id === 'string' ? payload.id.trim() : '';
+  if (!id) return;
+
+  const kindRaw = typeof payload?.kind === 'string' ? payload.kind.trim().toLowerCase() : '';
+  const kind: LocalDisplayMediaKind =
+    kindRaw === 'audio' || kindRaw === 'image' || kindRaw === 'video' ? (kindRaw as LocalDisplayMediaKind) : 'video';
+
+  const fileRaw = (payload as any)?.file ?? null;
+  if (!(fileRaw instanceof Blob)) return;
+
+  const file = fileRaw instanceof File ? fileRaw : new File([fileRaw], `displayfile-${id}`);
+  const name =
+    typeof (payload as any)?.name === 'string' && (payload as any).name.trim() ? (payload as any).name.trim() : file.name;
+
+  const existing = displayLocalMedia.get(id);
+  if (existing) {
+    try {
+      URL.revokeObjectURL(existing.objectUrl);
+    } catch {
+      // ignore
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  displayLocalMedia.set(id, { id, kind, name, file, objectUrl });
+}
+
 export const runtime = writable<{
   serverUrl: string;
   assetReadToken: string;
@@ -400,18 +465,27 @@ function teardownLocalTransport(): void {
   localPort = null;
 
   transportDecision = 'uninitialized';
+  clearDisplayLocalMedia();
 }
 
 function isAllowedManagerOrigin(origin: string): boolean {
   if (!origin) return false;
   if (typeof window === 'undefined') return false;
 
-  const allowed = new Set<string>(['https://localhost:5173', 'https://127.0.0.1:5173']);
+  const allowed = new Set<string>([
+    // Dev: Manager runs on a dedicated Vite port.
+    'https://localhost:5173',
+    'https://127.0.0.1:5173',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ]);
 
   try {
     const url = new URL(window.location.origin);
     url.port = '5173';
     allowed.add(url.origin);
+    // When Manager and Display are deployed under the same origin (e.g. /manager + /display), allow same-origin pairing.
+    allowed.add(window.location.origin);
   } catch {
     // ignore
   }
@@ -653,6 +727,16 @@ export function initializeDisplay(config: DisplayInitConfig): void {
         return;
       }
 
+      if (pluginId === 'local-media' && command === 'register') {
+        registerDisplayLocalMedia((payload ?? undefined) as Record<string, unknown> | undefined);
+        return;
+      }
+
+      if (pluginId === 'local-media' && command === 'clear') {
+        clearDisplayLocalMedia();
+        return;
+      }
+
       if (pluginId !== 'multimedia-core' || command !== 'configure') {
         console.info('[Display] local plugin noop:', pluginId, command);
         return;
@@ -750,9 +834,14 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
       const imagePayload = payload as ShowImagePayload;
       const clip = typeof imagePayload.url === 'string' ? parseMediaClipParams(imagePayload.url) : null;
       const baseUrl = clip ? clip.baseUrl : String(imagePayload.url ?? '');
+      const resolvedDisplayUrl = resolveDisplayFileUrl(baseUrl);
+      if (parseDisplayFileId(baseUrl) && !resolvedDisplayUrl) {
+        console.warn('[Display] missing display-local file registration:', baseUrl);
+        return;
+      }
       const fit = clip?.fit ?? null;
       multimediaCore?.media.showImage({
-        url: baseUrl,
+        url: resolvedDisplayUrl ?? baseUrl,
         duration: imagePayload.duration,
         ...(fit === null ? {} : { fit }),
       });
@@ -768,11 +857,17 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
       const clip = typeof mediaPayload.url === 'string' ? parseMediaClipParams(mediaPayload.url) : null;
       const baseUrl = clip ? clip.baseUrl : mediaPayload.url;
       const url = typeof baseUrl === 'string' ? baseUrl : String(baseUrl ?? '');
-      const resolvedUrl = url;
+      const resolvedDisplayUrl = resolveDisplayFileUrl(url);
+      if (parseDisplayFileId(url) && !resolvedDisplayUrl) {
+        console.warn('[Display] missing display-local file registration:', url);
+        return;
+      }
 
-      const resolvedUrlString = typeof resolvedUrl === 'string' ? resolvedUrl : String(resolvedUrl ?? '');
+      const resolvedUrlString = resolvedDisplayUrl ?? url;
       const isVideo =
-        mediaPayload.mediaType === 'video' || /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
+        mediaPayload.mediaType === 'video' ||
+        Boolean(parseDisplayFileId(url)) ||
+        /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
 
       if (!isVideo) {
         console.info('[Display] playMedia(audio) noop:', mediaPayload.url);

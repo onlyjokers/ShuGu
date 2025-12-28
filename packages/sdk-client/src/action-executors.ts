@@ -1167,6 +1167,12 @@ export class ModulatedSoundPlayer {
         modDepth?: number;
         durationMs?: number;
     }): Promise<void> {
+        // Treat `durationMs <= 0` as an explicit stop signal (used by Synth(Update).Active=false).
+        if (payload.durationMs !== undefined && Number(payload.durationMs) <= 0) {
+            this.stop();
+            return;
+        }
+
         if (!this.carrier || !this.gainNode || !this.audioContext) {
             await this.play({
                 frequency: payload.frequency,
@@ -1366,6 +1372,12 @@ export class ToneModulatedSoundPlayer {
         modDepth?: number;
         durationMs?: number;
     }): Promise<void> {
+        // Treat `durationMs <= 0` as an explicit stop signal (used by Synth(Update).Active=false).
+        if (payload.durationMs !== undefined && Number(payload.durationMs) <= 0) {
+            this.stop();
+            return;
+        }
+
         const { toneAudioEngine } = await import('@shugu/multimedia-core');
         if (!toneAudioEngine.isEnabled()) return;
         const tone = await toneAudioEngine.ensureLoaded();

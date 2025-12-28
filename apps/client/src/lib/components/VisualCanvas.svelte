@@ -5,6 +5,7 @@
     audioStream,
     asciiEnabled,
     asciiResolution,
+    convolution,
     videoState,
     imageState,
     getSDK,
@@ -25,10 +26,12 @@
     type AudioSplitFeature,
     type MelSpectrogramFeature,
   } from '@shugu/audio-plugins';
+  import { applyConvolution3x3, resolveConvolutionKernel } from '$lib/features/convolution/convolution';
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
   let asciiCanvas: HTMLCanvasElement;
+  let convolutionCanvas: HTMLCanvasElement;
   let splitPlugin: AudioSplitPlugin | null = null;
   let melPlugin: MelSpectrogramPlugin | null = null;
   let audioContext: AudioContext | null = null;
@@ -36,6 +39,13 @@
   let tinyCanvas: HTMLCanvasElement | null = null;
   let tinyCtx: CanvasRenderingContext2D | null = null;
   let asciiCtx: CanvasRenderingContext2D | null = null;
+  let convCtx: CanvasRenderingContext2D | null = null;
+  let convWorkCanvas: HTMLCanvasElement | null = null;
+  let convWorkCtx: CanvasRenderingContext2D | null = null;
+  let convOutput: ImageData | null = null;
+  let convWorkW = 0;
+  let convWorkH = 0;
+  let lastConvDraw = 0;
   let sourceCanvas: HTMLCanvasElement | null = null;
   let mediaCanvas: HTMLCanvasElement | null = null;
   let mediaCtx: CanvasRenderingContext2D | null = null;
@@ -82,6 +92,9 @@
     asciiCtx = asciiCanvas.getContext('2d');
     tinyCanvas = document.createElement('canvas');
     tinyCtx = tinyCanvas.getContext('2d');
+    convCtx = convolutionCanvas.getContext('2d');
+    convWorkCanvas = document.createElement('canvas');
+    convWorkCtx = convWorkCanvas.getContext('2d');
     handleResize();
 
     // Set up device orientation listener
@@ -216,7 +229,18 @@
       drawAsciiOverlay();
     } else if (asciiCtx) {
       asciiCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
-      setBaseCanvasVisibility(true);
+      if (!$convolution.enabled) setBaseCanvasVisibility(true);
+    }
+
+    if ($convolution.enabled) {
+      drawConvolutionOverlay();
+      setBaseCanvasVisibility(false);
+      if (asciiCanvas) asciiCanvas.style.visibility = 'hidden';
+      if (convolutionCanvas) convolutionCanvas.style.visibility = 'visible';
+    } else if (convCtx) {
+      convCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
+      if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
+      if (asciiCanvas) asciiCanvas.style.visibility = 'visible';
     }
 
     animationId = requestAnimationFrame(animate);
@@ -231,7 +255,7 @@
 
     if (sourceCanvas && sourceCanvas.isConnected) return sourceCanvas;
     const canvases = Array.from(container.querySelectorAll('canvas')) as HTMLCanvasElement[];
-    sourceCanvas = canvases.find((c) => c !== asciiCanvas) ?? null;
+    sourceCanvas = canvases.find((c) => c !== asciiCanvas && c !== convolutionCanvas) ?? null;
     return sourceCanvas;
   }
 
@@ -438,10 +462,78 @@
   function setBaseCanvasVisibility(show: boolean) {
     const canvases = Array.from(container?.querySelectorAll('canvas') ?? []) as HTMLCanvasElement[];
     canvases
-      .filter((c) => c !== asciiCanvas)
+      .filter((c) => c !== asciiCanvas && c !== convolutionCanvas)
       .forEach((c) => {
         c.style.visibility = show ? 'visible' : 'hidden';
       });
+  }
+
+  function drawConvolutionOverlay() {
+    if (!convCtx || !convolutionCanvas || !convWorkCanvas || !convWorkCtx) return;
+
+    const now = performance.now();
+    if (now - lastConvDraw < 1000 / 30) return;
+    lastConvDraw = now;
+
+    const width = container?.clientWidth ?? 0;
+    const height = container?.clientHeight ?? 0;
+    if (width === 0 || height === 0) return;
+
+    const src = $asciiEnabled ? asciiCanvas : ensureSourceCanvas();
+    if (!src) {
+      convCtx.clearRect(0, 0, width, height);
+      return;
+    }
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    convolutionCanvas.width = Math.floor(width * dpr);
+    convolutionCanvas.height = Math.floor(height * dpr);
+    convolutionCanvas.style.width = `${width}px`;
+    convolutionCanvas.style.height = `${height}px`;
+
+    const scale = Math.max(0.1, Math.min(1, $convolution.scale));
+    const procW = Math.max(48, Math.floor(width * scale));
+    const procH = Math.max(48, Math.floor(height * scale));
+
+    if (convWorkW !== procW || convWorkH !== procH) {
+      convWorkW = procW;
+      convWorkH = procH;
+      convWorkCanvas.width = procW;
+      convWorkCanvas.height = procH;
+      convOutput = convWorkCtx.createImageData(procW, procH);
+    }
+
+    try {
+      convWorkCtx.setTransform(1, 0, 0, 1, 0, 0);
+      convWorkCtx.drawImage(src, 0, 0, procW, procH);
+    } catch {
+      return;
+    }
+
+    let input: ImageData;
+    try {
+      input = convWorkCtx.getImageData(0, 0, procW, procH);
+    } catch {
+      return;
+    }
+
+    if (!convOutput) return;
+
+    const kernel = resolveConvolutionKernel($convolution.preset, $convolution.kernel);
+    applyConvolution3x3(input.data, procW, procH, convOutput.data, {
+      kernel,
+      mix: $convolution.mix,
+      bias: $convolution.bias,
+      normalize: $convolution.normalize,
+    });
+
+    convWorkCtx.putImageData(convOutput, 0, 0);
+
+    convCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    convCtx.imageSmoothingEnabled = true;
+    convCtx.fillStyle = '#0a0a0f';
+    convCtx.fillRect(0, 0, width, height);
+    convCtx.drawImage(convWorkCanvas, 0, 0, width, height);
   }
 
   function drawBorder(
@@ -494,6 +586,12 @@
     if (asciiCtx && container) {
       asciiCtx.clearRect(0, 0, container.clientWidth, container.clientHeight);
     }
+    if (convCtx && container) {
+      convCtx.clearRect(0, 0, container.clientWidth, container.clientHeight);
+    }
+    convWorkW = 0;
+    convWorkH = 0;
+    convOutput = null;
   }
 </script>
 
@@ -522,6 +620,7 @@
   {/if}
 
   <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>
+  <canvas class="convolution-overlay" bind:this={convolutionCanvas}></canvas>
 </div>
 
 <style>
@@ -545,6 +644,16 @@
     width: 100%;
     height: 100%;
     z-index: 2;
+    pointer-events: none;
+    mix-blend-mode: normal;
+  }
+
+  .convolution-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 3;
     pointer-events: none;
     mix-blend-mode: normal;
   }

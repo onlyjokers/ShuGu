@@ -32,6 +32,7 @@ import type {
   ShowImagePayload,
   ModulateSoundPayload,
   VisualSceneSwitchPayload,
+  ConvolutionPayload,
 } from '@shugu/protocol';
 
 // SDK and controller instances
@@ -87,6 +88,37 @@ export const asciiEnabled = writable<boolean>(true);
 
 // ASCII resolution (cell size in pixels)
 export const asciiResolution = writable<number>(11);
+
+export type ConvolutionPreset =
+  | 'blur'
+  | 'gaussianBlur'
+  | 'sharpen'
+  | 'edge'
+  | 'emboss'
+  | 'sobelX'
+  | 'sobelY'
+  | 'custom';
+
+export type ConvolutionState = {
+  enabled: boolean;
+  preset: ConvolutionPreset;
+  kernel: number[] | null;
+  mix: number;
+  bias: number;
+  normalize: boolean;
+  scale: number;
+};
+
+// Convolution post-processing config
+export const convolution = writable<ConvolutionState>({
+  enabled: false,
+  preset: 'sharpen',
+  kernel: null,
+  mix: 1,
+  bias: 0,
+  normalize: true,
+  scale: 0.5,
+});
 
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
@@ -750,6 +782,60 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'asciiResolution':
         asciiResolution.set((payload as { cellSize: number }).cellSize);
+        break;
+
+      case 'convolution':
+        {
+          const convPayload = payload as ConvolutionPayload;
+          const allowed: ConvolutionPreset[] = [
+            'blur',
+            'gaussianBlur',
+            'sharpen',
+            'edge',
+            'emboss',
+            'sobelX',
+            'sobelY',
+            'custom',
+          ];
+
+          convolution.update((prev) => {
+            const next: ConvolutionState = { ...prev };
+
+            if (typeof convPayload.enabled === 'boolean') {
+              next.enabled = convPayload.enabled;
+            }
+
+            if (typeof convPayload.preset === 'string' && allowed.includes(convPayload.preset as ConvolutionPreset)) {
+              next.preset = convPayload.preset as ConvolutionPreset;
+            }
+
+            if (Array.isArray(convPayload.kernel)) {
+              const kernel = convPayload.kernel
+                .map((n) => (typeof n === 'number' ? n : Number(n)))
+                .filter((n) => Number.isFinite(n))
+                .slice(0, 9);
+              next.kernel = kernel.length === 9 ? kernel : null;
+            }
+
+            if (typeof convPayload.mix === 'number' && Number.isFinite(convPayload.mix)) {
+              next.mix = Math.max(0, Math.min(1, convPayload.mix));
+            }
+
+            if (typeof convPayload.bias === 'number' && Number.isFinite(convPayload.bias)) {
+              next.bias = Math.max(-1, Math.min(1, convPayload.bias));
+            }
+
+            if (typeof convPayload.normalize === 'boolean') {
+              next.normalize = convPayload.normalize;
+            }
+
+            if (typeof convPayload.scale === 'number' && Number.isFinite(convPayload.scale)) {
+              next.scale = Math.max(0.1, Math.min(1, convPayload.scale));
+            }
+
+            return next;
+          });
+        }
         break;
 
       case 'custom':

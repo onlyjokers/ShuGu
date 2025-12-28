@@ -10,6 +10,13 @@
   } from '$lib/stores/manager';
   import { assetsStore } from '$lib/stores/assets';
   import { localMediaStore, type LocalMediaKind } from '$lib/stores/local-media';
+  import { displayBridgeState } from '$lib/display/display-bridge';
+  import {
+    buildDisplayFileRef,
+    isDisplayFileRef,
+    localDisplayMediaStore,
+    parseDisplayFileId,
+  } from '$lib/stores/local-display-media';
   import { nodeEngine } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
@@ -18,6 +25,7 @@
     getAudioSpectrogramDataUrl,
     getMediaDurationSec,
   } from '$lib/features/assets/media-timeline-preview';
+  import { renderMarkdownToHtml } from '../utils/markdown';
 
   export let data: any;
   $: isInline = Boolean((data as any)?.inline);
@@ -101,6 +109,25 @@
     data?.setValue?.(Boolean(target.checked));
   }
 
+  function changeNote(event: Event) {
+    const target = event.target as HTMLTextAreaElement;
+    const next = target.value;
+    data?.setValue?.(next);
+    // `data.setValue` mutates an object field (no Svelte invalidation), so keep the preview in sync here.
+    if (data?.controlType === 'note') noteHtml = renderMarkdownToHtml(next);
+  }
+
+  type NoteViewMode = 'edit' | 'preview' | 'split';
+  let noteViewMode: NoteViewMode = 'edit';
+  let noteHtml = '';
+
+  $: if (data?.controlType === 'note') {
+    const raw = typeof data?.value === 'string' ? data.value : String(data?.value ?? '');
+    noteHtml = renderMarkdownToHtml(raw);
+  } else {
+    noteHtml = '';
+  }
+
   function pickClient(clientId: string) {
     data?.setValue?.(clientId);
   }
@@ -114,8 +141,11 @@
   let didRefreshLocalMedia = false;
   $: if (data?.controlType === 'local-asset-picker' && !didRefreshLocalMedia) {
     didRefreshLocalMedia = true;
-    void localMediaStore.refresh();
+    // Refresh server-local media only when needed; Display-local mode does not require server/local-media token.
+    // (Actual refresh is triggered below when the user selects "Server" source.)
   }
+
+  $: isLocalDisplayConnected = $displayBridgeState?.status === 'connected';
 
   function buildAssetOptions(kind: string): { value: string; label: string }[] {
     const list = ($assetsStore?.assets ?? []) as any[];
@@ -159,11 +189,112 @@
   let localAssetDraftDirty = false;
   let localAssetError: string | null = null;
   let localAssetValidating = false;
+  let isLocalDisplayConnected = false;
+  let localAssetPickerKind: LocalMediaKind | null = null;
+  let localAssetSource: 'display' | 'server' = 'display';
+  let localAssetSourceInitialized = false;
+  let displayLocalError: string | null = null;
+  let displayLocalFileInput: HTMLInputElement | null = null;
 
   $: if (data?.controlType === 'local-asset-picker') {
     const current = typeof data?.value === 'string' ? String(data.value) : '';
-    if (!localAssetDraftDirty) localAssetDraft = current;
+    const currentTrimmed = current.trim();
+    localAssetPickerKind = localAssetKindFromControl((data as any)?.assetKind, '') ?? null;
+
+    if (!localAssetSourceInitialized) {
+      if (isDisplayFileRef(currentTrimmed)) localAssetSource = 'display';
+      else if (currentTrimmed) localAssetSource = 'server';
+      else localAssetSource = isLocalDisplayConnected ? 'display' : 'server';
+      localAssetSourceInitialized = true;
+    } else {
+      // If a project loads a non-empty value, keep the UI source in sync.
+      if (isDisplayFileRef(currentTrimmed) && localAssetSource !== 'display') {
+        localAssetSource = 'display';
+      } else if (currentTrimmed && !isDisplayFileRef(currentTrimmed) && localAssetSource !== 'server') {
+        localAssetSource = 'server';
+      }
+    }
+
+    // Server-local draft input only applies when the current value is a filesystem path.
+    if (!localAssetDraftDirty) localAssetDraft = isDisplayFileRef(currentTrimmed) ? '' : currentTrimmed;
   }
+
+  $: if (data?.controlType === 'local-asset-picker' && localAssetSource === 'server' && localAssetSourceInitialized) {
+    if (!didRefreshLocalMedia) {
+      didRefreshLocalMedia = true;
+      void localMediaStore.refresh();
+    }
+  }
+
+  function buildDisplayLocalMediaOptions(kind: string): { value: string; label: string }[] {
+    const list = ($localDisplayMediaStore?.files ?? []) as any[];
+    const k = kind && typeof kind === 'string' ? kind : 'any';
+    const filtered = k === 'any' ? list : list.filter((f) => String(f?.kind ?? '') === k);
+    return filtered.map((f) => {
+      const id = String(f?.id ?? '');
+      const name = String(f?.name ?? id);
+      const sizeBytes = typeof f?.sizeBytes === 'number' ? f.sizeBytes : 0;
+      const sizeMb = sizeBytes > 0 ? Math.round((sizeBytes / (1024 * 1024)) * 100) / 100 : 0;
+      const sizeLabel = sizeMb > 0 ? ` (${sizeMb} MB)` : '';
+      return {
+        value: buildDisplayFileRef(id),
+        label: `${name}${sizeLabel}`,
+      };
+    });
+  }
+
+  function acceptForLocalKind(kind: LocalMediaKind | null): string {
+    if (kind === 'audio') return 'audio/*';
+    if (kind === 'image') return 'image/*';
+    if (kind === 'video') return 'video/*';
+    return '';
+  }
+
+  const switchLocalAssetSource = (next: 'display' | 'server') => {
+    if (data?.readonly) return;
+    localAssetSource = next;
+    displayLocalError = null;
+    localAssetError = null;
+  };
+
+  const openDisplayLocalFilePicker = () => {
+    if (data?.readonly) return;
+    displayLocalError = null;
+    displayLocalFileInput?.click();
+  };
+
+  const changeDisplayLocalSelect = (event: Event) => {
+    const target = event.target as HTMLSelectElement;
+    const next = target.value;
+    displayLocalError = null;
+    localAssetError = null;
+    localAssetDraftDirty = false;
+    localAssetDraft = '';
+    data?.setValue?.(next);
+  };
+
+  const onDisplayLocalFileChange = (event: Event) => {
+    if (data?.readonly) return;
+    const target = event.target as HTMLInputElement;
+    const file = target.files?.[0] ?? null;
+    target.value = '';
+    if (!file) return;
+
+    const fallbackKind = inferLocalKindFromPath(file.name);
+    const kind = localAssetKindFromControl((data as any)?.assetKind, file.name) ?? fallbackKind;
+    if (!kind) {
+      displayLocalError = 'Unsupported file type for this node.';
+      return;
+    }
+
+    const entry = localDisplayMediaStore.registerFile(file, kind);
+    displayLocalError = null;
+    localAssetError = null;
+    localAssetDraftDirty = false;
+    localAssetDraft = '';
+    localAssetSource = 'display';
+    data?.setValue?.(buildDisplayFileRef(entry.id));
+  };
 
   const changeLocalAssetSelect = (event: Event) => {
     const target = event.target as HTMLSelectElement;
@@ -222,19 +353,16 @@
     void validateLocalAssetDraft();
   };
 
-  function clientLabel(c: ClientInfo): string {
-    return String((c as any).clientId ?? '');
+  function displayLocalSelectedName(value: unknown): string {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    const id = parseDisplayFileId(raw);
+    if (!id) return '';
+    const entry = localDisplayMediaStore.getFileById(id);
+    return entry ? entry.name : '';
   }
 
-  function clientSubtitle(c: ClientInfo): string {
-    const connectedAt = (c as any).connectedAt;
-    if (!connectedAt) return '';
-    try {
-      const d = new Date(connectedAt);
-      return d.toLocaleTimeString(undefined, { hour12: false });
-    } catch {
-      return '';
-    }
+  function clientLabel(c: ClientInfo): string {
+    return String((c as any).clientId ?? '');
   }
 
   function readinessClass(clientId: string): string {
@@ -279,7 +407,18 @@
     return keyed.map((k) => k.id);
   };
 
-  $: clientPickerSelectedIds = (() => {
+  $: clientPickerInputLocked = (() => {
+    if (data?.controlType !== 'client-picker') return false;
+    const nodeId = String(data?.nodeId ?? '');
+    if (!nodeId) return false;
+    return ($graphStateStore?.connections ?? []).some(
+      (c) =>
+        String(c.targetNodeId) === nodeId &&
+        (String(c.targetPortId) === 'index' || String(c.targetPortId) === 'range')
+    );
+  })();
+
+  $: clientPickerView = (() => {
     if (data?.controlType !== 'client-picker') return [];
     const _tick = $tickTimeStore;
     void _tick;
@@ -287,39 +426,55 @@
     const nodeId = String(data?.nodeId ?? '');
     if (!nodeId) return [];
 
-    const clients = ($audienceClients ?? [])
-      .map((c: any) => String(c?.clientId ?? ''))
-      .filter(Boolean);
+    const rawClients = ($audienceClients ?? []) as any[];
+    const clients = rawClients.map((c) => String(c?.clientId ?? '')).filter(Boolean);
     if (clients.length === 0) return [];
+    const clientById = new Map<string, ClientInfo>();
+    for (const c of rawClients) {
+      const id = String((c as any)?.clientId ?? '');
+      if (!id) continue;
+      clientById.set(id, c as ClientInfo);
+    }
 
     const node = nodeEngine.getNode(nodeId);
-    if (!node) return [];
+    if (!node) {
+      const orderedClients = clients.map((id) => clientById.get(id)).filter(Boolean) as ClientInfo[];
+      return orderedClients.map((c) => ({ client: c, selected: false, primary: false }));
+    }
     const computed = nodeEngine.getLastComputedInputs(nodeId);
-    const getComputedOrStoredInput = (portId: string): unknown => {
-      if (computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
+    const isPortConnected = (portId: string) =>
+      ($graphStateStore?.connections ?? []).some(
+        (c) => String(c.targetNodeId) === nodeId && String(c.targetPortId) === String(portId)
+      );
+    const getEffectiveInput = (portId: 'index' | 'range' | 'random'): unknown => {
+      const connected = isPortConnected(portId);
+      if (connected && computed && Object.prototype.hasOwnProperty.call(computed, portId)) {
         return (computed as any)[portId];
       }
       return (node.inputValues as any)?.[portId];
     };
 
     const total = clients.length;
-    const indexRaw = toFiniteNumber(getComputedOrStoredInput('index'), 1);
-    const rangeRaw = toFiniteNumber(getComputedOrStoredInput('range'), 1);
-    const random = coerceBoolean(getComputedOrStoredInput('random'), false);
+    const indexRaw = toFiniteNumber(getEffectiveInput('index'), 1);
+    const rangeRaw = toFiniteNumber(getEffectiveInput('range'), 1);
+    const random = coerceBoolean(getEffectiveInput('random'), false);
 
     const index = clampInt(indexRaw, 1, total);
     const range = clampInt(rangeRaw, 1, total);
     const ordered = random ? buildStableRandomOrder(nodeId, clients) : clients;
 
-    const ids: string[] = [];
+    const selectedIdSet = new Set<string>();
     const start = index - 1;
-    for (let i = 0; i < range; i += 1) {
-      ids.push(ordered[(start + i) % total]);
-    }
-    return ids;
+    for (let i = 0; i < range; i += 1) selectedIdSet.add(ordered[(start + i) % total]);
+    const selectedFirstId = ordered[start] ?? '';
+
+    const orderedClients = ordered.map((id) => clientById.get(id)).filter(Boolean) as ClientInfo[];
+    return orderedClients.map((c) => ({
+      client: c,
+      selected: selectedIdSet.has(String((c as any)?.clientId ?? '')),
+      primary: String((c as any)?.clientId ?? '') === selectedFirstId,
+    }));
   })();
-  $: clientPickerPrimaryClientId = clientPickerSelectedIds[0] ?? '';
-  $: clientPickerSelectedIdSet = new Set(clientPickerSelectedIds);
 
   function formatValue(val: number | null | undefined): string {
     if (val === null || val === undefined) return '0.00';
@@ -1114,6 +1269,66 @@
       {/if}
     </label>
   </div>
+{:else if data?.controlType === 'note'}
+  <div class="control-field note-field {isInline ? 'inline' : ''}">
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+    <div class="note-toolbar" on:pointerdown|stopPropagation>
+      <button
+        type="button"
+        class="note-tab {noteViewMode === 'edit' ? 'active' : ''}"
+        on:click|stopPropagation={() => (noteViewMode = 'edit')}
+      >
+        Edit
+      </button>
+      <button
+        type="button"
+        class="note-tab {noteViewMode === 'preview' ? 'active' : ''}"
+        on:click|stopPropagation={() => (noteViewMode = 'preview')}
+      >
+        Preview
+      </button>
+      <button
+        type="button"
+        class="note-tab {noteViewMode === 'split' ? 'active' : ''}"
+        on:click|stopPropagation={() => (noteViewMode = 'split')}
+      >
+        Split
+      </button>
+    </div>
+
+    {#if noteViewMode === 'preview'}
+      <div class="note-preview" on:pointerdown|stopPropagation on:wheel|stopPropagation>
+        {@html noteHtml}
+      </div>
+    {:else if noteViewMode === 'split'}
+      <textarea
+        class="control-input note-textarea {isInline ? 'inline' : ''}"
+        value={data.value}
+        placeholder={data.placeholder ?? ''}
+        readonly={data.readonly}
+        disabled={data.readonly}
+        rows="6"
+        on:pointerdown|stopPropagation
+        on:input={changeNote}
+      />
+      <div class="note-preview" on:pointerdown|stopPropagation on:wheel|stopPropagation>
+        {@html noteHtml}
+      </div>
+    {:else}
+      <textarea
+        class="control-input note-textarea {isInline ? 'inline' : ''}"
+        value={data.value}
+        placeholder={data.placeholder ?? ''}
+        readonly={data.readonly}
+        disabled={data.readonly}
+        rows="6"
+        on:pointerdown|stopPropagation
+        on:input={changeNote}
+      />
+    {/if}
+  </div>
 {:else if data?.controlType === 'time-range'}
   <div class="time-range {isInline ? 'inline' : ''}">
     {#if hasLabel}
@@ -1243,24 +1458,19 @@
     {#if ($audienceClients ?? []).length === 0}
       <div class="client-empty">No clients connected</div>
     {:else}
-      <div class="client-list">
-        {#each $audienceClients as c (c.clientId)}
+      <div class="client-grid {clientPickerInputLocked ? 'locked' : ''}">
+        {#each clientPickerView as item (item.client.clientId)}
           <button
             type="button"
-            class="client-item {c.clientId === clientPickerPrimaryClientId
-              ? 'selected'
-              : clientPickerSelectedIdSet.has(c.clientId)
-                ? 'in-range'
-                : ''}"
-            disabled={data.readonly}
+            class="client-dot-btn {item.primary ? 'primary' : ''} {item.selected ? 'selected' : ''}"
+            title={clientLabel(item.client)}
+            aria-label={clientLabel(item.client)}
+            aria-pressed={item.selected}
+            disabled={data.readonly || clientPickerInputLocked}
             on:pointerdown|stopPropagation
-            on:click|stopPropagation={() => pickClient(c.clientId)}
+            on:click|stopPropagation={() => pickClient(item.client.clientId)}
           >
-            <span class="client-dot {readinessClass(c.clientId)}"></span>
-            <span class="client-main">
-              <span class="client-id">{clientLabel(c)}</span>
-              <span class="client-time">{clientSubtitle(c)}</span>
-            </span>
+            <span class="client-dot {readinessClass(item.client.clientId)}"></span>
           </button>
         {/each}
       </div>
@@ -1290,47 +1500,121 @@
       <div class="control-label">{data.label}</div>
     {/if}
 
-    <select
-      class="control-input {isInline ? 'inline' : ''}"
-      value={data.value}
-      disabled={data.readonly || localAssetValidating}
-      on:pointerdown|stopPropagation
-      on:change={changeLocalAssetSelect}
-    >
-      <option value="">(select local file)</option>
-      {#each buildLocalMediaOptions(data.assetKind) as opt (opt.value)}
-        <option value={opt.value}>{opt.label}</option>
-      {/each}
-    </select>
-
-    <div class="local-asset-path-row">
-      <input
-        class="control-input local-asset-path"
-        value={localAssetDraft}
-        placeholder="/Users/.../file.mp4"
-        disabled={data.readonly || localAssetValidating}
-        on:pointerdown|stopPropagation
-        on:input={onLocalAssetDraftInput}
-        on:keydown={onLocalAssetDraftKeyDown}
-        on:blur={onLocalAssetDraftBlur}
-      />
+    <div class="local-asset-source" on:pointerdown|stopPropagation>
       <button
         type="button"
-        class="local-asset-btn"
-        disabled={data.readonly || localAssetValidating}
-        on:pointerdown|stopPropagation
-        on:click|stopPropagation={() => validateLocalAssetDraft()}
+        class="local-asset-source-btn {localAssetSource === 'display' ? 'active' : ''}"
+        disabled={data.readonly}
+        on:click|stopPropagation={() => switchLocalAssetSource('display')}
       >
-        {localAssetValidating ? 'Checking…' : 'Check'}
+        Display
+      </button>
+      <button
+        type="button"
+        class="local-asset-source-btn {localAssetSource === 'server' ? 'active' : ''}"
+        disabled={data.readonly}
+        on:click|stopPropagation={() => switchLocalAssetSource('server')}
+      >
+        Server
       </button>
     </div>
 
-    {#if $localMediaStore?.status === 'error' && $localMediaStore?.error}
-      <div class="local-asset-hint">Local media list error: {$localMediaStore.error}</div>
+    {#if localAssetSource === 'display'}
+      <div class="file-row">
+        <button
+          type="button"
+          class="file-btn"
+          disabled={data.readonly}
+          on:pointerdown|stopPropagation
+          on:click|stopPropagation={openDisplayLocalFilePicker}
+        >
+          Choose file
+        </button>
+        <div class="file-name">
+          {#if isDisplayFileRef(data.value)}
+            {displayLocalSelectedName(data.value) || String(data.value)}
+          {:else}
+            No file selected
+          {/if}
+        </div>
+      </div>
+
+      <input
+        class="file-input"
+        type="file"
+        accept={acceptForLocalKind(localAssetPickerKind)}
+        bind:this={displayLocalFileInput}
+        disabled={data.readonly}
+        on:pointerdown|stopPropagation
+        on:change={onDisplayLocalFileChange}
+      />
+
+      <select
+        class="control-input {isInline ? 'inline' : ''}"
+        value={isDisplayFileRef(data.value) ? data.value : ''}
+        disabled={data.readonly}
+        on:pointerdown|stopPropagation
+        on:change={changeDisplayLocalSelect}
+      >
+        <option value="">(picked files)</option>
+        {#each buildDisplayLocalMediaOptions(data.assetKind) as opt (opt.value)}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+
+      {#if !isLocalDisplayConnected}
+        <div class="local-asset-hint">Display is not paired yet. Open Display first.</div>
+      {/if}
+      <div class="local-asset-hint">
+        Browser security: a deployed website cannot read arbitrary paths like <code>/Users/...</code>. Use the file picker.
+      </div>
+      {#if displayLocalError}
+        <div class="local-asset-error">{displayLocalError}</div>
+      {/if}
+    {:else}
+      <select
+        class="control-input {isInline ? 'inline' : ''}"
+        value={typeof data.value === 'string' && !isDisplayFileRef(data.value) ? data.value : ''}
+        disabled={data.readonly || localAssetValidating}
+        on:pointerdown|stopPropagation
+        on:change={changeLocalAssetSelect}
+      >
+        <option value="">(select server-local file)</option>
+        {#each buildLocalMediaOptions(data.assetKind) as opt (opt.value)}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+
+      <div class="local-asset-path-row">
+        <input
+          class="control-input local-asset-path"
+          value={localAssetDraft}
+          placeholder="/Users/.../file.mp4"
+          disabled={data.readonly || localAssetValidating}
+          on:pointerdown|stopPropagation
+          on:input={onLocalAssetDraftInput}
+          on:keydown={onLocalAssetDraftKeyDown}
+          on:blur={onLocalAssetDraftBlur}
+        />
+        <button
+          type="button"
+          class="local-asset-btn"
+          disabled={data.readonly || localAssetValidating}
+          on:pointerdown|stopPropagation
+          on:click|stopPropagation={() => validateLocalAssetDraft()}
+        >
+          {localAssetValidating ? 'Checking…' : 'Check'}
+        </button>
+      </div>
+
+      {#if $localMediaStore?.status === 'error' && $localMediaStore?.error}
+        <div class="local-asset-hint">Local media list error: {$localMediaStore.error}</div>
+      {/if}
+      {#if localAssetError}
+        <div class="local-asset-error">{localAssetError}</div>
+      {/if}
     {/if}
-    {#if localAssetError}
-      <div class="local-asset-error">{localAssetError}</div>
-    {/if}
+
   </div>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
@@ -1436,6 +1720,34 @@
     padding: 6px 10px 10px;
   }
 
+  .local-asset-source {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .local-asset-source-btn {
+    flex: 1;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.78);
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .local-asset-source-btn.active {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .local-asset-source-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
   .local-asset-path-row {
     display: flex;
     gap: 8px;
@@ -1494,6 +1806,140 @@
   .boolean-field.inline {
     padding-top: 0;
     padding-bottom: 0;
+  }
+
+  .note-field {
+    padding-bottom: 10px;
+  }
+
+  .note-textarea {
+    min-height: 110px;
+    resize: vertical;
+    font-family: inherit;
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
+
+  .note-toolbar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .note-tab {
+    border-radius: 999px;
+    padding: 6px 10px;
+    background: rgba(2, 6, 23, 0.32);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .note-tab:hover {
+    border-color: rgba(99, 102, 241, 0.7);
+  }
+
+  .note-tab.active {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.35);
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .note-preview {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: rgba(2, 6, 23, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    overflow: auto;
+    max-height: 260px;
+  }
+
+  .note-preview :global(p) {
+    margin: 0 0 10px;
+  }
+
+  .note-preview :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .note-preview :global(h1) {
+    font-size: 16px;
+    margin: 10px 0 8px;
+  }
+
+  .note-preview :global(h2) {
+    font-size: 14px;
+    margin: 10px 0 8px;
+  }
+
+  .note-preview :global(h3),
+  .note-preview :global(h4),
+  .note-preview :global(h5),
+  .note-preview :global(h6) {
+    font-size: 13px;
+    margin: 10px 0 8px;
+  }
+
+  .note-preview :global(ul),
+  .note-preview :global(ol) {
+    margin: 0 0 10px;
+    padding-left: 18px;
+  }
+
+  .note-preview :global(li) {
+    margin: 4px 0;
+  }
+
+  .note-preview :global(a) {
+    color: rgba(129, 140, 248, 0.95);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .note-preview :global(code) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace;
+    font-size: 11px;
+    background: rgba(2, 6, 23, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 1px 6px;
+    border-radius: 8px;
+  }
+
+  .note-preview :global(pre) {
+    margin: 0 0 10px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    overflow: auto;
+  }
+
+  .note-preview :global(pre code) {
+    background: transparent;
+    border: none;
+    padding: 0;
+    white-space: pre;
+    display: block;
+  }
+
+  .note-preview :global(blockquote) {
+    margin: 0 0 10px;
+    padding-left: 10px;
+    border-left: 2px solid rgba(99, 102, 241, 0.55);
+    color: rgba(255, 255, 255, 0.82);
+  }
+
+  .note-preview :global(hr) {
+    border: none;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.14);
+    margin: 10px 0;
   }
 
   .toggle {
@@ -1763,53 +2209,66 @@
 
   .client-list {
     display: flex;
-    flex-direction: column;
     gap: 6px;
     max-height: 160px;
     overflow: auto;
     padding-right: 2px;
   }
 
-  .client-item {
+  .client-grid {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 10px;
-    border-radius: 12px;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 160px;
+    overflow: auto;
+    padding-right: 2px;
+  }
+
+  .client-grid.locked {
+    opacity: 0.75;
+  }
+
+  .client-dot-btn {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: rgba(2, 6, 23, 0.35);
     color: rgba(255, 255, 255, 0.88);
     cursor: pointer;
-    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  .client-item:hover {
+  .client-dot-btn:hover {
     border-color: rgba(99, 102, 241, 0.35);
     background: rgba(2, 6, 23, 0.45);
   }
 
-  .client-item.selected {
-    border-color: rgba(99, 102, 241, 0.7);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  .client-dot-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
   }
 
-  .client-item.in-range {
-    border-color: rgba(99, 102, 241, 0.35);
+  .client-dot-btn.selected {
+    border-color: rgba(99, 102, 241, 0.65);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+  }
+
+  .client-dot-btn.primary {
+    border-color: rgba(99, 102, 241, 0.85);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
   }
 
   .client-dot {
-    width: 10px;
-    height: 10px;
+    width: 7px;
+    height: 7px;
     border-radius: 999px;
-    background: rgba(250, 204, 21, 0.95);
+    background: rgba(250, 204, 21, 0.92);
     box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
     flex: 0 0 auto;
-  }
-
-  .client-dot.ready {
-    background: rgba(34, 197, 94, 0.9);
-    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.16);
   }
 
   .client-dot.error {
@@ -1817,27 +2276,19 @@
     box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
   }
 
-  .client-main {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 10px;
-    width: 100%;
-    min-width: 0;
+  .client-dot.connected {
+    background: rgba(250, 204, 21, 0.92);
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
   }
 
-  .client-id {
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .client-dot.loading {
+    background: rgba(250, 204, 21, 0.92);
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
   }
 
-  .client-time {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.6);
-    flex: 0 0 auto;
+  .client-dot.ready {
+    background: rgba(34, 197, 94, 0.9);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.16);
   }
 
   .control-unknown {
