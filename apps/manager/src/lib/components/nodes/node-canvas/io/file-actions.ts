@@ -18,6 +18,8 @@ type FileActionsOptions = {
     updateNodeConfig: (nodeId: string, config: Record<string, unknown>) => void;
   };
   getNodePosition?: (nodeId: string) => { x: number; y: number } | null;
+  getNodeCollapsed?: (nodeId: string) => boolean;
+  setNodeCollapsed?: (nodeId: string, collapsed: boolean) => Promise<void> | void;
   getImportGraphInput: () => HTMLInputElement | null;
   getImportTemplatesInput: () => HTMLInputElement | null;
   getNodeGroups: () => NodeGroup[];
@@ -27,7 +29,14 @@ type FileActionsOptions = {
 };
 
 type NodeGraphFileV1 = { version: 1; kind: 'node-graph'; graph: GraphState };
-type NodeGraphFileV2 = { version: 2; kind: 'node-graph'; graph: GraphState; groups: NodeGroup[] };
+type NodeGraphUiV1 = { collapsedNodeIds?: string[] };
+type NodeGraphFileV2 = {
+  version: 2;
+  kind: 'node-graph';
+  graph: GraphState;
+  groups: NodeGroup[];
+  ui?: NodeGraphUiV1;
+};
 
 const downloadJson = (payload: unknown, filename: string) => {
   if (typeof document === 'undefined') return;
@@ -68,7 +77,14 @@ function parseNodeGroups(value: unknown): NodeGroup[] {
   return groups;
 }
 
-type ParsedNodeGraphFile = { graph: GraphState; groups: NodeGroup[] };
+function parseCollapsedNodeIds(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const raw = value.collapsedNodeIds;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((v) => String(v)).filter(Boolean);
+}
+
+type ParsedNodeGraphFile = { graph: GraphState; groups: NodeGroup[]; collapsedNodeIds: string[] };
 
 const parseNodeGraphFile = (payload: unknown): ParsedNodeGraphFile | null => {
   if (!payload || typeof payload !== 'object') return null;
@@ -76,12 +92,20 @@ const parseNodeGraphFile = (payload: unknown): ParsedNodeGraphFile | null => {
   if (wrapped.kind === 'node-graph' && (wrapped.version === 1 || wrapped.version === 2) && wrapped.graph) {
     const graph = wrapped.graph as any;
     if (!Array.isArray(graph.nodes) || !Array.isArray(graph.connections)) return null;
-    return { graph: graph as GraphState, groups: parseNodeGroups(wrapped.groups) };
+    return {
+      graph: graph as GraphState,
+      groups: parseNodeGroups(wrapped.groups),
+      collapsedNodeIds: parseCollapsedNodeIds(wrapped.ui),
+    };
   }
 
   const raw = payload as any;
   if (Array.isArray(raw.nodes) && Array.isArray(raw.connections)) {
-    return { graph: raw as GraphState, groups: parseNodeGroups(raw.groups) };
+    return {
+      graph: raw as GraphState,
+      groups: parseNodeGroups(raw.groups),
+      collapsedNodeIds: parseCollapsedNodeIds(raw.ui),
+    };
   }
 
   return null;
@@ -185,6 +209,9 @@ function computeTemplateOffset(nodes: GraphState['nodes'], anchor: { x: number; 
 export function createFileActions(opts: FileActionsOptions) {
   const exportGraph = () => {
     const raw = opts.nodeEngine.exportGraph();
+    const collapsedNodeIds = (raw.nodes ?? [])
+      .map((n) => String((n as any)?.id ?? ''))
+      .filter((id) => id && Boolean(opts.getNodeCollapsed?.(id)));
     const graph: GraphState = {
       nodes: (raw.nodes ?? []).map((n) => {
         const nodeId = String((n as any)?.id ?? '');
@@ -202,7 +229,11 @@ export function createFileActions(opts: FileActionsOptions) {
       nodeIds: (g.nodeIds ?? []).map((id) => String(id)).filter(Boolean),
       disabled: Boolean(g.disabled),
     }));
-    const file: NodeGraphFileV2 = { version: 2, kind: 'node-graph', graph, groups };
+    const ui: NodeGraphUiV1 | undefined =
+      collapsedNodeIds.length > 0
+        ? { collapsedNodeIds: Array.from(new Set(collapsedNodeIds)) }
+        : undefined;
+    const file: NodeGraphFileV2 = { version: 2, kind: 'node-graph', graph, groups, ui };
     downloadJson(file, 'shugu-node-graph.json');
   };
 
@@ -335,6 +366,17 @@ export function createFileActions(opts: FileActionsOptions) {
 
     const skippedGroups = Math.max(0, parsedFile.groups.length - importedGroups.length);
 
+    const collapsedImportedNodeIds = Array.from(
+      new Set(
+        (parsedFile.collapsedNodeIds ?? [])
+          .map((oldId) => nodeIdMap.get(String(oldId)))
+          .filter(Boolean) as string[]
+      )
+    );
+    for (const nodeId of collapsedImportedNodeIds) {
+      await opts.setNodeCollapsed?.(String(nodeId), true);
+    }
+
     if (importedNodeIds.length > 0) opts.onSelectNodeIds?.(importedNodeIds);
 
     const groupSuffix = parsedFile.groups.length
@@ -346,7 +388,9 @@ export function createFileActions(opts: FileActionsOptions) {
   };
 
   const exportTemplates = () => {
-    const file = exportMidiTemplateFile(opts.nodeEngine.exportGraph());
+    const file = exportMidiTemplateFile(opts.nodeEngine.exportGraph(), {
+      isNodeCollapsed: opts.getNodeCollapsed,
+    });
     downloadJson(file, 'shugu-midi-templates.json');
   };
 
@@ -375,6 +419,16 @@ export function createFileActions(opts: FileActionsOptions) {
     }
 
     const created = instantiateMidiBindings(templates, { anchor: opts.getViewportCenterGraphPos() });
+    if (created.length > 0 && typeof opts.setNodeCollapsed === 'function') {
+      const templateById = new Map((templates.bindings ?? []).map((tpl) => [String(tpl.id), tpl] as const));
+      for (const binding of created) {
+        const tpl = templateById.get(String(binding.templateId));
+        const collapsed = tpl?.ui?.collapsed;
+        if (collapsed?.midi) await opts.setNodeCollapsed(String(binding.midiNodeId), true);
+        if (collapsed?.map) await opts.setNodeCollapsed(String(binding.mapNodeId), true);
+        if (collapsed?.target) await opts.setNodeCollapsed(String(binding.targetNodeId), true);
+      }
+    }
     if (created.length > 0) {
       const nodeIds = new Set<string>();
       for (const binding of created) {

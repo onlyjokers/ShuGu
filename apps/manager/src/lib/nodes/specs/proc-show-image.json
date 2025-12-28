@@ -1,0 +1,8 @@
+{
+  "__purpose": "Processor node: convert an incoming image url (including data URLs) into showImage/hideImage commands for routing to Client/Display sinks.",
+  "type": "proc-show-image",
+  "label": "Show Image",
+  "category": "Processors",
+  "inputs": [{ "id": "in", "label": "In", "type": "image" }],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }]
+}

@@ -225,22 +225,29 @@
       sceneManager.update(dt, context);
     }
 
+    if ($convolution.enabled) {
+      drawConvolutionOverlay();
+    } else if (convCtx) {
+      convCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
+    }
+
     if ($asciiEnabled) {
       drawAsciiOverlay();
     } else if (asciiCtx) {
       asciiCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
-      if (!$convolution.enabled) setBaseCanvasVisibility(true);
     }
 
-    if ($convolution.enabled) {
-      drawConvolutionOverlay();
+    if ($asciiEnabled) {
+      if (asciiCanvas) asciiCanvas.style.visibility = 'visible';
+      if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
+    } else if ($convolution.enabled) {
       setBaseCanvasVisibility(false);
       if (asciiCanvas) asciiCanvas.style.visibility = 'hidden';
       if (convolutionCanvas) convolutionCanvas.style.visibility = 'visible';
-    } else if (convCtx) {
-      convCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
+    } else {
+      setBaseCanvasVisibility(true);
+      if (asciiCanvas) asciiCanvas.style.visibility = 'hidden';
       if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
-      if (asciiCanvas) asciiCanvas.style.visibility = 'visible';
     }
 
     animationId = requestAnimationFrame(animate);
@@ -369,7 +376,7 @@
   function drawAsciiOverlay() {
     if (!asciiCtx || !tinyCtx || !tinyCanvas) return;
 
-    const src = ensureSourceCanvas();
+    const src = $convolution.enabled ? convolutionCanvas : ensureSourceCanvas();
     const width = container?.clientWidth ?? 0;
     const height = container?.clientHeight ?? 0;
     if (!src || width === 0 || height === 0) {
@@ -479,7 +486,7 @@
     const height = container?.clientHeight ?? 0;
     if (width === 0 || height === 0) return;
 
-    const src = $asciiEnabled ? asciiCanvas : ensureSourceCanvas();
+    const src = ensureSourceCanvas();
     if (!src) {
       convCtx.clearRect(0, 0, width, height);
       return;

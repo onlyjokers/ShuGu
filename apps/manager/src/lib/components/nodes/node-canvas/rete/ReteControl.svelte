@@ -43,6 +43,9 @@
     data instanceof ClassicPreset.InputControl && data.type === 'number'
       ? ((data as any).step ?? 'any')
       : undefined;
+  $: isMomentaryButton =
+    data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
+  $: momentaryButtonLabel = isMomentaryButton ? String((data as any).buttonLabel ?? 'Push') : 'Push';
   const graphStateStore = nodeEngine.graphState;
   const isRunningStore = nodeEngine.isRunning;
   const tickTimeStore = nodeEngine.tickTime;
@@ -99,6 +102,22 @@
     data.setValue(next);
   }
 
+  let momentaryInputResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function pressMomentaryInput(): void {
+    if (!(data instanceof ClassicPreset.InputControl)) return;
+    if (!(data as any).button) return;
+    if ((data as any).readonly) return;
+
+    if (momentaryInputResetTimer) clearTimeout(momentaryInputResetTimer);
+    data.setValue(1);
+    // Keep the trigger high long enough for at least one graph tick to observe it.
+    momentaryInputResetTimer = setTimeout(() => {
+      momentaryInputResetTimer = null;
+      data.setValue(0);
+    }, 120);
+  }
+
   function changeSelect(event: Event) {
     const target = event.target as HTMLSelectElement;
     data?.setValue?.(target.value);
@@ -139,11 +158,6 @@
   }
 
   let didRefreshLocalMedia = false;
-  $: if (data?.controlType === 'local-asset-picker' && !didRefreshLocalMedia) {
-    didRefreshLocalMedia = true;
-    // Refresh server-local media only when needed; Display-local mode does not require server/local-media token.
-    // (Actual refresh is triggered below when the user selects "Server" source.)
-  }
 
   $: isLocalDisplayConnected = $displayBridgeState?.status === 'connected';
 
@@ -193,20 +207,26 @@
   let localAssetPickerKind: LocalMediaKind | null = null;
   let localAssetSource: 'display' | 'server' = 'display';
   let localAssetSourceInitialized = false;
+  let localAssetSourcePinned = false;
   let displayLocalError: string | null = null;
   let displayLocalFileInput: HTMLInputElement | null = null;
+  let lastServerLocalAssetPath = '';
+  let lastDisplayFileRef = '';
 
   $: if (data?.controlType === 'local-asset-picker') {
     const current = typeof data?.value === 'string' ? String(data.value) : '';
     const currentTrimmed = current.trim();
     localAssetPickerKind = localAssetKindFromControl((data as any)?.assetKind, '') ?? null;
 
+    if (isDisplayFileRef(currentTrimmed)) lastDisplayFileRef = currentTrimmed;
+    else if (currentTrimmed) lastServerLocalAssetPath = currentTrimmed;
+
     if (!localAssetSourceInitialized) {
       if (isDisplayFileRef(currentTrimmed)) localAssetSource = 'display';
       else if (currentTrimmed) localAssetSource = 'server';
       else localAssetSource = isLocalDisplayConnected ? 'display' : 'server';
       localAssetSourceInitialized = true;
-    } else {
+    } else if (!localAssetSourcePinned) {
       // If a project loads a non-empty value, keep the UI source in sync.
       if (isDisplayFileRef(currentTrimmed) && localAssetSource !== 'display') {
         localAssetSource = 'display';
@@ -219,11 +239,17 @@
     if (!localAssetDraftDirty) localAssetDraft = isDisplayFileRef(currentTrimmed) ? '' : currentTrimmed;
   }
 
-  $: if (data?.controlType === 'local-asset-picker' && localAssetSource === 'server' && localAssetSourceInitialized) {
-    if (!didRefreshLocalMedia) {
-      didRefreshLocalMedia = true;
-      void localMediaStore.refresh();
+  $: if (data?.controlType === 'local-asset-picker' && localAssetSourceInitialized) {
+    if (localAssetSource === 'server') {
+      if (!didRefreshLocalMedia) {
+        didRefreshLocalMedia = true;
+        void localMediaStore.refresh();
+      }
+    } else {
+      didRefreshLocalMedia = false;
     }
+  } else {
+    didRefreshLocalMedia = false;
   }
 
   function buildDisplayLocalMediaOptions(kind: string): { value: string; label: string }[] {
@@ -253,8 +279,30 @@
   const switchLocalAssetSource = (next: 'display' | 'server') => {
     if (data?.readonly) return;
     localAssetSource = next;
+    localAssetSourcePinned = true;
     displayLocalError = null;
     localAssetError = null;
+
+    const current = typeof data?.value === 'string' ? String(data.value).trim() : '';
+    if (isDisplayFileRef(current)) lastDisplayFileRef = current;
+    else if (current) lastServerLocalAssetPath = current;
+
+    if (next === 'display') {
+      localAssetDraftDirty = false;
+      localAssetDraft = lastServerLocalAssetPath;
+      if (!isDisplayFileRef(current)) {
+        // Switching to Display-local mode: stop using server-local paths and restore the last picked file (if any).
+        data?.setValue?.(lastDisplayFileRef || '');
+      }
+      return;
+    }
+
+    // Switching to Server-local mode: restore the last server-local path (if any).
+    localAssetDraftDirty = false;
+    localAssetDraft = lastServerLocalAssetPath;
+    if (isDisplayFileRef(current) || !current) {
+      data?.setValue?.(lastServerLocalAssetPath || '');
+    }
   };
 
   const openDisplayLocalFilePicker = () => {
@@ -270,6 +318,8 @@
     localAssetError = null;
     localAssetDraftDirty = false;
     localAssetDraft = '';
+    localAssetSource = 'display';
+    localAssetSourcePinned = true;
     data?.setValue?.(next);
   };
 
@@ -293,6 +343,7 @@
     localAssetDraftDirty = false;
     localAssetDraft = '';
     localAssetSource = 'display';
+    localAssetSourcePinned = true;
     data?.setValue?.(buildDisplayFileRef(entry.id));
   };
 
@@ -302,6 +353,8 @@
     localAssetDraftDirty = false;
     localAssetDraft = next;
     localAssetError = null;
+    localAssetSource = 'server';
+    localAssetSourcePinned = true;
     data?.setValue?.(next);
   };
 
@@ -318,6 +371,8 @@
     if (!draft) {
       localAssetDraftDirty = false;
       localAssetError = null;
+      localAssetSourcePinned = true;
+      localAssetSource = 'server';
       data?.setValue?.('');
       return;
     }
@@ -335,6 +390,8 @@
       if (!validated?.path) throw new Error('Invalid path');
       localAssetDraftDirty = false;
       localAssetDraft = validated.path;
+      localAssetSourcePinned = true;
+      localAssetSource = 'server';
       data?.setValue?.(validated.path);
     } catch (err) {
       localAssetError = err instanceof Error ? err.message : String(err);
@@ -960,12 +1017,24 @@
     timeRangePlaybackRaf = requestAnimationFrame(frame);
   }
 
-  onDestroy(() => {
-    stopTimeRangePlayback();
-  });
-
   let lastTimelineAssetId = '';
   let lastTimelineUrl = '';
+  let lastTimelineDisplayFileId: string | null = null;
+  let lastTimelineDisplayFileUrl: string | null = null;
+
+  onDestroy(() => {
+    stopTimeRangePlayback();
+    if (momentaryInputResetTimer) clearTimeout(momentaryInputResetTimer);
+    if (lastTimelineDisplayFileUrl) {
+      try {
+        URL.revokeObjectURL(lastTimelineDisplayFileUrl);
+      } catch {
+        // ignore
+      }
+      lastTimelineDisplayFileUrl = null;
+      lastTimelineDisplayFileId = null;
+    }
+  });
 
   $: if (data?.controlType === 'time-range') {
     // Read tickTime so this block re-runs when node state changes (input edits, runtime ticks, etc.).
@@ -1016,6 +1085,15 @@
       timeRangeDurationSec = null;
       timeRangeBackdropUrl = null;
       lastTimelineUrl = '';
+      if (lastTimelineDisplayFileUrl) {
+        try {
+          URL.revokeObjectURL(lastTimelineDisplayFileUrl);
+        } catch {
+          // ignore
+        }
+        lastTimelineDisplayFileUrl = null;
+        lastTimelineDisplayFileId = null;
+      }
     }
 
     const serverUrl = localStorage.getItem('shugu-server-url') ?? '';
@@ -1033,7 +1111,26 @@
             ? 'audio'
             : null;
       if (!kind) return null;
-      return localAssetPath ? buildLocalMediaContentUrl(serverUrl, localAssetPath, kind) : null;
+      if (!localAssetPath) return null;
+      if (isDisplayFileRef(localAssetPath)) {
+        const id = parseDisplayFileId(localAssetPath);
+        if (!id) return null;
+        const entry = localDisplayMediaStore.getFileById(id);
+        if (!entry?.file) return null;
+        if (lastTimelineDisplayFileId !== id || !lastTimelineDisplayFileUrl) {
+          if (lastTimelineDisplayFileUrl) {
+            try {
+              URL.revokeObjectURL(lastTimelineDisplayFileUrl);
+            } catch {
+              // ignore
+            }
+          }
+          lastTimelineDisplayFileId = id;
+          lastTimelineDisplayFileUrl = URL.createObjectURL(entry.file);
+        }
+        return lastTimelineDisplayFileUrl;
+      }
+      return buildLocalMediaContentUrl(serverUrl, localAssetPath, kind);
     })();
 
     if (contentUrl && contentUrl !== lastTimelineUrl) {
@@ -1218,19 +1315,31 @@
     {#if showInputControlLabel}
       <div class="control-label">{inputControlLabel}</div>
     {/if}
-    <input
-      class="control-input {isInline ? 'inline' : ''}"
-      type={data.type}
-      value={data.value}
-      min={numberInputMin}
-      max={numberInputMax}
-      step={numberInputStep}
-      readonly={data.readonly}
-      disabled={data.readonly}
-      on:pointerdown|stopPropagation
-      on:input={changeInput}
-      on:blur={normalizeNumberInput}
-    />
+    {#if isMomentaryButton}
+      <button
+        type="button"
+        class="control-btn {isInline ? 'inline' : ''}"
+        disabled={data.readonly}
+        on:pointerdown|stopPropagation
+        on:click|stopPropagation={pressMomentaryInput}
+      >
+        {momentaryButtonLabel}
+      </button>
+    {:else}
+      <input
+        class="control-input {isInline ? 'inline' : ''}"
+        type={data.type}
+        value={data.value}
+        min={numberInputMin}
+        max={numberInputMax}
+        step={numberInputStep}
+        readonly={data.readonly}
+        disabled={data.readonly}
+        on:pointerdown|stopPropagation
+        on:input={changeInput}
+        on:blur={normalizeNumberInput}
+      />
+    {/if}
   </div>
 {:else if data?.controlType === 'select'}
   <div class="control-field {isInline ? 'inline' : ''}">
@@ -1688,6 +1797,36 @@
     color: rgba(255, 255, 255, 0.92);
     outline: none;
     font-size: 12px;
+  }
+
+  .control-btn {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: rgba(2, 6, 23, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.92);
+    outline: none;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .control-btn.inline {
+    width: 110px;
+    padding: 5px 8px;
+  }
+
+  .control-btn:hover:not(:disabled) {
+    border-color: rgba(99, 102, 241, 0.35);
+    background: rgba(2, 6, 23, 0.45);
+  }
+
+  .control-btn:disabled {
+    background: rgba(2, 6, 23, 0.22);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.58);
+    cursor: not-allowed;
   }
 
   select.control-input {

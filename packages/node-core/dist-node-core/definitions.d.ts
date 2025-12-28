@@ -42,6 +42,10 @@ export type ClientObjectDeps = {
      */
     getSensorForClientId?: (clientId: string) => LatestSensorDataLike | null;
     /**
+     * Manager-side lookup for per-client uploaded images (e.g. screenshots).
+     */
+    getImageForClientId?: (clientId: string) => unknown;
+    /**
      * Client-side convenience (single local client).
      * Prefer `executeCommandForClientId` when available.
      */

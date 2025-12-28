@@ -142,6 +142,31 @@
     requestFramesUpdate: () => requestFramesUpdate(),
   });
 
+  // Manager-only visual state (not part of the graph runtime).
+  // Used to restore UI state after imports when nodes may not be rendered yet.
+  const pendingCollapsedByNodeId = new Map<string, boolean>();
+
+  const getNodeCollapsed = (nodeId: string): boolean =>
+    Boolean(viewAdapter.getNodeVisualState(String(nodeId))?.collapsed);
+
+  const flushPendingCollapsedNodes = async () => {
+    if (pendingCollapsedByNodeId.size === 0) return;
+    for (const [nodeId, collapsed] of Array.from(pendingCollapsedByNodeId.entries())) {
+      if (!nodeMap.has(String(nodeId))) continue;
+      pendingCollapsedByNodeId.delete(String(nodeId));
+      await viewAdapter.setNodeVisualState(String(nodeId), { collapsed: Boolean(collapsed) });
+    }
+    requestFramesUpdate();
+    minimapController?.requestUpdate();
+  };
+
+  const setNodeCollapsed = async (nodeId: string, collapsed: boolean) => {
+    const id = String(nodeId ?? '');
+    if (!id) return;
+    pendingCollapsedByNodeId.set(id, Boolean(collapsed));
+    await flushPendingCollapsedNodes();
+  };
+
   const groupController = createGroupController({
     getContainer: () => container,
     getAdapter: () => viewAdapter,
@@ -2664,6 +2689,8 @@
   const fileActions = createFileActions({
     nodeEngine,
     getNodePosition: (nodeId) => viewAdapter.getNodePosition(String(nodeId)),
+    getNodeCollapsed,
+    setNodeCollapsed,
     getImportGraphInput: () => importGraphInputEl,
     getImportTemplatesInput: () => importTemplatesInputEl,
     getNodeGroups: () => get(groupController.nodeGroups),
@@ -2860,6 +2887,7 @@
       getSelectedNodeId: () => selectedNodeId,
       onAfterSync: () => {
         void syncSleepNodeSockets(graphState);
+        void flushPendingCollapsedNodes();
         minimapController.requestUpdate();
         requestFramesUpdate();
         void loopController?.applyHighlights();

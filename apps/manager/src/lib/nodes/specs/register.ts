@@ -22,7 +22,7 @@ import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
 import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
-import { getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
+import { clientScreenshotUploads, getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
 
@@ -1026,12 +1026,20 @@ function loadSpecs(): NodeSpec[] {
 registerDefaultNodeDefinitions(nodeRegistry, {
   // Manager-side: resolve clientId from node config.
   getClientId: () => null,
+  // Client node selection should only enumerate audience clients; Display has its own `display-object` node.
   getAllClientIds: () =>
-    (get(state).clients ?? []).map((c: any) => String(c?.clientId ?? '')).filter(Boolean),
+    (get(state).clients ?? [])
+      .filter((c: any) => String(c?.group ?? '') !== 'display')
+      .map((c: any) => String(c?.clientId ?? ''))
+      .filter(Boolean),
   getSelectedClientIds: () => (get(state).selectedClientIds ?? []).map(String).filter(Boolean),
   getSensorForClientId: (clientId: string) => {
     if (!clientId) return null;
     return (get(sensorData).get(clientId) as any) ?? null;
+  },
+  getImageForClientId: (clientId: string) => {
+    if (!clientId) return null;
+    return get(clientScreenshotUploads).get(clientId)?.dataUrl ?? null;
   },
   executeCommand: () => {
     // Manager always routes via executeCommandForClientId.
