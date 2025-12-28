@@ -1,0 +1,9 @@
+{
+  "__purpose": "Processor node: send a one-shot screenshot capture request to the selected client(s), which will upload the image back to the manager.",
+  "type": "proc-push-image-upload",
+  "label": "Push Image Upload",
+  "category": "Processors",
+  "inputs": [{ "id": "trigger", "label": "Push", "type": "number", "min": 0, "max": 1, "step": 1 }],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }]
+}
+

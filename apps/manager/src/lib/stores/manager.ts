@@ -68,6 +68,18 @@ export type ClientReadiness = {
 // Per-client readiness (drives "client dot" UI state).
 export const clientReadiness = writable<Map<string, ClientReadiness>>(new Map());
 
+export type ClientScreenshotUpload = {
+    dataUrl: string;
+    mime?: string;
+    width?: number;
+    height?: number;
+    createdAt?: number;
+    updatedAt: number;
+};
+
+// Per-client uploaded screenshots (drives `client-object.imageOut`).
+export const clientScreenshotUploads = writable<Map<string, ClientScreenshotUpload>>(new Map());
+
 // Derived stores
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clients = derived(state, ($state) => $state.clients);
@@ -215,6 +227,14 @@ export function connect(config: ManagerSDKConfig): void {
             return next;
         });
 
+        clientScreenshotUploads.update((prev) => {
+            const next = new Map(prev);
+            for (const id of next.keys()) {
+                if (!ids.has(id)) next.delete(id);
+            }
+            return next;
+        });
+
         sensorData.update((prev) => {
             const next = new Map(prev);
             for (const id of next.keys()) {
@@ -228,6 +248,40 @@ export function connect(config: ManagerSDKConfig): void {
 
     // Subscribe to sensor data
     sdk.onSensorData((data) => {
+        // Screenshot uploads are large; keep them out of `sensorData` so they don't overwrite
+        // the latest motion/mic/executor messages.
+        if (data.sensorType === 'custom') {
+            const payload = (data.payload ?? {}) as Record<string, unknown>;
+            if (payload?.kind === 'client-screenshot') {
+                const dataUrl = typeof payload.dataUrl === 'string' ? payload.dataUrl : '';
+                if (dataUrl) {
+                    const now = Date.now();
+                    clientScreenshotUploads.update((prev) => {
+                        const next = new Map(prev);
+                        next.set(data.clientId, {
+                            dataUrl,
+                            mime: typeof payload.mime === 'string' ? payload.mime : undefined,
+                            width:
+                                typeof payload.width === 'number' && Number.isFinite(payload.width)
+                                    ? payload.width
+                                    : undefined,
+                            height:
+                                typeof payload.height === 'number' && Number.isFinite(payload.height)
+                                    ? payload.height
+                                    : undefined,
+                            createdAt:
+                                typeof payload.createdAt === 'number' && Number.isFinite(payload.createdAt)
+                                    ? payload.createdAt
+                                    : undefined,
+                            updatedAt: now,
+                        });
+                        return next;
+                    });
+                    return;
+                }
+            }
+        }
+
         sensorData.update(map => {
             map.set(data.clientId, data);
             return new Map(map);
@@ -323,6 +377,7 @@ export function disconnect(): void {
     sdk = null;
     sensorData.set(new Map());
     clientReadiness.set(new Map());
+    clientScreenshotUploads.set(new Map());
     nodeMediaSignals.set(new Map());
     parameterRegistry.clear();
 }

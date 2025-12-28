@@ -49,6 +49,10 @@ export type ClientObjectDeps = {
    */
   getSensorForClientId?: (clientId: string) => LatestSensorDataLike | null;
   /**
+   * Manager-side lookup for per-client uploaded images (e.g. screenshots).
+   */
+  getImageForClientId?: (clientId: string) => unknown;
+  /**
    * Client-side convenience (single local client).
    * Prefer `executeCommandForClientId` when available.
    */
@@ -310,8 +314,12 @@ export function registerDefaultNodeDefinitions(
   registry.register(createImageOutNode(deps));
   registry.register(createVideoOutNode(deps));
   registry.register(createFlashlightProcessorNode());
+  registry.register(createShowImageProcessorNode());
+  registry.register(createPushImageUploadNode());
   registry.register(createScreenColorProcessorNode());
   registry.register(createSynthUpdateProcessorNode());
+  registry.register(createAsciiEffectProcessorNode());
+  registry.register(createConvolutionEffectProcessorNode());
   registry.register(createSceneSwitchProcessorNode());
 }
 
@@ -1358,6 +1366,7 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
     outputs: [
       { id: 'out', label: 'Out', type: 'client' },
       { id: 'indexOut', label: 'Index Out', type: 'number' },
+      { id: 'imageOut', label: 'Image Out', type: 'image' },
     ],
     configSchema: [{ key: 'clientId', label: 'Clients', type: 'client-picker', defaultValue: '' }],
     process: (inputs, config, context) => {
@@ -1386,7 +1395,12 @@ function createClientObjectNode(deps: ClientObjectDeps): NodeDefinition {
           }
         : null;
       const out: ClientObject = { clientId: primaryClientId, sensors };
-      return { out, indexOut: selection.index };
+
+      const imageOut =
+        typeof deps.getImageForClientId === 'function' && primaryClientId
+          ? deps.getImageForClientId(primaryClientId)
+          : null;
+      return { out, indexOut: selection.index, imageOut };
     },
     onSink: (inputs, config, context) => {
       const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
@@ -2677,6 +2691,127 @@ const FLASHLIGHT_MODE_OPTIONS = [
   { value: 'blink', label: 'Blink' },
 ] as const satisfies { value: string; label: string }[];
 
+const pushImageUploadTriggerState = new Map<string, boolean>();
+
+function createPushImageUploadNode(): NodeDefinition {
+  const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  return {
+    type: 'proc-push-image-upload',
+    label: 'Push Image Upload',
+    category: 'Processors',
+    inputs: [{ id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0, min: 0, max: 1, step: 1 }],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [
+      {
+        key: 'format',
+        label: 'Format',
+        type: 'select',
+        defaultValue: 'image/jpeg',
+        options: [
+          { value: 'image/jpeg', label: 'JPEG' },
+          { value: 'image/png', label: 'PNG' },
+          { value: 'image/webp', label: 'WebP' },
+        ],
+      },
+      { key: 'quality', label: 'Quality', type: 'number', defaultValue: 0.85, min: 0.1, max: 1, step: 0.01 },
+      { key: 'maxWidth', label: 'Max Width', type: 'number', defaultValue: 960, min: 128, step: 1 },
+    ],
+    process: (inputs, config, context) => {
+      const triggerRaw = inputs.trigger;
+      const triggerActive = typeof triggerRaw === 'number' ? triggerRaw >= 0.5 : Boolean(triggerRaw);
+
+      const prev = pushImageUploadTriggerState.get(context.nodeId) ?? false;
+      pushImageUploadTriggerState.set(context.nodeId, triggerActive);
+      if (!triggerActive || prev) return {};
+
+      const formatRaw = typeof config.format === 'string' ? config.format.trim().toLowerCase() : '';
+      const format =
+        formatRaw === 'image/png' || formatRaw === 'image/webp' || formatRaw === 'image/jpeg'
+          ? formatRaw
+          : 'image/jpeg';
+
+      const qualityRaw = Number(config.quality ?? 0.85);
+      const quality = Number.isFinite(qualityRaw) ? clampNumber(qualityRaw, 0.1, 1) : 0.85;
+
+      const maxWidthRaw = Number(config.maxWidth ?? 960);
+      const maxWidth = Number.isFinite(maxWidthRaw) ? Math.max(128, Math.floor(maxWidthRaw)) : 960;
+
+      const cmd: NodeCommand = {
+        action: 'custom',
+        payload: {
+          kind: 'push-image-upload',
+          format,
+          quality,
+          maxWidth,
+        } as any,
+      };
+
+      return { cmd };
+    },
+  };
+}
+
+const showImageCommandCache = new Map<string, { signature: string; cmd: NodeCommand }>();
+
+function createShowImageProcessorNode(): NodeDefinition {
+  const resolveUrl = (raw: unknown): string => {
+    if (typeof raw === 'string') return raw.trim();
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (typeof item === 'string' && item.trim()) return item.trim();
+        if (item && typeof item === 'object' && typeof (item as any).url === 'string') {
+          const url = String((item as any).url).trim();
+          if (url) return url;
+        }
+      }
+      return '';
+    }
+    if (raw && typeof raw === 'object' && typeof (raw as any).url === 'string') {
+      return String((raw as any).url).trim();
+    }
+    return '';
+  };
+
+  const toFiniteNumber = (value: unknown, fallback: number): number => {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  return {
+    type: 'proc-show-image',
+    label: 'Show Image',
+    category: 'Processors',
+    inputs: [{ id: 'in', label: 'In', type: 'image' }],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [
+      { key: 'durationMs', label: 'Duration (ms)', type: 'number', defaultValue: 0, min: 0, step: 1 },
+    ],
+    process: (inputs, config, context) => {
+      const url = resolveUrl(inputs.in);
+      const durationRaw = toFiniteNumber(config.durationMs, 0);
+      const durationMs = Math.max(0, Math.floor(durationRaw));
+      const signature = `${url}|${durationMs}`;
+
+      const cached = showImageCommandCache.get(context.nodeId);
+      if (cached && cached.signature === signature) return { cmd: cached.cmd };
+
+      const cmd: NodeCommand = url
+        ? {
+            action: 'showImage',
+            payload: { url, ...(durationMs > 0 ? { duration: durationMs } : {}) } as any,
+          }
+        : { action: 'hideImage', payload: {} };
+
+      showImageCommandCache.set(context.nodeId, { signature, cmd });
+      return { cmd };
+    },
+    onDisable: (_inputs, _config, context) => {
+      showImageCommandCache.delete(context.nodeId);
+    },
+  };
+}
+
 function createFlashlightProcessorNode(): NodeDefinition {
   return {
     type: 'proc-flashlight',
@@ -2956,15 +3091,6 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
     inputs: [
       { id: 'index', label: 'Index', type: 'number' },
       { id: 'sceneId', label: 'Scene', type: 'string' },
-      { id: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
-      { id: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
-      { id: 'convEnabled', label: 'Convolution', type: 'boolean', defaultValue: false },
-      { id: 'convPreset', label: 'Conv Preset', type: 'string' },
-      { id: 'convMix', label: 'Conv Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
-      { id: 'convScale', label: 'Conv Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
-      { id: 'convBias', label: 'Conv Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
-      { id: 'convNormalize', label: 'Conv Normalize', type: 'boolean', defaultValue: true },
-      { id: 'convKernel', label: 'Conv Kernel (3x3)', type: 'string' },
     ],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [
@@ -2978,12 +3104,88 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
           { value: 'mel-scene', label: 'Mel Spectrogram' },
         ],
       },
-      { key: 'asciiEnabled', label: 'ASCII Overlay', type: 'boolean', defaultValue: true },
-      { key: 'asciiResolution', label: 'ASCII Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
-      { key: 'convEnabled', label: 'Convolution', type: 'boolean', defaultValue: false },
+    ],
+    process: (inputs, config) => {
+      const sceneId = (() => {
+        const fromInput = inputs.sceneId;
+        if (typeof fromInput === 'string' && fromInput.trim()) return fromInput.trim();
+        const fromIndex = inputs.index;
+        if (typeof fromIndex === 'number' && Number.isFinite(fromIndex)) {
+          return fromIndex >= 0.5 ? 'mel-scene' : 'box-scene';
+        }
+        return String(config.sceneId ?? 'box-scene');
+      })();
+
+      return {
+        cmd: { action: 'visualSceneSwitch', payload: { sceneId } },
+      };
+    },
+  };
+}
+
+function createAsciiEffectProcessorNode(): NodeDefinition {
+  return {
+    type: 'proc-visual-effect-ascii',
+    label: 'Visual Effect-ASCII',
+    category: 'Processors',
+    inputs: [
+      { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+      { id: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+    ],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
+      { key: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 6, max: 24, step: 1 },
+    ],
+    process: (inputs, config) => {
+      const enabled = (() => {
+        const fromInput = inputs.enabled;
+        if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return fromInput >= 0.5;
+        if (typeof fromInput === 'boolean') return fromInput;
+        const fromConfig = (config as any).enabled;
+        if (typeof fromConfig === 'number' && Number.isFinite(fromConfig)) return fromConfig >= 0.5;
+        if (typeof fromConfig === 'boolean') return fromConfig;
+        return true;
+      })();
+
+      const resolution = (() => {
+        const fromInput = inputs.resolution;
+        const fromConfig = (config as any).resolution;
+        const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 11);
+        const clamped = Number.isFinite(raw) ? Math.max(6, Math.min(24, raw)) : 11;
+        return Math.round(clamped);
+      })();
+
+      return {
+        cmd: [
+          { action: 'asciiMode', payload: { enabled } },
+          { action: 'asciiResolution', payload: { cellSize: resolution } },
+        ],
+      };
+    },
+  };
+}
+
+function createConvolutionEffectProcessorNode(): NodeDefinition {
+  return {
+    type: 'proc-visual-effect-conv',
+    label: 'Visual Effect-Conv',
+    category: 'Processors',
+    inputs: [
+      { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+      { id: 'preset', label: 'Preset', type: 'string' },
+      { id: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      { id: 'scale', label: 'Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+      { id: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+      { id: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
+      { id: 'kernel', label: 'Kernel (3x3)', type: 'string' },
+    ],
+    outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+    configSchema: [
+      { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
       {
-        key: 'convPreset',
-        label: 'Conv Preset',
+        key: 'preset',
+        label: 'Preset',
         type: 'select',
         defaultValue: 'sharpen',
         options: [
@@ -2997,58 +3199,24 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
           { value: 'custom', label: 'Custom Kernel' },
         ],
       },
-      { key: 'convMix', label: 'Conv Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
-      { key: 'convScale', label: 'Conv Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
-      { key: 'convBias', label: 'Conv Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
-      { key: 'convNormalize', label: 'Conv Normalize', type: 'boolean', defaultValue: true },
-      {
-        key: 'convKernel',
-        label: 'Conv Kernel (3x3)',
-        type: 'string',
-        defaultValue: '0 0 0 0 1 0 0 0 0',
-      },
+      { key: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+      { key: 'scale', label: 'Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+      { key: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+      { key: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
+      { key: 'kernel', label: 'Kernel (3x3)', type: 'string', defaultValue: '' },
     ],
     process: (inputs, config) => {
-      const sceneId = (() => {
-        const fromInput = inputs.sceneId;
-        if (typeof fromInput === 'string' && fromInput.trim()) return fromInput.trim();
-        const fromIndex = inputs.index;
-        if (typeof fromIndex === 'number' && Number.isFinite(fromIndex)) {
-          return fromIndex >= 0.5 ? 'mel-scene' : 'box-scene';
-        }
-        return String(config.sceneId ?? 'box-scene');
-      })();
-
-      // Mirror the console "Scene & Effects" controls (ASCII overlay + resolution).
-      const asciiEnabled = (() => {
-        const fromInput = inputs.asciiEnabled;
+      const enabled = (() => {
+        const fromInput = inputs.enabled;
         if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return fromInput >= 0.5;
         if (typeof fromInput === 'boolean') return fromInput;
-        const fromConfig = (config as any).asciiEnabled;
-        if (typeof fromConfig === 'number' && Number.isFinite(fromConfig)) return fromConfig >= 0.5;
-        if (typeof fromConfig === 'boolean') return fromConfig;
-        return true;
-      })();
-
-      const asciiResolution = (() => {
-        const fromInput = inputs.asciiResolution;
-        const fromConfig = (config as any).asciiResolution;
-        const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 11);
-        const clamped = Number.isFinite(raw) ? Math.max(6, Math.min(24, raw)) : 11;
-        return Math.round(clamped);
-      })();
-
-      const convEnabled = (() => {
-        const fromInput = (inputs as any).convEnabled;
-        if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return fromInput >= 0.5;
-        if (typeof fromInput === 'boolean') return fromInput;
-        const fromConfig = (config as any).convEnabled;
+        const fromConfig = (config as any).enabled;
         if (typeof fromConfig === 'number' && Number.isFinite(fromConfig)) return fromConfig >= 0.5;
         if (typeof fromConfig === 'boolean') return fromConfig;
         return false;
       })();
 
-      const convPreset = (() => {
+      const preset = (() => {
         const allowed = [
           'blur',
           'gaussianBlur',
@@ -3060,8 +3228,8 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
           'custom',
         ] as const;
 
-        const fromInput = (inputs as any).convPreset;
-        const fromConfig = (config as any).convPreset;
+        const fromInput = inputs.preset;
+        const fromConfig = (config as any).preset;
         const raw =
           typeof fromInput === 'string' && fromInput.trim()
             ? fromInput.trim()
@@ -3072,44 +3240,44 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
         return (allowed as readonly string[]).includes(raw) ? raw : 'sharpen';
       })();
 
-      const convMix = (() => {
-        const fromInput = (inputs as any).convMix;
-        const fromConfig = (config as any).convMix;
+      const mix = (() => {
+        const fromInput = inputs.mix;
+        const fromConfig = (config as any).mix;
         const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 1);
         if (!Number.isFinite(raw)) return 1;
         return Math.max(0, Math.min(1, raw));
       })();
 
-      const convScale = (() => {
-        const fromInput = (inputs as any).convScale;
-        const fromConfig = (config as any).convScale;
-        const raw =
-          typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0.5);
+      const scale = (() => {
+        const fromInput = inputs.scale;
+        const fromConfig = (config as any).scale;
+        const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0.5);
         if (!Number.isFinite(raw)) return 0.5;
         return Math.max(0.1, Math.min(1, raw));
       })();
 
-      const convBias = (() => {
-        const fromInput = (inputs as any).convBias;
-        const fromConfig = (config as any).convBias;
+      const bias = (() => {
+        const fromInput = inputs.bias;
+        const fromConfig = (config as any).bias;
         const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0);
         if (!Number.isFinite(raw)) return 0;
         return Math.max(-1, Math.min(1, raw));
       })();
 
-      const convNormalize = (() => {
-        const fromInput = (inputs as any).convNormalize;
+      const normalize = (() => {
+        const fromInput = inputs.normalize;
         if (typeof fromInput === 'number' && Number.isFinite(fromInput)) return fromInput >= 0.5;
         if (typeof fromInput === 'boolean') return fromInput;
-        const fromConfig = (config as any).convNormalize;
+        const fromConfig = (config as any).normalize;
         if (typeof fromConfig === 'number' && Number.isFinite(fromConfig)) return fromConfig >= 0.5;
         if (typeof fromConfig === 'boolean') return fromConfig;
         return true;
       })();
 
-      const convKernel = (() => {
-        const fromInput = (inputs as any).convKernel;
-        const fromConfig = (config as any).convKernel;
+      const kernel = (() => {
+        if (preset !== 'custom') return undefined;
+        const fromInput = inputs.kernel;
+        const fromConfig = (config as any).kernel;
         const raw =
           typeof fromInput === 'string' && fromInput.trim()
             ? fromInput.trim()
@@ -3124,29 +3292,24 @@ function createSceneSwitchProcessorNode(): NodeDefinition {
           .filter(Boolean)
           .slice(0, 9);
         if (parts.length !== 9) return undefined;
-        const kernel = parts.map((p) => Number(p));
-        if (kernel.some((n) => !Number.isFinite(n))) return undefined;
-        return kernel;
+        const parsed = parts.map((p) => Number(p));
+        if (parsed.some((n) => !Number.isFinite(n))) return undefined;
+        return parsed;
       })();
 
       return {
-        cmd: [
-          { action: 'visualSceneSwitch', payload: { sceneId } },
-          {
-            action: 'convolution',
-            payload: {
-              enabled: convEnabled,
-              preset: convPreset,
-              ...(convKernel ? { kernel: convKernel } : {}),
-              mix: convMix,
-              scale: convScale,
-              bias: convBias,
-              normalize: convNormalize,
-            },
+        cmd: {
+          action: 'convolution',
+          payload: {
+            enabled,
+            preset,
+            ...(kernel ? { kernel } : {}),
+            mix,
+            scale,
+            bias,
+            normalize,
           },
-          { action: 'asciiMode', payload: { enabled: asciiEnabled } },
-          { action: 'asciiResolution', payload: { cellSize: asciiResolution } },
-        ],
+        },
       };
     },
   };

@@ -23,6 +23,8 @@ export interface NodeBounds {
 
 export type NodeVisualState = {
   selected?: boolean;
+  /** Node is visually collapsed/minimized in the editor UI (manager-only). */
+  collapsed?: boolean;
   groupDisabled?: boolean;
   groupSelected?: boolean;
   localLoop?: boolean;

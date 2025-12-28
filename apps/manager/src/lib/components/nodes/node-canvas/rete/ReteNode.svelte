@@ -694,10 +694,16 @@
 
   .title-label {
     min-width: 0;
+    flex: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.15;
+  }
+
+  .node.collapsed .title-label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
   }
 
   .collapsed-sockets {

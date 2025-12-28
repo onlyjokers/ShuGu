@@ -136,6 +136,7 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     if (!node) return null;
     return {
       selected: Boolean((node as any).selected),
+      collapsed: Boolean((node as any).collapsed),
       groupDisabled: Boolean((node as any).groupDisabled),
       groupSelected: Boolean((node as any).groupSelected),
       localLoop: Boolean((node as any).localLoop),
@@ -156,6 +157,14 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     if (!node) return;
 
     let changed = false;
+
+    if ('collapsed' in patch) {
+      const next = Boolean(patch.collapsed);
+      if (Boolean((node as any).collapsed) !== next) {
+        (node as any).collapsed = next;
+        changed = true;
+      }
+    }
 
     if ('selected' in patch) {
       const next = Boolean(patch.selected);

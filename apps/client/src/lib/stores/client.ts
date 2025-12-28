@@ -589,6 +589,215 @@ function isControlBatchPayload(payload: ControlPayload): payload is ControlBatch
   return Array.isArray((payload as any).items);
 }
 
+type ScreenshotFormat = 'image/jpeg' | 'image/png' | 'image/webp';
+
+type PushImageUploadPayload = {
+  kind: 'push-image-upload';
+  format?: string;
+  quality?: number;
+  maxWidth?: number;
+};
+
+let screenshotUploadInFlight = false;
+
+function normalizeScreenshotFormat(value: unknown): ScreenshotFormat {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === 'image/png') return 'image/png';
+  if (raw === 'image/webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function getFittedDrawParams(
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+  fit: MediaFit
+): { sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number } {
+  if (fit === 'fill') {
+    return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx: 0, dy: 0, dw: dstW, dh: dstH };
+  }
+
+  if (fit === 'cover') {
+    const scale = Math.max(dstW / srcW, dstH / srcH);
+    const sw = dstW / scale;
+    const sh = dstH / scale;
+    const sx = (srcW - sw) / 2;
+    const sy = (srcH - sh) / 2;
+    return { sx, sy, sw, sh, dx: 0, dy: 0, dw: dstW, dh: dstH };
+  }
+
+  const scale =
+    fit === 'fit-screen' ? Math.min(dstW / srcW, dstH / srcH) : Math.min(1, dstW / srcW, dstH / srcH);
+  const dw = srcW * scale;
+  const dh = srcH * scale;
+  const dx = (dstW - dw) / 2;
+  const dy = (dstH - dh) / 2;
+  return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx, dy, dw, dh };
+}
+
+async function captureScreenshotDataUrl(opts: {
+  format: ScreenshotFormat;
+  quality: number;
+  maxWidth: number;
+}): Promise<{ dataUrl: string; mime: ScreenshotFormat; width: number; height: number; createdAt: number } | null> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+
+  const container = document.querySelector('.visual-container') as HTMLElement | null;
+  if (!container) return null;
+
+  const viewW = container.clientWidth ?? 0;
+  const viewH = container.clientHeight ?? 0;
+  if (viewW <= 0 || viewH <= 0) return null;
+
+  const maxWidth = Math.max(128, Math.floor(opts.maxWidth));
+  const scale = viewW > maxWidth ? maxWidth / viewW : 1;
+  const outW = Math.max(1, Math.floor(viewW * scale));
+  const outH = Math.max(1, Math.floor(viewH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0a0a0f';
+  ctx.fillRect(0, 0, outW, outH);
+
+  const convEnabled = Boolean(get(convolution)?.enabled);
+  const asciiOn = Boolean(get(asciiEnabled));
+  const overlay = (() => {
+    if (convEnabled) return container.querySelector('canvas.convolution-overlay') as HTMLCanvasElement | null;
+    if (asciiOn) return container.querySelector('canvas.ascii-overlay') as HTMLCanvasElement | null;
+    return null;
+  })();
+
+  // If a full-frame overlay is active, it already represents what the user sees (ASCII / convolution).
+  if (overlay && overlay.width > 0 && overlay.height > 0) {
+    ctx.drawImage(overlay, 0, 0, outW, outH);
+  } else {
+    const video = container.querySelector('video') as HTMLVideoElement | null;
+    const img = container.querySelector('img') as HTMLImageElement | null;
+
+    const drawMedia = () => {
+      if (video && get(videoState).url && video.readyState >= 2) {
+        const srcW = video.videoWidth || 0;
+        const srcH = video.videoHeight || 0;
+        if (srcW <= 0 || srcH <= 0) return false;
+
+        const fit = (get(videoState).fit ?? 'contain') as MediaFit;
+        const padding = fit === 'contain' ? 24 * scale : 0;
+        const dstW = Math.max(0, outW - padding * 2);
+        const dstH = Math.max(0, outH - padding * 2);
+        if (dstW <= 0 || dstH <= 0) return false;
+
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
+        try {
+          ctx.drawImage(video, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      if (img && get(imageState).visible && get(imageState).url) {
+        const srcW = img.naturalWidth || img.clientWidth || 0;
+        const srcH = img.naturalHeight || img.clientHeight || 0;
+        if (srcW <= 0 || srcH <= 0) return false;
+
+        const fit = (get(imageState).fit ?? 'contain') as MediaFit;
+        const padding = fit === 'contain' ? 24 * scale : 0;
+        const dstW = Math.max(0, outW - padding * 2);
+        const dstH = Math.max(0, outH - padding * 2);
+        if (dstW <= 0 || dstH <= 0) return false;
+
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
+        try {
+          ctx.drawImage(img, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      return false;
+    };
+
+    const drewMedia = drawMedia();
+    if (!drewMedia) {
+      const baseCanvas = Array.from(container.querySelectorAll('canvas')).find(
+        (c) => !c.classList.contains('ascii-overlay') && !c.classList.contains('convolution-overlay')
+      ) as HTMLCanvasElement | undefined;
+      if (baseCanvas && baseCanvas.width > 0 && baseCanvas.height > 0) {
+        try {
+          ctx.drawImage(baseCanvas, 0, 0, outW, outH);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  const quality = clampNumber(opts.quality, 0.85, 0.1, 1);
+  const mime = opts.format;
+  const dataUrl = (() => {
+    try {
+      return mime === 'image/png' ? canvas.toDataURL(mime) : canvas.toDataURL(mime, quality);
+    } catch {
+      // Fallback: default to PNG if the requested format fails.
+      try {
+        return canvas.toDataURL('image/png');
+      } catch {
+        return '';
+      }
+    }
+  })();
+
+  if (!dataUrl) return null;
+  return { dataUrl, mime, width: outW, height: outH, createdAt: Date.now() };
+}
+
+// Custom command: capture a client screenshot and upload it to the manager via `sensorType: custom`.
+async function handlePushImageUpload(payload: PushImageUploadPayload): Promise<void> {
+  if (screenshotUploadInFlight) return;
+  const sdkNow = sdk;
+  if (!sdkNow) return;
+
+  screenshotUploadInFlight = true;
+  try {
+    const format = normalizeScreenshotFormat(payload?.format);
+    const quality = clampNumber(payload?.quality, 0.85, 0.1, 1);
+    const maxWidth = clampNumber(payload?.maxWidth, 960, 128, 4096);
+
+    const shot = await captureScreenshotDataUrl({ format, quality, maxWidth });
+    if (!shot) return;
+
+    sdkNow.sendSensorData(
+      'custom',
+      {
+        kind: 'client-screenshot',
+        dataUrl: shot.dataUrl,
+        mime: shot.mime,
+        width: shot.width,
+        height: shot.height,
+        createdAt: shot.createdAt,
+      } as any,
+      { trackLatest: false }
+    );
+  } catch (err) {
+    console.warn('[Client] push-image-upload failed:', err);
+  } finally {
+    screenshotUploadInFlight = false;
+  }
+}
+
 function executeControl(action: ControlAction, payload: ControlPayload, executeAt?: number): void {
   // Expand control batches early so we don't schedule the wrapper message (avoid double scheduling).
   if (action === 'custom' && isControlBatchPayload(payload)) {
@@ -805,8 +1014,13 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
               next.enabled = convPayload.enabled;
             }
 
-            if (typeof convPayload.preset === 'string' && allowed.includes(convPayload.preset as ConvolutionPreset)) {
-              next.preset = convPayload.preset as ConvolutionPreset;
+            const presetCandidate =
+              typeof convPayload.preset === 'string' && allowed.includes(convPayload.preset as ConvolutionPreset)
+                ? (convPayload.preset as ConvolutionPreset)
+                : null;
+
+            if (presetCandidate) {
+              next.preset = presetCandidate;
             }
 
             if (Array.isArray(convPayload.kernel)) {
@@ -815,6 +1029,9 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
                 .filter((n) => Number.isFinite(n))
                 .slice(0, 9);
               next.kernel = kernel.length === 9 ? kernel : null;
+            } else if (presetCandidate) {
+              // Avoid stale kernel overriding preset kernels when the preset changes.
+              next.kernel = null;
             }
 
             if (typeof convPayload.mix === 'number' && Number.isFinite(convPayload.mix)) {
@@ -839,7 +1056,14 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         break;
 
       case 'custom':
-        console.log('[Client] Unknown custom payload:', payload);
+        {
+          const raw = payload as Partial<PushImageUploadPayload> | null;
+          if (raw && typeof raw === 'object' && raw.kind === 'push-image-upload') {
+            void handlePushImageUpload(raw as PushImageUploadPayload);
+            break;
+          }
+          console.log('[Client] Unknown custom payload:', payload);
+        }
         break;
 
       default:

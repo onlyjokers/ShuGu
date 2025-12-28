@@ -1000,8 +1000,15 @@ class NodeEngineClass {
     ]);
 
     for (const n of patch.graph.nodes) {
-      if (!allowedNodeTypes.has(String(n.type))) {
-        throw new Error(`Patch contains non-deployable node type: ${String(n.type)}`);
+      const type = String(n.type);
+      if (!allowedNodeTypes.has(type)) {
+        const hint =
+          type === 'client-object'
+            ? 'Client is manager-only; screenshots/images must be routed via commands (e.g. Client.Image Out → Show Image → Display), not deployed as a patch.'
+            : '';
+        throw new Error(
+          hint ? `Patch contains non-deployable node type: ${type}. ${hint}` : `Patch contains non-deployable node type: ${type}`
+        );
       }
     }
 

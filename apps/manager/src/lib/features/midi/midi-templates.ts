@@ -34,6 +34,14 @@ export type MidiBindingTemplateV1 = {
   id: string;
   label: string;
   source: MidiSource | null;
+  /** Manager-only UI metadata. Optional and safe to ignore. */
+  ui?: {
+    collapsed?: {
+      midi?: boolean;
+      map?: boolean;
+      target?: boolean;
+    };
+  };
   mapping: {
     min: number;
     max: number;
@@ -207,8 +215,28 @@ export function detectMidiBindings(graph: GraphState): DetectedMidiBinding[] {
   return bindings;
 }
 
-export function exportMidiTemplateFile(graph: GraphState): MidiTemplateFileV1 {
-  const bindings = detectMidiBindings(graph).map((b) => b.template);
+export function exportMidiTemplateFile(
+  graph: GraphState,
+  opts: { isNodeCollapsed?: (nodeId: string) => boolean } = {}
+): MidiTemplateFileV1 {
+  const isNodeCollapsed = opts.isNodeCollapsed ?? null;
+  const bindings = detectMidiBindings(graph).map((b) => {
+    const tpl: MidiBindingTemplateV1 = { ...b.template };
+    if (!isNodeCollapsed) return tpl;
+
+    const midiCollapsed = Boolean(isNodeCollapsed(String(b.midiNodeId)));
+    const mapCollapsed = Boolean(isNodeCollapsed(String(b.mapNodeId)));
+    const targetCollapsed = Boolean(isNodeCollapsed(String(b.targetNodeId)));
+
+    if (midiCollapsed || mapCollapsed || targetCollapsed) {
+      tpl.ui = {
+        collapsed: { midi: midiCollapsed, map: mapCollapsed, target: targetCollapsed },
+      };
+    }
+
+    return tpl;
+  });
+
   return { version: 1, bindings };
 }
 
@@ -236,6 +264,20 @@ export function parseMidiTemplateFile(payload: unknown): MidiTemplateFileV1 | nu
 
     const source = isMidiSource(item.source) ? item.source : null;
 
+    const ui = (() => {
+      const uiRaw = item.ui;
+      if (!isRecord(uiRaw)) return undefined;
+      const collapsedRaw = uiRaw.collapsed;
+      if (!isRecord(collapsedRaw)) return undefined;
+      return {
+        collapsed: {
+          midi: typeof collapsedRaw.midi === 'boolean' ? collapsedRaw.midi : undefined,
+          map: typeof collapsedRaw.map === 'boolean' ? collapsedRaw.map : undefined,
+          target: typeof collapsedRaw.target === 'boolean' ? collapsedRaw.target : undefined,
+        },
+      } satisfies MidiBindingTemplateV1['ui'];
+    })();
+
     let target: MidiBindingTargetV1 | null = null;
     if (targetRaw.kind === 'param') {
       const path = typeof targetRaw.path === 'string' ? targetRaw.path : '';
@@ -250,7 +292,7 @@ export function parseMidiTemplateFile(payload: unknown): MidiTemplateFileV1 | nu
     }
 
     if (!target) continue;
-    bindings.push({ id, label, source, mapping, target });
+    bindings.push({ id, label, source, ui, mapping, target });
   }
 
   return { version: 1, bindings };
@@ -261,6 +303,7 @@ export type InstantiateOptions = {
 };
 
 export type InstantiatedBinding = {
+  templateId: string;
   midiNodeId: string;
   mapNodeId: string;
   targetNodeId: string;
@@ -348,7 +391,13 @@ export function instantiateMidiBinding(template: MidiBindingTemplateV1, opts: In
     return null;
   }
 
-  return { midiNodeId, mapNodeId, targetNodeId, targetPortId };
+  return {
+    templateId: String(template.id ?? ''),
+    midiNodeId,
+    mapNodeId,
+    targetNodeId,
+    targetPortId,
+  };
 }
 
 export function instantiateMidiBindings(file: MidiTemplateFileV1, opts: InstantiateOptions = {}): InstantiatedBinding[] {

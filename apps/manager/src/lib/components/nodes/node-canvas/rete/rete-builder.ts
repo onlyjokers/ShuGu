@@ -189,6 +189,10 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
               if (instance.type === 'client-object' && (input.id === 'index' || input.id === 'range')) {
                 control.integer = true;
               }
+              if (instance.type === 'proc-push-image-upload' && input.id === 'trigger') {
+                control.button = true;
+                control.buttonLabel = String(input.label ?? 'Push');
+              }
               return control;
             })()
           );
