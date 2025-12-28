@@ -39,6 +39,20 @@
     return new URL(path, base).toString();
   }
 
+  async function fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1, Math.floor(timeoutMs)));
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async function refresh(): Promise<void> {
     await assetsStore.refresh();
   }
@@ -125,18 +139,26 @@
       formData.set('file', file);
       formData.set('originalName', file.name);
 
-      const res = await fetch(buildUrl('api/assets'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
+      const res = await fetchWithTimeout(
+        buildUrl('api/assets'),
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        },
+        90_000
+      );
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
       }
       await assetsStore.refresh();
     } catch (err) {
-      uploadError = err instanceof Error ? err.message : String(err);
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        uploadError = 'Upload timed out. Please retry.';
+      } else {
+        uploadError = err instanceof Error ? err.message : String(err);
+      }
     } finally {
       uploading = false;
     }
@@ -147,10 +169,11 @@
     try {
       const token = getWriteToken();
       if (!token) throw new Error('Missing Asset Write Token (set it on the connect screen).');
-      const res = await fetch(buildUrl(`api/assets/${assetId}`), {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetchWithTimeout(
+        buildUrl(`api/assets/${assetId}`),
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+        20_000
+      );
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);

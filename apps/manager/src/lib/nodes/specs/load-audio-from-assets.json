@@ -1,0 +1,7 @@
+{
+  "__purpose": "UI overlay: clamp Load Audio From Remote rate (>=0) on the manager node canvas.",
+  "type": "load-audio-from-assets",
+  "inputs": [{ "id": "playbackRate", "label": "Rate", "type": "number", "min": 0 }],
+  "configSchema": [{ "key": "playbackRate", "label": "Rate", "type": "number", "min": 0 }]
+}
+

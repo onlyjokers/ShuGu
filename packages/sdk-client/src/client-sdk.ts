@@ -114,11 +114,12 @@ export class ClientSDK {
     private latestSensorData: LatestSensorData | null = null;
 
     constructor(config: ClientSDKConfig) {
+        const defaultTransports: SocketTransport[] = ['polling', 'websocket'];
         const transports = (() => {
-            const raw = Array.isArray(config.transports) ? config.transports : ['polling', 'websocket'];
+            const raw = Array.isArray(config.transports) ? config.transports : defaultTransports;
             const normalized = raw.filter((t): t is SocketTransport => t === 'polling' || t === 'websocket');
             const unique = Array.from(new Set(normalized));
-            return unique.length > 0 ? unique : ['polling', 'websocket'];
+            return unique.length > 0 ? unique : defaultTransports;
         })();
 
         this.config = {

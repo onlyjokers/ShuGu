@@ -631,6 +631,25 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
           }
         },
+        onDisable: () => {
+          const bridge = get(displayBridgeState);
+          const hasLocal = bridge.status === 'connected';
+          const sdk = getSDK();
+          if (!hasLocal && !sdk) return;
+
+          const send = (action: ControlAction, payload: ControlPayload) => {
+            if (hasLocal) {
+              sendLocalDisplayControl(action, payload, undefined);
+              return;
+            }
+            sdk?.sendControl(targetGroup('display'), action, payload, undefined);
+          };
+
+          // Clear any long-lived effects when the Display route is disabled (e.g. group gate closed / graph stop).
+          send('stopMedia', {});
+          send('hideImage', {});
+          send('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any);
+        },
       };
     }
     case 'proc-client-sensors':
@@ -1067,7 +1086,7 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
@@ -1084,7 +1103,7 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
         assetKind: 'audio',
         defaultValue: '',
       },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
@@ -1321,7 +1340,7 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { id: 'bus', label: 'Bus', type: 'string' },
@@ -1338,7 +1357,7 @@ if (!nodeRegistry.get('load-audio-from-local')) {
         assetKind: 'audio',
         defaultValue: '',
       },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
+      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
