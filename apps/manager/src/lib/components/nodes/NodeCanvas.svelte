@@ -27,6 +27,7 @@
   import { getSDK, sensorData, state as managerState } from '$lib/stores/manager';
   import {
     displayBridgeState,
+    ensureDisplayLocalFilesRegisteredFromValue,
     sendPlugin as sendLocalDisplayPlugin,
   } from '$lib/display/display-bridge';
   import type {
@@ -523,6 +524,13 @@
   ) => {
     const id = String(targetId ?? '');
     if (!id) return;
+
+    // Display-only nodes can reference `displayfile:<id>` (browser-local File) that must be registered on Display
+    // before node-executor starts playback. This works in paired mode (MessagePort) and same-origin fallback mode
+    // (BroadcastChannel), so we always pre-register for display targets.
+    if ((command === 'deploy' || command === 'override-set') && isDisplayTarget(id)) {
+      ensureDisplayLocalFilesRegisteredFromValue(payload);
+    }
 
     if (isLocalDisplayTarget(id)) {
       const bridge = get(displayBridgeState);
@@ -1894,9 +1902,6 @@
     const node = graphState.nodes.find((n) => String(n.id) === String(nodeId));
     if (node?.type === 'client-object' && kind === 'config' && portId === 'clientId') return;
 
-    const sdk = getSDK();
-    if (!sdk) return;
-
     const loop = loopController?.loopActions.getDeployedLoopForNode(nodeId);
     if (loop) {
       // Important: once a loop is deployed, the executor client is the "source of truth" for where to send overrides.
@@ -1913,15 +1918,10 @@
       const clientId = deployedClientId || loopController?.loopActions.getLoopClientId(loop);
       if (!clientId) return;
 
-      sdk.sendPluginControl(
-        { mode: 'clientIds', ids: [clientId] },
-        'node-executor',
-        'override-set',
-        {
-          loopId: loop.id,
-          overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
-        } as any
-      );
+      sendNodeExecutorPluginControl(clientId, 'override-set', {
+        loopId: loop.id,
+        overrides: [{ nodeId, kind, portId, value, ttlMs: OVERRIDE_TTL_MS }],
+      } as any);
 
       // Commit: persist the latest value after inactivity (debounced).
       const key = `${clientId}|${loop.id}|${nodeId}|${kind}|${portId}`;
@@ -1929,17 +1929,10 @@
       if (existing) clearTimeout(existing);
       const timer = setTimeout(() => {
         patchPendingCommitByKey.delete(key);
-        const sdkNow = getSDK();
-        if (!sdkNow) return;
-        sdkNow.sendPluginControl(
-          { mode: 'clientIds', ids: [clientId] },
-          'node-executor',
-          'override-set',
-          {
-            loopId: loop.id,
-            overrides: [{ nodeId, kind, portId, value }],
-          } as any
-        );
+        sendNodeExecutorPluginControl(clientId, 'override-set', {
+          loopId: loop.id,
+          overrides: [{ nodeId, kind, portId, value }],
+        } as any);
       }, 420);
       patchPendingCommitByKey.set(key, timer);
       return;

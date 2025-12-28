@@ -45,6 +45,9 @@ export class SelectControl extends ClassicPreset.Control {
 export class BooleanControl extends ClassicPreset.Control {
   controlType = 'boolean' as const;
   label?: string;
+  // Optional UI affordance: render as a momentary button instead of a toggle.
+  button?: boolean;
+  buttonLabel?: string;
   value: boolean;
   readonly: boolean;
   private onChange?: (value: boolean) => void;
