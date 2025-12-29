@@ -5,14 +5,12 @@
   "category": "Audio",
   "inputs": [
     { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
-    { "id": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6 },
-    { "id": "preDelay", "label": "PreDelay (s)", "type": "number", "defaultValue": 0.01 },
+    { "id": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6, "min": 0.001 },
     { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
   ],
   "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
   "configSchema": [
-    { "key": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6 },
-    { "key": "preDelay", "label": "PreDelay (s)", "type": "number", "defaultValue": 0.01 },
+    { "key": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6, "min": 0.001 },
     { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 },
     { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
     { "key": "order", "label": "Order", "type": "number", "defaultValue": 40 },

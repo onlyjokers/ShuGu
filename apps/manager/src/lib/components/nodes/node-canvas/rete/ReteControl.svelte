@@ -17,7 +17,7 @@
     localDisplayMediaStore,
     parseDisplayFileId,
   } from '$lib/stores/local-display-media';
-  import { nodeEngine } from '$lib/nodes';
+  import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
   import { midiNodeBridge, formatMidiSource } from '$lib/features/midi/midi-node-bridge';
@@ -31,17 +31,49 @@
   $: isInline = Boolean((data as any)?.inline);
   $: inputControlLabel =
     data instanceof ClassicPreset.InputControl ? (data as any).controlLabel : undefined;
-  $: numberInputMin =
-    data instanceof ClassicPreset.InputControl && data.type === 'number'
-      ? (data as any).min
-      : undefined;
-  $: numberInputMax =
-    data instanceof ClassicPreset.InputControl && data.type === 'number'
-      ? (data as any).max
-      : undefined;
+  type NumberBounds = { min?: number; max?: number; step?: number };
+  const resolveNumberBounds = (ctrl: unknown): NumberBounds => {
+    if (!(ctrl instanceof ClassicPreset.InputControl)) return {};
+    if ((ctrl as any).type !== 'number') return {};
+
+    const isFiniteNumber = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value);
+
+    const fromControl: NumberBounds = {
+      min: isFiniteNumber((ctrl as any).min) ? (ctrl as any).min : undefined,
+      max: isFiniteNumber((ctrl as any).max) ? (ctrl as any).max : undefined,
+      step: isFiniteNumber((ctrl as any).step) ? (ctrl as any).step : undefined,
+    };
+    if (fromControl.min !== undefined || fromControl.max !== undefined || fromControl.step !== undefined) {
+      return fromControl;
+    }
+
+    // Safety: some legacy graphs/controls may miss `min/max` hints. Resolve them from the node registry so
+    // critical constraints (e.g. non-negative playback rate) still apply at the UI layer.
+    const nodeType = typeof (ctrl as any).nodeType === 'string' ? String((ctrl as any).nodeType) : '';
+    const portId = typeof (ctrl as any).portId === 'string' ? String((ctrl as any).portId) : '';
+    const configKey = typeof (ctrl as any).configKey === 'string' ? String((ctrl as any).configKey) : '';
+    const key = portId || configKey;
+    if (!nodeType || !key) return {};
+
+    const def = nodeRegistry.get(nodeType);
+    if (!def) return {};
+    const port = def.inputs?.find((p) => String(p.id) === key);
+    const field = def.configSchema?.find((f) => String(f.key) === key);
+
+    const min = isFiniteNumber(port?.min) ? port!.min : isFiniteNumber(field?.min) ? field!.min : undefined;
+    const max = isFiniteNumber(port?.max) ? port!.max : isFiniteNumber(field?.max) ? field!.max : undefined;
+    const step = isFiniteNumber(port?.step) ? port!.step : isFiniteNumber(field?.step) ? field!.step : undefined;
+    return { min, max, step };
+  };
+
+  $: numberBounds =
+    data instanceof ClassicPreset.InputControl && data.type === 'number' ? resolveNumberBounds(data) : {};
+  $: numberInputMin = numberBounds.min;
+  $: numberInputMax = numberBounds.max;
   $: numberInputStep =
     data instanceof ClassicPreset.InputControl && data.type === 'number'
-      ? ((data as any).step ?? 'any')
+      ? (numberBounds.step ?? (data as any).step ?? 'any')
       : undefined;
   $: isMomentaryButton = data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
   $: momentaryButtonLabel = isMomentaryButton
@@ -61,8 +93,8 @@
     if (data.type === 'number') {
       const num = Number(target.value);
       let next = Number.isFinite(num) ? num : 0;
-      const min = (data as any).min;
-      const max = (data as any).max;
+      const min = numberBounds.min;
+      const max = numberBounds.max;
       if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
       if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
       if (Number.isFinite(num) && next !== num) target.value = String(next);
@@ -90,8 +122,8 @@
     }
 
     let next = num;
-    const min = (data as any).min;
-    const max = (data as any).max;
+    const min = numberBounds.min;
+    const max = numberBounds.max;
     if (typeof min === 'number' && Number.isFinite(min)) next = Math.max(min, next);
     if (typeof max === 'number' && Number.isFinite(max)) next = Math.min(max, next);
 

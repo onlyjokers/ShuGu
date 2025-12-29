@@ -162,6 +162,11 @@ type AudioDataInstance = {
 
 const DEFAULT_RAMP_SECONDS = 0.05;
 const MIN_TONE_DELAY_TIME_SECONDS = 0.001;
+const FIXED_TONE_REVERB_PREDELAY_SECONDS = 0.01;
+const FIXED_TONE_RESONATOR_DELAY_SECONDS = 0.08;
+const FIXED_TONE_PITCH_DELAY_SECONDS = 0;
+const FIXED_TONE_PITCH_FEEDBACK = 0;
+const FIXED_TONE_PITCH_WET = 1;
 const DEFAULT_STEP_SECONDS = 0.25;
 const DEFAULT_BUS = 'main';
 const AUDIO_NODE_KINDS = new Set<ToneNodeKind>([
@@ -499,11 +504,10 @@ function resolveToneLfoDestination(targetNodeId: string, targetPortId: string): 
     const inst = effectInstances.get(targetNodeId);
     if (!inst || !inst.enabled) return null;
     if (targetPortId === 'wet') return inst.wrapper.wetParam ?? null;
-    if (targetPortId === 'delayTime') return inst.wrapper.effect?.delayTime ?? null;
     return null;
   }
 
-  if (target.type === 'tone-reverb' || target.type === 'tone-pitch') {
+  if (target.type === 'tone-reverb') {
     const inst = effectInstances.get(targetNodeId);
     if (!inst || !inst.enabled) return null;
     if (targetPortId === 'wet') return inst.wrapper.wetParam ?? null;
@@ -1223,8 +1227,8 @@ function createDelayEffect(time: number, feedback: number, wet: number): EffectW
   };
 }
 
-function createReverbEffect(decay: number, preDelay: number, wet: number): EffectWrapper {
-  const effect = new toneModule!.Reverb({ decay, preDelay, wet });
+function createReverbEffect(decay: number, wet: number): EffectWrapper {
+  const effect = new toneModule!.Reverb({ decay, preDelay: FIXED_TONE_REVERB_PREDELAY_SECONDS, wet });
   const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
   return {
     input: effect,
@@ -1239,11 +1243,16 @@ function createReverbEffect(decay: number, preDelay: number, wet: number): Effec
 function createPitchEffect(
   pitch: number,
   windowSize: number,
-  delayTime: number,
   feedback: number,
   wet: number
 ): EffectWrapper {
-  const effect = new toneModule!.PitchShift({ pitch, windowSize, delayTime, feedback, wet });
+  const effect = new toneModule!.PitchShift({
+    pitch,
+    windowSize,
+    delayTime: FIXED_TONE_PITCH_DELAY_SECONDS,
+    feedback,
+    wet,
+  });
   const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
   return {
     input: effect,
@@ -1256,13 +1265,16 @@ function createPitchEffect(
 }
 
 function createResonatorEffect(
-  delayTime: number,
   resonance: number,
   dampening: number,
   wet: number
 ): EffectWrapper {
   const input = new toneModule!.Gain({ gain: 1 });
-  const comb = new toneModule!.LowpassCombFilter({ delayTime, resonance, dampening });
+  const comb = new toneModule!.LowpassCombFilter({
+    delayTime: FIXED_TONE_RESONATOR_DELAY_SECONDS,
+    resonance,
+    dampening,
+  });
   const crossfade = new toneModule!.CrossFade({ fade: wet });
   input.connect(crossfade.a);
   input.connect(comb);
@@ -1301,20 +1313,20 @@ function createEffectInstance(
       break;
     }
     case 'tone-reverb':
-      wrapper = createReverbEffect(params.decay, params.preDelay, clamp(params.wet, 0, 1));
+      wrapper = createReverbEffect(params.decay, clamp(params.wet, 0, 1));
       break;
     case 'tone-pitch':
+      safeParams.feedback = FIXED_TONE_PITCH_FEEDBACK;
+      safeParams.wet = FIXED_TONE_PITCH_WET;
       wrapper = createPitchEffect(
         params.pitch,
         params.windowSize,
-        params.delayTime,
-        clamp(params.feedback, 0, 1),
-        clamp(params.wet, 0, 1)
+        FIXED_TONE_PITCH_FEEDBACK,
+        FIXED_TONE_PITCH_WET
       );
       break;
     case 'tone-resonator':
       wrapper = createResonatorEffect(
-        params.delayTime,
         clamp(params.resonance, 0, 1),
         params.dampening,
         clamp(params.wet, 0, 1)
@@ -1401,14 +1413,9 @@ function updateEffectInstance(
     case 'tone-reverb': {
       const effect = instance.wrapper.effect;
       const decay = nextParams.decay;
-      const preDelay = nextParams.preDelay;
       const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.decay !== decay) effect.decay = decay;
-      if (instance.lastParams.preDelay !== preDelay) effect.preDelay = preDelay;
-      if (
-        !instance.pendingGenerate &&
-        (instance.lastParams.decay !== decay || instance.lastParams.preDelay !== preDelay)
-      ) {
+      if (!instance.pendingGenerate && instance.lastParams.decay !== decay) {
         instance.pendingGenerate = true;
         void effect
           .generate()
@@ -1432,12 +1439,10 @@ function updateEffectInstance(
       const effect = instance.wrapper.effect;
       const pitch = nextParams.pitch;
       const windowSize = nextParams.windowSize;
-      const delayTime = nextParams.delayTime;
-      const feedback = clamp(nextParams.feedback, 0, 1);
-      const wet = clamp(nextParams.wet, 0, 1);
+      const feedback = FIXED_TONE_PITCH_FEEDBACK;
+      const wet = FIXED_TONE_PITCH_WET;
       if (instance.lastParams.pitch !== pitch) effect.pitch = pitch;
       if (instance.lastParams.windowSize !== windowSize) effect.windowSize = windowSize;
-      if (instance.lastParams.delayTime !== delayTime) effect.delayTime = delayTime;
       if (instance.lastParams.feedback !== feedback) effect.feedback = feedback;
       if (
         (instance.lastParams.wet !== wet || instance.lastParams.enabled !== enabled) &&
@@ -1445,21 +1450,14 @@ function updateEffectInstance(
       ) {
         applyWet(wet);
       }
-      instance.lastParams = { ...instance.lastParams, ...nextParams, enabled };
+      instance.lastParams = { ...instance.lastParams, ...nextParams, feedback, wet, enabled };
       break;
     }
     case 'tone-resonator': {
       const comb = instance.wrapper.effect;
-      const delayTime = nextParams.delayTime;
       const resonance = clamp(nextParams.resonance, 0, 1);
       const dampening = nextParams.dampening;
       const wet = clamp(nextParams.wet, 0, 1);
-      if (
-        instance.lastParams.delayTime !== delayTime &&
-        !isToneLfoTargetActive(instance.nodeId, 'delayTime')
-      ) {
-        comb.delayTime.rampTo(delayTime, DEFAULT_RAMP_SECONDS);
-      }
       if (instance.lastParams.resonance !== resonance) comb.resonance = resonance;
       if (instance.lastParams.dampening !== dampening) comb.dampening = dampening;
       if (
@@ -2553,7 +2551,6 @@ export function registerToneClientDefinitions(
     category: 'Audio',
     inputs: [
       { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-      { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
@@ -2563,7 +2560,6 @@ export function registerToneClientDefinitions(
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0.08 },
       { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6 },
       { key: 'dampening', label: 'Dampening (Hz)', type: 'number', defaultValue: 3000 },
       { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
@@ -2573,7 +2569,6 @@ export function registerToneClientDefinitions(
     ],
     process: (inputs, config, context) =>
       effectProcess('tone-resonator', inputs, config, context, {
-        delayTime: 0.08,
         resonance: 0.6,
         dampening: 3000,
         wet: 0.4,
@@ -2589,9 +2584,6 @@ export function registerToneClientDefinitions(
       { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
-      { id: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
-      { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
-      { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
       { id: 'bus', label: 'Bus', type: 'string' },
       { id: 'order', label: 'Order', type: 'number' },
       { id: 'enabled', label: 'Enabled', type: 'boolean' },
@@ -2600,9 +2592,6 @@ export function registerToneClientDefinitions(
     configSchema: [
       { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
       { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
-      { key: 'delayTime', label: 'Delay (s)', type: 'number', defaultValue: 0 },
-      { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0 },
-      { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       { key: 'order', label: 'Order', type: 'number', defaultValue: 30 },
       { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
@@ -2611,9 +2600,6 @@ export function registerToneClientDefinitions(
       effectProcess('tone-pitch', inputs, config, context, {
         pitch: 0,
         windowSize: 0.1,
-        delayTime: 0,
-        feedback: 0,
-        wet: 0.3,
         order: 30,
       }),
   });
@@ -2625,7 +2611,6 @@ export function registerToneClientDefinitions(
     inputs: [
       { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
       { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
-      { id: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
       { id: 'bus', label: 'Bus', type: 'string' },
       { id: 'order', label: 'Order', type: 'number' },
@@ -2634,7 +2619,6 @@ export function registerToneClientDefinitions(
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
       { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6 },
-      { key: 'preDelay', label: 'PreDelay (s)', type: 'number', defaultValue: 0.01 },
       { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
       { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       { key: 'order', label: 'Order', type: 'number', defaultValue: 40 },
@@ -2643,7 +2627,6 @@ export function registerToneClientDefinitions(
     process: (inputs, config, context) =>
       effectProcess('tone-reverb', inputs, config, context, {
         decay: 1.6,
-        preDelay: 0.01,
         wet: 0.3,
         order: 40,
       }),
