@@ -1026,7 +1026,9 @@ function createImageOutNode(deps) {
         if (typeof raw === 'string')
             return raw.trim();
         if (Array.isArray(raw)) {
-            for (const item of raw) {
+            // If upstream provides a queue/array, prefer the latest value (pipeline semantics).
+            for (let i = raw.length - 1; i >= 0; i--) {
+                const item = raw[i];
                 if (typeof item === 'string' && item.trim())
                     return item.trim();
                 if (item && typeof item === 'object' && typeof item.url === 'string') {
@@ -2327,7 +2329,7 @@ const FLASHLIGHT_MODE_OPTIONS = [
     { value: 'on', label: 'On' },
     { value: 'blink', label: 'Blink' },
 ];
-const pushImageUploadTriggerState = new Map();
+const pushImageUploadRuntimeState = new Map();
 function createPushImageUploadNode() {
     const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
     return {
@@ -2350,13 +2352,22 @@ function createPushImageUploadNode() {
             },
             { key: 'quality', label: 'Quality', type: 'number', defaultValue: 0.85, min: 0.1, max: 1, step: 0.01 },
             { key: 'maxWidth', label: 'Max Width', type: 'number', defaultValue: 960, min: 128, step: 1 },
+            // Upload rate (best-effort): manager sends one capture request per interval while Push=true.
+            { key: 'speed', label: 'Speed (fps)', type: 'number', defaultValue: 1, min: 0.1, max: 30, step: 0.1 },
         ],
         process: (inputs, config, context) => {
             const triggerActive = coerceBooleanOr(inputs.trigger, false);
-            const prev = pushImageUploadTriggerState.get(context.nodeId) ?? false;
-            pushImageUploadTriggerState.set(context.nodeId, triggerActive);
-            if (!triggerActive || prev)
+            const state = pushImageUploadRuntimeState.get(context.nodeId) ?? {
+                active: false,
+                lastSentAt: 0,
+                seq: 0,
+            };
+            if (!triggerActive) {
+                state.active = false;
+                state.lastSentAt = 0;
+                pushImageUploadRuntimeState.set(context.nodeId, state);
                 return {};
+            }
             const formatRaw = typeof config.format === 'string' ? config.format.trim().toLowerCase() : '';
             const format = formatRaw === 'image/png' || formatRaw === 'image/webp' || formatRaw === 'image/jpeg'
                 ? formatRaw
@@ -2365,6 +2376,17 @@ function createPushImageUploadNode() {
             const quality = Number.isFinite(qualityRaw) ? clampNumber(qualityRaw, 0.1, 1) : 0.85;
             const maxWidthRaw = Number(config.maxWidth ?? 960);
             const maxWidth = Number.isFinite(maxWidthRaw) ? Math.max(128, Math.floor(maxWidthRaw)) : 960;
+            const speedRaw = Number(config.speed ?? 1);
+            const speed = Number.isFinite(speedRaw) ? clampNumber(speedRaw, 0.1, 30) : 1;
+            const intervalMs = Math.max(1, Math.floor(1000 / speed));
+            const now = context.time;
+            const shouldSend = !state.active || state.lastSentAt === 0 || now - state.lastSentAt >= intervalMs;
+            state.active = true;
+            pushImageUploadRuntimeState.set(context.nodeId, state);
+            if (!shouldSend)
+                return {};
+            state.lastSentAt = now;
+            state.seq = (state.seq + 1) % 1_000_000_000;
             const cmd = {
                 action: 'custom',
                 payload: {
@@ -2372,12 +2394,14 @@ function createPushImageUploadNode() {
                     format,
                     quality,
                     maxWidth,
+                    speed,
+                    seq: state.seq,
                 },
             };
             return { cmd };
         },
         onDisable: (_inputs, _config, context) => {
-            pushImageUploadTriggerState.delete(context.nodeId);
+            pushImageUploadRuntimeState.delete(context.nodeId);
         },
     };
 }
@@ -2387,7 +2411,9 @@ function createShowImageProcessorNode() {
         if (typeof raw === 'string')
             return raw.trim();
         if (Array.isArray(raw)) {
-            for (const item of raw) {
+            // If upstream provides a queue/array, prefer the latest value (pipeline semantics).
+            for (let i = raw.length - 1; i >= 0; i--) {
+                const item = raw[i];
                 if (typeof item === 'string' && item.trim())
                     return item.trim();
                 if (item && typeof item === 'object' && typeof item.url === 'string') {

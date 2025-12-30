@@ -651,6 +651,9 @@ type PushImageUploadPayload = {
   format?: string;
   quality?: number;
   maxWidth?: number;
+  // Manager-side scheduling metadata (optional).
+  speed?: number;
+  seq?: number;
 };
 
 let screenshotUploadInFlight = false;

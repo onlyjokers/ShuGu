@@ -1,5 +1,5 @@
 {
-  "__purpose": "Processor node: send a one-shot screenshot capture request to the selected client(s), which will upload the image back to the manager.",
+  "__purpose": "Processor node: while Push=true, repeatedly request screenshots from the selected client(s) at the configured speed, uploading images back to the manager.",
   "type": "proc-push-image-upload",
   "label": "Push Image Upload",
   "category": "Processors",

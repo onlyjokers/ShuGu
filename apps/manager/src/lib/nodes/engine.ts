@@ -226,6 +226,7 @@ class NodeEngineClass {
       ),
     };
 
+    this.cleanupGraphTransition(snapshot, next, { reason: 'removeNode' });
     this.runtime.loadGraph(next);
     this.syncGraphState();
     this.updateLocalLoops();
@@ -302,6 +303,98 @@ class NodeEngineClass {
     });
 
     return changed ? { ...state, nodes: nextNodes } : state;
+  }
+
+  private countSinkConnectionsByNodeId(state: Pick<GraphState, 'nodes' | 'connections'>): Map<string, number> {
+    const nodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const connections = Array.isArray(state.connections) ? state.connections : [];
+
+    const nodeById = new Map(nodes.map((node) => [String(node.id), node]));
+    const counts = new Map<string, number>();
+    for (const node of nodes) counts.set(String(node.id), 0);
+
+    for (const conn of connections) {
+      const targetId = String(conn.targetNodeId ?? '');
+      if (!targetId) continue;
+
+      const targetNode = nodeById.get(targetId);
+      if (!targetNode) continue;
+
+      const def = nodeRegistry.get(String(targetNode.type));
+      if (!def) continue;
+
+      const targetPortId = String(conn.targetPortId ?? '');
+      const port = def.inputs?.find((p) => String(p.id) === targetPortId);
+      if (!port || port.kind !== 'sink') continue;
+
+      counts.set(targetId, (counts.get(targetId) ?? 0) + 1);
+    }
+
+    return counts;
+  }
+
+  private runOnDisableForNodeIds(nodeIds: string[], opts?: { reason?: string }): void {
+    if (!get(this.isRunning)) return;
+
+    const now = Date.now();
+    for (const nodeId of nodeIds) {
+      const node = this.runtime.getNode(nodeId);
+      if (!node) continue;
+
+      const def = nodeRegistry.get(node.type);
+      if (!def?.onDisable) continue;
+
+      const computedInputs = this.runtime.getLastComputedInputs(nodeId) ?? null;
+      const fullInputs: Record<string, unknown> = {};
+      for (const port of def.inputs) {
+        if (port.kind === 'sink') {
+          fullInputs[port.id] = node.inputValues?.[port.id];
+          continue;
+        }
+        if (computedInputs && Object.prototype.hasOwnProperty.call(computedInputs, port.id)) {
+          fullInputs[port.id] = computedInputs[port.id];
+        } else {
+          fullInputs[port.id] = node.inputValues?.[port.id] ?? port.defaultValue;
+        }
+      }
+
+      try {
+        def.onDisable(fullInputs, node.config ?? {}, { nodeId, time: now, deltaTime: 0 });
+      } catch (err) {
+        const reason = opts?.reason ? ` (${opts.reason})` : '';
+        console.error(`[NodeEngine] onDisable error in ${node.type} (${node.id})${reason}`, err);
+      }
+    }
+  }
+
+  private cleanupGraphTransition(prev: GraphState, next: GraphState, opts?: { reason?: string }): void {
+    if (!get(this.isRunning)) return;
+
+    const prevNodes = Array.isArray(prev.nodes) ? prev.nodes : [];
+    const nextNodes = Array.isArray(next.nodes) ? next.nodes : [];
+    const prevNodeIds = new Set(prevNodes.map((node) => String(node.id)));
+    const nextNodeIds = new Set(nextNodes.map((node) => String(node.id)));
+
+    const prevSinkCounts = this.countSinkConnectionsByNodeId(prev);
+    const nextSinkCounts = this.countSinkConnectionsByNodeId(next);
+
+    const toDisable = new Set<string>();
+
+    // Nodes removed from the graph should clean up any long-lived effects.
+    for (const id of prevNodeIds) {
+      if (nextNodeIds.has(id)) continue;
+      toDisable.add(id);
+    }
+
+    // Nodes that lose all sink connections should clean up (pipeline semantics).
+    for (const [id, count] of prevSinkCounts) {
+      if (count <= 0) continue;
+      const nextCount = nextSinkCounts.get(id) ?? 0;
+      if (nextCount <= 0) toDisable.add(id);
+    }
+
+    if (toDisable.size === 0) return;
+    this.runOnDisableForNodeIds(Array.from(toDisable), opts);
   }
 
   addConnection(connection: Connection): boolean {
@@ -557,6 +650,7 @@ class NodeEngineClass {
       connections: snapshot.connections.filter((c) => c.id !== connectionId),
     });
 
+    this.cleanupGraphTransition(snapshot, next, { reason: 'removeConnection' });
     this.runtime.loadGraph(next);
     this.syncGraphState();
     this.updateLocalLoops();
@@ -608,6 +702,7 @@ class NodeEngineClass {
   }
 
   loadGraph(state: GraphState): void {
+    const prev = this.runtime.exportGraph();
     const rawNodes = Array.isArray(state.nodes) ? state.nodes : [];
     const rawConnections = Array.isArray(state.connections) ? state.connections : [];
 
@@ -691,6 +786,7 @@ class NodeEngineClass {
     const sanitized: GraphState = { nodes, connections };
 
     const prepared = this.applySelectionMapOptions(sanitized);
+    this.cleanupGraphTransition(prev, prepared, { reason: 'loadGraph' });
     this.runtime.loadGraph(prepared);
     this.offloadedNodeIds.clear();
     this.offloadedPatchNodeIds.clear();
