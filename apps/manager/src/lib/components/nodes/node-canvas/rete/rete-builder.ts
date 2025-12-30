@@ -18,6 +18,7 @@ import {
   MidiLearnControl,
   SelectControl,
   TimeRangeControl,
+  CurveControl,
 } from './rete-controls';
 
 type ReteSocketMap = Record<string, ClassicPreset.Socket>;
@@ -488,6 +489,24 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         control.nodeType = instance.type;
         control.configKey = key;
         node.addControl(key, control);
+      } else if (field.type === 'curve') {
+        const rawCurve = current as any;
+        // Cubic bezier: [x1, y1, x2, y2]
+        const initial: [number, number, number, number] = Array.isArray(rawCurve) && rawCurve.length === 4
+          ? rawCurve as [number, number, number, number]
+          : [0.25, 0.1, 0.25, 1.0];
+        const curveControl: any = new CurveControl({
+          label: field.label,
+          initial,
+          nodeId: instance.id,
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
+        });
+        curveControl.nodeId = instance.id;
+        curveControl.nodeType = instance.type;
+        node.addControl(key, curveControl);
       } else if (instance.type === 'note' && key === 'text') {
         node.addControl(
           key,

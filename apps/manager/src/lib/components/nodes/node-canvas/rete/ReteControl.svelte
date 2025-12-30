@@ -26,6 +26,7 @@
     getMediaDurationSec,
   } from '$lib/features/assets/media-timeline-preview';
   import { renderMarkdownToHtml } from '../utils/markdown';
+  import CurveEditor from '../ui/CurveEditor.svelte';
 
   export let data: any;
   $: isInline = Boolean((data as any)?.inline);
@@ -44,15 +45,21 @@
       max: isFiniteNumber((ctrl as any).max) ? (ctrl as any).max : undefined,
       step: isFiniteNumber((ctrl as any).step) ? (ctrl as any).step : undefined,
     };
-    if (fromControl.min !== undefined || fromControl.max !== undefined || fromControl.step !== undefined) {
+    if (
+      fromControl.min !== undefined ||
+      fromControl.max !== undefined ||
+      fromControl.step !== undefined
+    ) {
       return fromControl;
     }
 
     // Safety: some legacy graphs/controls may miss `min/max` hints. Resolve them from the node registry so
     // critical constraints (e.g. non-negative playback rate) still apply at the UI layer.
-    const nodeType = typeof (ctrl as any).nodeType === 'string' ? String((ctrl as any).nodeType) : '';
+    const nodeType =
+      typeof (ctrl as any).nodeType === 'string' ? String((ctrl as any).nodeType) : '';
     const portId = typeof (ctrl as any).portId === 'string' ? String((ctrl as any).portId) : '';
-    const configKey = typeof (ctrl as any).configKey === 'string' ? String((ctrl as any).configKey) : '';
+    const configKey =
+      typeof (ctrl as any).configKey === 'string' ? String((ctrl as any).configKey) : '';
     const key = portId || configKey;
     if (!nodeType || !key) return {};
 
@@ -61,21 +68,36 @@
     const port = def.inputs?.find((p) => String(p.id) === key);
     const field = def.configSchema?.find((f) => String(f.key) === key);
 
-    const min = isFiniteNumber(port?.min) ? port!.min : isFiniteNumber(field?.min) ? field!.min : undefined;
-    const max = isFiniteNumber(port?.max) ? port!.max : isFiniteNumber(field?.max) ? field!.max : undefined;
-    const step = isFiniteNumber(port?.step) ? port!.step : isFiniteNumber(field?.step) ? field!.step : undefined;
+    const min = isFiniteNumber(port?.min)
+      ? port!.min
+      : isFiniteNumber(field?.min)
+        ? field!.min
+        : undefined;
+    const max = isFiniteNumber(port?.max)
+      ? port!.max
+      : isFiniteNumber(field?.max)
+        ? field!.max
+        : undefined;
+    const step = isFiniteNumber(port?.step)
+      ? port!.step
+      : isFiniteNumber(field?.step)
+        ? field!.step
+        : undefined;
     return { min, max, step };
   };
 
   $: numberBounds =
-    data instanceof ClassicPreset.InputControl && data.type === 'number' ? resolveNumberBounds(data) : {};
+    data instanceof ClassicPreset.InputControl && data.type === 'number'
+      ? resolveNumberBounds(data)
+      : {};
   $: numberInputMin = numberBounds.min;
   $: numberInputMax = numberBounds.max;
   $: numberInputStep =
     data instanceof ClassicPreset.InputControl && data.type === 'number'
       ? (numberBounds.step ?? (data as any).step ?? 'any')
       : undefined;
-  $: isMomentaryButton = data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
+  $: isMomentaryButton =
+    data instanceof ClassicPreset.InputControl && Boolean((data as any).button);
   $: momentaryButtonLabel = isMomentaryButton
     ? String((data as any).buttonLabel ?? data?.label ?? 'Push')
     : 'Push';
@@ -278,13 +300,18 @@
       // If a project loads a non-empty value, keep the UI source in sync.
       if (isDisplayFileRef(currentTrimmed) && localAssetSource !== 'display') {
         localAssetSource = 'display';
-      } else if (currentTrimmed && !isDisplayFileRef(currentTrimmed) && localAssetSource !== 'server') {
+      } else if (
+        currentTrimmed &&
+        !isDisplayFileRef(currentTrimmed) &&
+        localAssetSource !== 'server'
+      ) {
         localAssetSource = 'server';
       }
     }
 
     // Server-local draft input only applies when the current value is a filesystem path.
-    if (!localAssetDraftDirty) localAssetDraft = isDisplayFileRef(currentTrimmed) ? '' : currentTrimmed;
+    if (!localAssetDraftDirty)
+      localAssetDraft = isDisplayFileRef(currentTrimmed) ? '' : currentTrimmed;
   }
 
   $: if (data?.controlType === 'local-asset-picker' && localAssetSourceInitialized) {
@@ -543,7 +570,9 @@
 
     const node = nodeEngine.getNode(nodeId);
     if (!node) {
-      const orderedClients = clients.map((id) => clientById.get(id)).filter(Boolean) as ClientInfo[];
+      const orderedClients = clients
+        .map((id) => clientById.get(id))
+        .filter(Boolean) as ClientInfo[];
       return orderedClients.map((c) => ({ client: c, selected: false, primary: false }));
     }
     const computed = nodeEngine.getLastComputedInputs(nodeId);
@@ -1509,6 +1538,34 @@
       />
     {/if}
   </div>
+{:else if data?.controlType === 'curve'}
+  {@const curveNodeId = data?.nodeId ?? ''}
+  {@const curveNode = curveNodeId ? nodeEngine.getNode(curveNodeId) : null}
+  {@const curveRunning = Boolean(curveNode?.outputValues?.running)}
+  {@const curveOutput =
+    typeof curveNode?.outputValues?.value === 'number' ? curveNode.outputValues.value : 0}
+  {@const curveStart = typeof curveNode?.config?.start === 'number' ? curveNode.config.start : 0}
+  {@const curveEnd = typeof curveNode?.config?.end === 'number' ? curveNode.config.end : 1}
+  {@const curveProgress =
+    curveRunning && curveEnd !== curveStart
+      ? (curveOutput - curveStart) / (curveEnd - curveStart)
+      : 0}
+  <div class="control-field curve-field {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
+    {#if hasLabel}
+      <div class="control-label">{data.label}</div>
+    {/if}
+    <CurveEditor
+      value={data.value}
+      readonly={Boolean(data.readonly)}
+      progress={curveProgress}
+      on:change={(e) => {
+        if (data?.setValue) {
+          data.value = e.detail;
+          data.setValue(e.detail);
+        }
+      }}
+    />
+  </div>
 {:else if data?.controlType === 'time-range'}
   <div class="time-range {isInline ? 'inline' : ''}">
     {#if hasLabel}
@@ -1744,11 +1801,13 @@
 
       {#if !isLocalDisplayConnected}
         <div class="local-asset-hint">
-          Display is not paired. If Display is open in the same browser (same origin), local files can still work; otherwise click Open Display.
+          Display is not paired. If Display is open in the same browser (same origin), local files
+          can still work; otherwise click Open Display.
         </div>
       {/if}
       <div class="local-asset-hint">
-        Browser security: a deployed website cannot read arbitrary paths like <code>/Users/...</code>. Use the file picker.
+        Browser security: a deployed website cannot read arbitrary paths like <code>/Users/...</code
+        >. Use the file picker.
       </div>
       {#if displayLocalError}
         <div class="local-asset-error">{displayLocalError}</div>
@@ -1796,7 +1855,6 @@
         <div class="local-asset-error">{localAssetError}</div>
       {/if}
     {/if}
-
   </div>
 {:else if data?.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
@@ -2114,7 +2172,8 @@
   }
 
   .note-preview :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
       monospace;
     font-size: 11px;
     background: rgba(2, 6, 23, 0.55);

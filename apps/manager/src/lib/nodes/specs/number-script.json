@@ -1,0 +1,41 @@
+{
+  "__purpose": "Manager node spec for number-script (generates values over time following a user-defined curve).",
+  "type": "number-script",
+  "label": "Number Script",
+  "category": "Logic",
+  "inputs": [
+    { "id": "run", "label": "Run", "type": "boolean", "defaultValue": false },
+    { "id": "loop", "label": "Loop", "type": "string" },
+    { "id": "duration", "label": "Duration (ms)", "type": "number", "defaultValue": 1000, "min": 1, "step": 10 },
+    { "id": "start", "label": "Start", "type": "number", "defaultValue": 0, "step": 0.01 },
+    { "id": "end", "label": "End", "type": "number", "defaultValue": 1, "step": 0.01 }
+  ],
+  "outputs": [
+    { "id": "value", "label": "Value", "type": "number" },
+    { "id": "running", "label": "Running", "type": "boolean" },
+    { "id": "finished", "label": "Finished", "type": "boolean" }
+  ],
+  "configSchema": [
+    {
+      "key": "loop",
+      "label": "Loop",
+      "type": "select",
+      "defaultValue": "once",
+      "options": [
+        { "value": "once", "label": "Once" },
+        { "value": "one-way", "label": "One-way (repeat)" },
+        { "value": "around", "label": "Around (ping-pong)" }
+      ]
+    },
+    { "key": "duration", "label": "Duration (ms)", "type": "number", "defaultValue": 1000, "min": 1, "step": 10 },
+    { "key": "start", "label": "Start", "type": "number", "defaultValue": 0, "step": 0.01 },
+    { "key": "end", "label": "End", "type": "number", "defaultValue": 1, "step": 0.01 },
+    {
+      "key": "curve",
+      "label": "Curve",
+      "type": "curve",
+      "defaultValue": [0.25, 0.1, 0.25, 1.0]
+    }
+  ],
+  "runtime": { "kind": "number-script" }
+}

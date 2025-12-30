@@ -27,7 +27,7 @@ export interface NodePort {
 export interface ConfigField {
     key: string;
     label: string;
-    type: 'string' | 'number' | 'boolean' | 'time-range' | 'select' | 'param-path' | 'midi-source' | 'client-picker' | 'asset-picker' | 'local-asset-picker' | 'file';
+    type: 'string' | 'number' | 'boolean' | 'time-range' | 'select' | 'param-path' | 'midi-source' | 'client-picker' | 'asset-picker' | 'local-asset-picker' | 'file' | 'curve';
     defaultValue?: unknown;
     options?: {
         value: string;

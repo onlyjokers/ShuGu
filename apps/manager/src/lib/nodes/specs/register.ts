@@ -111,6 +111,7 @@ type NodeRuntime =
   | { kind: 'logic-if' }
   | { kind: 'logic-for' }
   | { kind: 'logic-sleep' }
+  | { kind: 'number-script' }
   | { kind: 'group-activate' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
@@ -180,6 +181,7 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     ['logic-if', pick('logic-if')],
     ['logic-for', pick('logic-for')],
     ['logic-sleep', pick('logic-sleep')],
+    ['number-script', pick('number-script')],
     ['tone-osc', pick('tone-osc')],
     ['tone-delay', pick('tone-delay')],
     ['tone-resonator', pick('tone-resonator')],
@@ -663,6 +665,7 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
     case 'logic-if':
     case 'logic-for':
     case 'logic-sleep':
+    case 'number-script':
     case 'tone-osc':
     case 'play-media':
     {

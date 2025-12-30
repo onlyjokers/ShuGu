@@ -276,3 +276,36 @@ export class MidiLearnControl extends ClassicPreset.Control {
     this.label = opts.label;
   }
 }
+
+// Cubic bezier value: [x1, y1, x2, y2] where start is (0,0) and end is (1,1)
+export type BezierValue = [number, number, number, number];
+
+export class CurveControl extends ClassicPreset.Control {
+  controlType = 'curve' as const;
+  label?: string;
+  value: BezierValue;
+  readonly: boolean;
+  nodeId?: string;
+  private onChange?: (value: BezierValue) => void;
+
+  constructor(opts: {
+    label?: string;
+    initial?: BezierValue;
+    readonly?: boolean;
+    nodeId?: string;
+    change?: (value: BezierValue) => void;
+  }) {
+    super();
+    this.label = opts.label;
+    this.nodeId = opts.nodeId;
+    this.value = opts.initial ?? [0.25, 0.1, 0.25, 1.0];
+    this.readonly = Boolean(opts.readonly);
+    this.onChange = opts.change;
+  }
+
+  setValue(value: BezierValue): void {
+    if (this.readonly) return;
+    this.value = value;
+    this.onChange?.(value);
+  }
+}

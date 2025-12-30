@@ -28,6 +28,7 @@
         "@shugu/protocol": "workspace:*",
         "@shugu/sdk-manager": "workspace:*",
         "@shugu/ui-kit": "workspace:*",
+        "bezier-easing": "^2.1.0",
         "rete": "^2.0.6",
         "rete-area-plugin": "^2.1.5",
         "rete-connection-plugin": "^2.0.5",

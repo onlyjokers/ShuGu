@@ -53,7 +53,8 @@ export interface ConfigField {
     | 'client-picker'
     | 'asset-picker'
     | 'local-asset-picker'
-    | 'file';
+    | 'file'
+    | 'curve';
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
   assetKind?: 'audio' | 'image' | 'video' | 'any';

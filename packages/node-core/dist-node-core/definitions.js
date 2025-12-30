@@ -210,6 +210,7 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createLogicIfNode());
     registry.register(createLogicForNode());
     registry.register(createLogicSleepNode());
+    registry.register(createNumberScriptNode());
     registry.register(createShowAnythingNode());
     registry.register(createNoteNode());
     registry.register(createNumberNode());
@@ -2935,6 +2936,186 @@ function createConvolutionEffectProcessorNode() {
                         normalize,
                     },
                 },
+            };
+        },
+    };
+}
+const numberScriptState = new Map();
+/**
+ * Evaluate a cubic bezier curve at normalized time `t` (0..1).
+ * Uses Newton-Raphson method to find t for a given x, then returns y.
+ * bezier: [x1, y1, x2, y2] control points (start=0,0, end=1,1)
+ */
+function evaluateBezier(bezier, t) {
+    const x = Math.max(0, Math.min(1, t));
+    const x1 = bezier[0], y1 = bezier[1], x2 = bezier[2], y2 = bezier[3];
+    // Cubic bezier formula: B(t) = 3(1-t)²t*P1 + 3(1-t)t²*P2 + t³
+    // For x: Bx(t) = 3(1-t)²t*x1 + 3(1-t)t²*x2 + t³
+    // For y: By(t) = 3(1-t)²t*y1 + 3(1-t)t²*y2 + t³
+    // Newton-Raphson to find parameter t for given x
+    const sampleCurveX = (t) => ((1 - 3 * x2 + 3 * x1) * t + (3 * x2 - 6 * x1)) * t * t + 3 * x1 * t;
+    const sampleCurveY = (t) => ((1 - 3 * y2 + 3 * y1) * t + (3 * y2 - 6 * y1)) * t * t + 3 * y1 * t;
+    const sampleCurveDerivativeX = (t) => (3 * (1 - 3 * x2 + 3 * x1) * t + 2 * (3 * x2 - 6 * x1)) * t + 3 * x1;
+    // Use Newton-Raphson iteration
+    let guessT = x;
+    for (let i = 0; i < 8; i++) {
+        const currentX = sampleCurveX(guessT) - x;
+        if (Math.abs(currentX) < 1e-6)
+            break;
+        const derivative = sampleCurveDerivativeX(guessT);
+        if (Math.abs(derivative) < 1e-6)
+            break;
+        guessT -= currentX / derivative;
+        guessT = Math.max(0, Math.min(1, guessT));
+    }
+    return sampleCurveY(guessT);
+}
+function createNumberScriptNode() {
+    return {
+        type: 'number-script',
+        label: 'Number Script',
+        category: 'Logic',
+        inputs: [
+            { id: 'run', label: 'Run', type: 'boolean', defaultValue: false },
+            { id: 'loop', label: 'Loop', type: 'string' },
+            { id: 'duration', label: 'Duration (ms)', type: 'number', defaultValue: 1000, min: 1 },
+            { id: 'start', label: 'Start', type: 'number', defaultValue: 0 },
+            { id: 'end', label: 'End', type: 'number', defaultValue: 1 },
+        ],
+        outputs: [
+            { id: 'value', label: 'Value', type: 'number' },
+            { id: 'running', label: 'Running', type: 'boolean' },
+            { id: 'finished', label: 'Finished', type: 'boolean' },
+        ],
+        configSchema: [
+            {
+                key: 'loop',
+                label: 'Loop',
+                type: 'select',
+                defaultValue: 'once',
+                options: [
+                    { value: 'once', label: 'Once' },
+                    { value: 'one-way', label: 'One-way (repeat)' },
+                    { value: 'around', label: 'Around (ping-pong)' },
+                ],
+            },
+            { key: 'duration', label: 'Duration (ms)', type: 'number', defaultValue: 1000, min: 1 },
+            { key: 'start', label: 'Start', type: 'number', defaultValue: 0 },
+            { key: 'end', label: 'End', type: 'number', defaultValue: 1 },
+            {
+                key: 'curve',
+                label: 'Curve',
+                type: 'curve',
+                defaultValue: [0.25, 0.1, 0.25, 1.0],
+            },
+        ],
+        process: (inputs, config, context) => {
+            const run = coerceBoolean(inputs.run);
+            const loopRaw = inputs.loop;
+            const loop = typeof loopRaw === 'string' && loopRaw.trim()
+                ? loopRaw.trim()
+                : String(config.loop ?? 'once');
+            const durationRaw = inputs.duration;
+            const durationMs = typeof durationRaw === 'number' && Number.isFinite(durationRaw)
+                ? durationRaw
+                : Number(config.duration ?? 1000);
+            const duration = Math.max(1, Number.isFinite(durationMs) ? durationMs : 1000);
+            const startRaw = inputs.start;
+            const startValue = typeof startRaw === 'number' && Number.isFinite(startRaw)
+                ? startRaw
+                : Number(config.start ?? 0);
+            const start = Number.isFinite(startValue) ? startValue : 0;
+            const endRaw = inputs.end;
+            const endValue = typeof endRaw === 'number' && Number.isFinite(endRaw)
+                ? endRaw
+                : Number(config.end ?? 1);
+            const end = Number.isFinite(endValue) ? endValue : 1;
+            // Parse bezier curve: [x1, y1, x2, y2]
+            const curveRaw = config.curve;
+            const bezier = Array.isArray(curveRaw) && curveRaw.length === 4 &&
+                curveRaw.every((v) => typeof v === 'number' && Number.isFinite(v))
+                ? curveRaw
+                : [0.25, 0.1, 0.25, 1.0];
+            // Initialize or retrieve state
+            let state = numberScriptState.get(context.nodeId);
+            if (!state) {
+                state = {
+                    running: false,
+                    elapsedMs: 0,
+                    direction: 1,
+                    justFinished: false,
+                    lastRun: false,
+                };
+                numberScriptState.set(context.nodeId, state);
+            }
+            // Clear finished flag at start of frame
+            state.justFinished = false;
+            // Edge detection for run signal
+            const rising = run && !state.lastRun;
+            const falling = !run && state.lastRun;
+            state.lastRun = run;
+            // Start on rising edge
+            if (rising && !state.running) {
+                state.running = true;
+                state.elapsedMs = 0;
+                state.direction = 1;
+            }
+            // Stop on falling edge (optional: you may want it to continue even if run goes false)
+            // For this implementation: we require run=true to continue, stop if run=false
+            if (falling && state.running) {
+                state.running = false;
+            }
+            if (!state.running) {
+                // Output the start or end value based on direction when stopped
+                const outputValue = state.direction === 1 ? start : end;
+                return { value: outputValue, running: false, finished: false };
+            }
+            // Advance time
+            state.elapsedMs += context.deltaTime;
+            let t = duration > 0 ? state.elapsedMs / duration : 1;
+            let finished = false;
+            if (t >= 1) {
+                // Cycle completed
+                switch (loop) {
+                    case 'once':
+                        t = 1;
+                        state.running = false;
+                        finished = true;
+                        state.justFinished = true;
+                        break;
+                    case 'one-way':
+                        // Restart from beginning
+                        state.elapsedMs = state.elapsedMs % duration;
+                        t = duration > 0 ? state.elapsedMs / duration : 0;
+                        finished = true;
+                        state.justFinished = true;
+                        break;
+                    case 'around':
+                        // Ping-pong: reverse direction
+                        state.elapsedMs = state.elapsedMs % duration;
+                        t = duration > 0 ? state.elapsedMs / duration : 0;
+                        state.direction = state.direction === 1 ? -1 : 1;
+                        finished = true;
+                        state.justFinished = true;
+                        break;
+                    default:
+                        t = 1;
+                        state.running = false;
+                        finished = true;
+                        state.justFinished = true;
+                }
+            }
+            // Apply direction for "around" mode
+            const effectiveT = state.direction === 1 ? t : 1 - t;
+            // Evaluate bezier curve
+            const curveValue = evaluateBezier(bezier, effectiveT);
+            // Map curve output (0..1) to start..end range
+            const value = start + curveValue * (end - start);
+            numberScriptState.set(context.nodeId, state);
+            return {
+                value,
+                running: state.running,
+                finished: state.justFinished,
             };
         },
     };
