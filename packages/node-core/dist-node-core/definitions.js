@@ -424,7 +424,6 @@ function createLoadAudioFromAssetsNode() {
                 max: 100,
                 step: 0.01,
             },
-            { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [
             { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
@@ -441,7 +440,6 @@ function createLoadAudioFromAssetsNode() {
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             {
                 key: 'timeline',
                 label: 'Timeline',
@@ -522,7 +520,6 @@ function createLoadAudioFromLocalNode() {
                 max: 100,
                 step: 0.01,
             },
-            { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [
             { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
@@ -539,7 +536,6 @@ function createLoadAudioFromLocalNode() {
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
             {
                 key: 'timeline',
                 label: 'Timeline',
@@ -1839,7 +1835,6 @@ function createToneLFONode() {
                 step: 0.01,
             },
             { id: 'waveform', label: 'Waveform', type: 'string' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         outputs: [{ id: 'value', label: 'Value', type: 'number' }],
         configSchema: [
@@ -1869,7 +1864,6 @@ function createToneLFONode() {
                 defaultValue: 'sine',
                 options: TONE_LFO_WAVEFORM_OPTIONS,
             },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs, config, context) => {
             const scaleRaw = inputs.in;
@@ -1883,12 +1877,6 @@ function createToneLFONode() {
                 ? inputs.amplitude
                 : Number(config.amplitude ?? 1);
             const amplitude = Number.isFinite(amplitudeRaw) ? Math.max(0, Math.min(1, amplitudeRaw)) : 1;
-            const enabledRaw = inputs.enabled;
-            const enabled = typeof enabledRaw === 'number'
-                ? enabledRaw >= 0.5
-                : typeof enabledRaw === 'boolean'
-                    ? enabledRaw
-                    : Boolean(config.enabled ?? true);
             const waveform = (() => {
                 const v = inputs.waveform;
                 if (typeof v === 'string' && v.trim())
@@ -1897,8 +1885,6 @@ function createToneLFONode() {
             })();
             const scaledMin = min * scale;
             const scaledMax = max * scale;
-            if (!enabled)
-                return { value: scaledMin };
             const freq = Number.isFinite(frequencyHz) ? Math.max(0, frequencyHz) : 1;
             const phase = (context.time / 1000) * freq * 2 * Math.PI;
             let normalized;
@@ -2044,8 +2030,6 @@ function createToneOscNode() {
             { id: 'frequency', label: 'Freq', type: 'number', defaultValue: 440 },
             { id: 'amplitude', label: 'Amp', type: 'number', defaultValue: 1 },
             { id: 'waveform', label: 'Waveform', type: 'string' },
-            { id: 'bus', label: 'Bus', type: 'string' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
             { id: 'loop', label: 'Loop (pattern)', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
@@ -2063,18 +2047,6 @@ function createToneOscNode() {
                 ],
             },
             {
-                key: 'bus',
-                label: 'Bus',
-                type: 'string',
-                defaultValue: 'main',
-            },
-            {
-                key: 'enabled',
-                label: 'Enabled',
-                type: 'boolean',
-                defaultValue: false,
-            },
-            {
                 key: 'loop',
                 label: 'Loop (pattern)',
                 type: 'string',
@@ -2083,11 +2055,7 @@ function createToneOscNode() {
         ],
         process: (inputs, config) => {
             const ampInput = Number(inputs.amplitude ?? 0);
-            const enabledRaw = inputs.enabled;
-            const enabled = typeof enabledRaw === 'number'
-                ? enabledRaw >= 0.5
-                : (enabledRaw ?? config.enabled ?? false);
-            const value = enabled ? ampInput : 0;
+            const value = Number.isFinite(ampInput) ? ampInput : 0;
             return { value };
         },
     };
@@ -2102,18 +2070,12 @@ function createToneDelayNode() {
             { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: 0.001 },
             { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
-            { id: 'bus', label: 'Bus', type: 'string' },
-            { id: 'order', label: 'Order', type: 'number' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
             { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: 0.001 },
             { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
             { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'order', label: 'Order', type: 'number', defaultValue: 10 },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs) => ({ out: inputs.in ?? 0 }),
     };
@@ -2128,18 +2090,12 @@ function createToneResonatorNode() {
             { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6, min: 0, max: 0.9999 },
             { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
-            { id: 'bus', label: 'Bus', type: 'string' },
-            { id: 'order', label: 'Order', type: 'number' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
             { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6, min: 0, max: 0.9999 },
             { key: 'dampening', label: 'Dampening (Hz)', type: 'number', defaultValue: 3000 },
             { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'order', label: 'Order', type: 'number', defaultValue: 20 },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs) => ({ out: inputs.in ?? 0 }),
     };
@@ -2153,17 +2109,11 @@ function createTonePitchNode() {
             { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
             { id: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
             { id: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
-            { id: 'bus', label: 'Bus', type: 'string' },
-            { id: 'order', label: 'Order', type: 'number' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
             { key: 'pitch', label: 'Pitch (st)', type: 'number', defaultValue: 0 },
             { key: 'windowSize', label: 'Window', type: 'number', defaultValue: 0.1 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'order', label: 'Order', type: 'number', defaultValue: 30 },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs) => ({ out: inputs.in ?? 0 }),
     };
@@ -2177,17 +2127,11 @@ function createToneReverbNode() {
             { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
             { id: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6, min: 0.001 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
-            { id: 'bus', label: 'Bus', type: 'string' },
-            { id: 'order', label: 'Order', type: 'number' },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
             { key: 'decay', label: 'Decay (s)', type: 'number', defaultValue: 1.6, min: 0.001 },
             { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'order', label: 'Order', type: 'number', defaultValue: 40 },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs) => ({ out: inputs.in ?? 0 }),
     };
@@ -2200,14 +2144,12 @@ function createToneGranularNode() {
         inputs: [
             { id: 'url', label: 'URL', type: 'string' },
             { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
-            { id: 'enabled', label: 'Enabled', type: 'boolean' },
             { id: 'loop', label: 'Loop', type: 'boolean' },
             { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
             { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
             { id: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
             { id: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
             { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
-            { id: 'bus', label: 'Bus', type: 'string' },
         ],
         outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
@@ -2218,8 +2160,6 @@ function createToneGranularNode() {
             { key: 'grainSize', label: 'Grain (s)', type: 'number', defaultValue: 0.2 },
             { key: 'overlap', label: 'Overlap (s)', type: 'number', defaultValue: 0.1 },
             { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0.6 },
-            { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
         ],
         process: (inputs, config) => {
             const volume = typeof inputs.volume === 'number'

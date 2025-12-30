@@ -4,20 +4,14 @@
   "label": "Tone Pitch",
   "category": "Audio",
   "inputs": [
-    { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
+    { "id": "in", "label": "In", "type": "audio" },
     { "id": "pitch", "label": "Pitch (st)", "type": "number", "defaultValue": 0 },
-    { "id": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 },
-    { "id": "bus", "label": "Bus", "type": "string" },
-    { "id": "order", "label": "Order", "type": "number" },
-    { "id": "enabled", "label": "Enabled", "type": "boolean" }
+    { "id": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 }
   ],
-  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "audio" }],
   "configSchema": [
     { "key": "pitch", "label": "Pitch (st)", "type": "number", "defaultValue": 0 },
-    { "key": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 },
-    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
-    { "key": "order", "label": "Order", "type": "number", "defaultValue": 30 },
-    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
+    { "key": "windowSize", "label": "Window", "type": "number", "defaultValue": 0.1 }
   ],
   "runtime": { "kind": "tone-pitch" }
 }

@@ -7,7 +7,7 @@
     { "id": "frequency", "label": "Freq", "type": "number", "defaultValue": 440 },
     { "id": "amplitude", "label": "Amp", "type": "number", "defaultValue": 1 }
   ],
-  "outputs": [{ "id": "value", "label": "Out", "type": "number" }],
+  "outputs": [{ "id": "value", "label": "Out", "type": "audio" }],
   "configSchema": [
     {
       "key": "waveform",
@@ -21,8 +21,6 @@
         { "value": "sawtooth", "label": "Sawtooth" }
       ]
     },
-    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
-    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false },
     { "key": "loop", "label": "Loop (pattern)", "type": "string", "defaultValue": "" }
   ],
   "runtime": { "kind": "tone-osc" }

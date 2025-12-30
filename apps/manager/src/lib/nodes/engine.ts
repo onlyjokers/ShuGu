@@ -71,6 +71,33 @@ function hashString(input: string): string {
   return hash.toString(36);
 }
 
+const LEGACY_TONE_FIELDS_BY_TYPE = new Map<string, string[]>([
+  ['tone-delay', ['bus', 'order', 'enabled']],
+  ['tone-resonator', ['bus', 'order', 'enabled']],
+  ['tone-pitch', ['bus', 'order', 'enabled']],
+  ['tone-reverb', ['bus', 'order', 'enabled']],
+  ['tone-osc', ['bus', 'enabled']],
+  ['tone-granular', ['bus', 'enabled']],
+  ['tone-lfo', ['enabled']],
+  ['load-audio-from-assets', ['bus']],
+  ['load-audio-from-local', ['bus']],
+]);
+
+function stripLegacyToneFields(
+  type: string,
+  config: Record<string, unknown>,
+  inputValues: Record<string, unknown>
+): void {
+  const keys = LEGACY_TONE_FIELDS_BY_TYPE.get(String(type ?? ''));
+  if (!keys || keys.length === 0) return;
+  for (const key of keys) {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    if (Object.prototype.hasOwnProperty.call(config, key)) delete config[key];
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    if (Object.prototype.hasOwnProperty.call(inputValues, key)) delete inputValues[key];
+  }
+}
+
 class NodeEngineClass {
   private runtime: NodeRuntime;
 
@@ -169,13 +196,16 @@ class NodeEngineClass {
 
   addNode(node: NodeInstance): void {
     const snapshot = this.runtime.exportGraph();
+    const config = { ...(node.config ?? {}) };
+    const inputValues = { ...(node.inputValues ?? {}) };
+    stripLegacyToneFields(String(node.type), config, inputValues);
     const next: GraphState = {
       nodes: [
         ...snapshot.nodes,
         {
           ...node,
-          config: { ...(node.config ?? {}) },
-          inputValues: { ...(node.inputValues ?? {}) },
+          config,
+          inputValues,
           outputValues: { ...(node.outputValues ?? {}) },
         },
       ],
@@ -591,10 +621,13 @@ class NodeEngineClass {
       if (!id || !type) continue;
       if (!nodeRegistry.get(type)) continue;
       keptNodeIds.add(id);
+      const config = { ...(node.config ?? {}) };
+      const inputValues = { ...(node.inputValues ?? {}) };
+      stripLegacyToneFields(type, config, inputValues);
       nodes.push({
         ...node,
-        config: { ...(node.config ?? {}) },
-        inputValues: { ...(node.inputValues ?? {}) },
+        config,
+        inputValues,
         outputValues: {}, // reset runtime outputs
       });
     }

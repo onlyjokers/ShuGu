@@ -1089,7 +1089,6 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [
       { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
@@ -1106,7 +1105,6 @@ if (!nodeRegistry.get('load-audio-from-assets')) {
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
         label: 'Timeline',
@@ -1343,7 +1341,6 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      { id: 'bus', label: 'Bus', type: 'string' },
     ],
     outputs: [
       { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
@@ -1360,7 +1357,6 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
       { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      { key: 'bus', label: 'Bus', type: 'string', defaultValue: 'main' },
       {
         key: 'timeline',
         label: 'Timeline',

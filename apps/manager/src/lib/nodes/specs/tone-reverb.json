@@ -4,17 +4,14 @@
   "label": "Tone Reverb",
   "category": "Audio",
   "inputs": [
-    { "id": "in", "label": "In", "type": "number", "defaultValue": 0 },
+    { "id": "in", "label": "In", "type": "audio" },
     { "id": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6, "min": 0.001 },
     { "id": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
   ],
-  "outputs": [{ "id": "out", "label": "Out", "type": "number" }],
+  "outputs": [{ "id": "out", "label": "Out", "type": "audio" }],
   "configSchema": [
     { "key": "decay", "label": "Decay (s)", "type": "number", "defaultValue": 1.6, "min": 0.001 },
-    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 },
-    { "key": "bus", "label": "Bus", "type": "string", "defaultValue": "main" },
-    { "key": "order", "label": "Order", "type": "number", "defaultValue": 40 },
-    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
+    { "key": "wet", "label": "Wet", "type": "number", "defaultValue": 0.3 }
   ],
   "runtime": { "kind": "tone-reverb" }
 }
