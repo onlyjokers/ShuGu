@@ -411,11 +411,24 @@ export class NodeRuntime {
         return 1;
     }
     commandSignature(value) {
+        // Actions that are expected to be continuously updated (e.g., visual effects with
+        // numeric parameters) should be excluded from oscillation detection. These commands
+        // naturally change frequently when the user adjusts sliders/knobs.
+        const continuousActions = new Set([
+            'convolution',
+            'asciiMode',
+            'asciiResolution',
+            'screenColor',
+            'modulateSoundUpdate',
+        ]);
         const signatureFor = (cmd) => {
             if (!cmd || typeof cmd !== 'object')
                 return null;
             const action = typeof cmd.action === 'string' ? cmd.action : '';
             if (!action)
+                return null;
+            // Skip oscillation detection for continuous/smoothly-updating actions.
+            if (continuousActions.has(action))
                 return null;
             const payload = cmd.payload && typeof cmd.payload === 'object' ? cmd.payload : {};
             const parts = [`a=${action}`];

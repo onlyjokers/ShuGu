@@ -62,7 +62,7 @@ export class MessageRouterService {
      */
     private routeControlMessage(message: ControlMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
-        console.log(`[Router] Control message "${message.action}" -> ${socketIds.length} clients`);
+        // console.log(`[Router] Control message "${message.action}" -> ${socketIds.length} clients`);
         this.emitToSockets(socketIds, message);
     }
 
@@ -80,7 +80,7 @@ export class MessageRouterService {
      */
     private routeMediaMessage(message: MediaMetaMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
-        console.log(`[Router] Media message -> ${socketIds.length} clients`);
+        // console.log(`[Router] Media message -> ${socketIds.length} clients`);
         this.emitToSockets(socketIds, message);
     }
 
@@ -89,7 +89,7 @@ export class MessageRouterService {
      */
     private routePluginMessage(message: PluginControlMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
-        console.log(`[Router] Plugin message "${message.pluginId}:${message.command}" -> ${socketIds.length} clients`);
+       //  console.log(`[Router] Plugin message "${message.pluginId}:${message.command}" -> ${socketIds.length} clients`);
         this.emitToSockets(socketIds, message);
     }
 
@@ -98,7 +98,7 @@ export class MessageRouterService {
      */
     private routeSystemMessage(message: SystemMessage, fromSocketId: string): void {
         // System messages are typically handled by the gateway directly
-        console.log(`[Router] System message: ${message.action}`);
+        // console.log(`[Router] System message: ${message.action}`);
     }
 
     /**
