@@ -364,6 +364,22 @@ export class MultimediaCore {
     const url = this.resolveAssetRef(ref);
     const cache = canUseCacheStorage() ? await caches.open(this.cacheName) : null;
     const cacheKey = new Request(url, { method: 'GET' });
+
+    // Fast path: if we have valid local metadata and cached content, skip all network requests.
+    const localMeta = await this.meta.get(assetId);
+    if (localMeta && localMeta.etag) {
+      const cached = cache ? await cache.match(cacheKey) : null;
+      // For videos we don't store in CacheAPI, but we track via localMeta.
+      // If localMeta exists and was verified recently (within 24h), trust it.
+      const MAX_META_AGE_MS = 24 * 60 * 60 * 1000;
+      const isRecentlyVerified = localMeta.verifiedAt && (Date.now() - localMeta.verifiedAt) < MAX_META_AGE_MS;
+
+      if (isRecentlyVerified && (cached || localMeta.sizeBytes !== null)) {
+        // Already have valid data, skip network validation.
+        return localMeta.sizeBytes ?? null;
+      }
+    }
+
     const cached = cache ? await cache.match(cacheKey) : null;
 
     // Metadata sha256 (baseline consistency check): prefer service-provided sha256.
@@ -383,7 +399,6 @@ export class MultimediaCore {
       console.warn(`[asset] etag/sha256 mismatch asset:${assetId} etag=${etag} sha256=${sha256}`);
     }
 
-    const localMeta = await this.meta.get(assetId);
     const isMetaValid =
       Boolean(localMeta && localMeta.etag && etag && localMeta.etag === etag) &&
       (localMeta?.sizeBytes ?? null) === (sizeBytes ?? null);
