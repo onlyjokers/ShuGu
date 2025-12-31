@@ -190,7 +190,8 @@ function pushManifestToClientIds(clientIds: string[], manifest: AssetManifest): 
 let latestManifest: AssetManifest | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastGraphSnapshot: GraphState | null = null;
-let lastAllAssetIds: string[] = [];
+// Store asset info with kind for priority sorting: audio > image > video.
+let lastAllAssetRecords: { id: string; kind: 'audio' | 'image' | 'video' }[] = [];
 
 function recomputeAndMaybePush(): void {
   const graph = lastGraphSnapshot;
@@ -201,9 +202,15 @@ function recomputeAndMaybePush(): void {
   const seen = new Set(graphAssets);
 
   // Add ALL assets from the Assets Manager (so user can switch to any without delay).
+  // Sort by priority: audio first, then image, then video.
+  const PRIORITY_ORDER = { audio: 0, image: 1, video: 2 };
+  const sortedRecords = [...lastAllAssetRecords].sort((a, b) => {
+    return (PRIORITY_ORDER[a.kind] ?? 99) - (PRIORITY_ORDER[b.kind] ?? 99);
+  });
+
   const allAssets = [...graphAssets];
-  for (const assetId of lastAllAssetIds) {
-    const ref = `asset:${assetId}`;
+  for (const { id } of sortedRecords) {
+    const ref = `asset:${id}`;
     if (!seen.has(ref)) {
       seen.add(ref);
       allAssets.push(ref);
@@ -234,7 +241,10 @@ nodeEngine.graphState.subscribe((graph) => {
 
 // Keep manifest up-to-date with all available assets.
 assetsStore.subscribe((state) => {
-  lastAllAssetIds = (state.assets ?? []).map((a) => a.id);
+  lastAllAssetRecords = (state.assets ?? []).map((a) => ({
+    id: a.id,
+    kind: a.kind,
+  }));
   recomputeAndMaybePush();
 });
 

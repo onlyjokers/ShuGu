@@ -404,6 +404,34 @@ function persistAssignedClientId(assignedClientId: string): void {
 }
 
 /**
+ * Start asset preloading early, before the user clicks Enter.
+ * This initializes MultimediaCore independently of the full SDK initialization.
+ * Call this from onMount in +page.svelte.
+ */
+export function startEarlyPreload(serverUrl: string): void {
+  if (multimediaCore) return; // Already initialized
+
+  const assetReadToken =
+    typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
+
+  multimediaCore = new MultimediaCore({
+    serverUrl,
+    assetReadToken,
+    autoStart: true,
+    concurrency: 10,
+  });
+
+  console.log('[Client] Early preload started');
+}
+
+/**
+ * Get the MultimediaCore instance (for external access).
+ */
+export function getMultimediaCore(): MultimediaCore | null {
+  return multimediaCore;
+}
+
+/**
  * Initialize and connect to server
  */
 export function initialize(config: ClientSDKConfig, options?: { autoConnect?: boolean }): void {
@@ -462,14 +490,17 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
   sdk.onPluginControl(handlePluginControlMessage);
 
   // MultimediaCore: asset resolver + preload/cache + readiness reporting (no UI).
-  const assetReadToken =
-    typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
-  multimediaCore = new MultimediaCore({
-    serverUrl: config.serverUrl,
-    assetReadToken,
-    autoStart: true,
-    concurrency: 4,
-  });
+  // Reuse existing instance if startEarlyPreload was called.
+  if (!multimediaCore) {
+    const assetReadToken =
+      typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
+    multimediaCore = new MultimediaCore({
+      serverUrl: config.serverUrl,
+      assetReadToken,
+      autoStart: true,
+      concurrency: 10,
+    });
+  }
 
   mediaUnsub?.();
   mediaUnsub = multimediaCore.media.subscribeState((s: MediaEngineState) => {

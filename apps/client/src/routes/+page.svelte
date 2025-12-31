@@ -13,6 +13,7 @@
     asciiEnabled,
     asciiResolution,
     enableAudio,
+    startEarlyPreload,
   } from '$lib/stores/client';
   import StartScreen from '$lib/components/StartScreen.svelte';
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
@@ -186,6 +187,9 @@
         // ignore
       }
     }
+
+    // Start asset preloading immediately (before Enter is clicked).
+    startEarlyPreload(serverUrl);
 
     // Preload bootstrap config early (HTTP only; no websocket connection).
     void refreshBootstrapConfig();
