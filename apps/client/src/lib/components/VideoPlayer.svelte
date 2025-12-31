@@ -30,14 +30,15 @@
   let startedReportKey = '';
   let finishReportKey = '';
   let autoplayForcedMute = false;
-  let lastPlayIntent = playing;
+  let lastPlayIntent = false;
 
   let webAudioSource: MediaElementAudioSourceNode | null = null;
   let webAudioGain: GainNode | null = null;
   let webAudioTarget: HTMLVideoElement | null = null;
   let ownedAudioContext: AudioContext | null = null;
 
-  const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
 
   const resetWebAudio = () => {
     try {
@@ -80,7 +81,8 @@
   };
 
   const getEffectiveVolume = (): number => {
-    const raw = typeof volume === 'number' && Number.isFinite(volume) ? volume : Number(volume) || 0;
+    const raw =
+      typeof volume === 'number' && Number.isFinite(volume) ? volume : Number(volume) || 0;
     return clamp(raw, 0, 100);
   };
 
@@ -192,7 +194,7 @@
       const endValue = hasEnd ? end! : null;
       const epsilon = 0.03;
 
-        if (reverse) {
+      if (reverse) {
         // Manual reverse stepping: keep video paused and move `currentTime` backwards.
         try {
           if (!videoElement.paused) videoElement.pause();
@@ -208,22 +210,22 @@
         }
 
         const next = videoElement.currentTime - dt;
-          if (next <= start + epsilon) {
-            if (loop && endValue !== null) {
-              videoElement.currentTime = endValue;
-            } else {
-              try {
-                videoElement.pause();
-              } catch {
-                // ignore
-              }
-              visible = false;
-              handleFinish();
-              stopRaf();
-            }
+        if (next <= start + epsilon) {
+          if (loop && endValue !== null) {
+            videoElement.currentTime = endValue;
           } else {
-            videoElement.currentTime = next;
+            try {
+              videoElement.pause();
+            } catch {
+              // ignore
+            }
+            visible = false;
+            handleFinish();
+            stopRaf();
           }
+        } else {
+          videoElement.currentTime = next;
+        }
 
         return;
       }
@@ -324,7 +326,10 @@
     const endValue = typeof end === 'number' && Number.isFinite(end) ? end : null;
 
     // Apply cursor seek (one-shot; won't re-seek unless cursor changes).
-    const cursor = typeof cursorSec === 'number' && Number.isFinite(cursorSec) && cursorSec >= 0 ? cursorSec : null;
+    const cursor =
+      typeof cursorSec === 'number' && Number.isFinite(cursorSec) && cursorSec >= 0
+        ? cursorSec
+        : null;
     if (cursor === null) {
       lastCursorApplied = null;
     } else {
@@ -339,11 +344,13 @@
     // Keep currentTime inside the clip range when clip changes.
     if (reverse) {
       const desiredEnd = endValue ?? durationSec ?? start;
-      if (endValue !== null && videoElement.currentTime > endValue) videoElement.currentTime = endValue;
+      if (endValue !== null && videoElement.currentTime > endValue)
+        videoElement.currentTime = endValue;
       if (videoElement.currentTime < start) videoElement.currentTime = desiredEnd;
     } else {
       if (videoElement.currentTime < start) videoElement.currentTime = start;
-      if (endValue !== null && videoElement.currentTime > endValue) videoElement.currentTime = start;
+      if (endValue !== null && videoElement.currentTime > endValue)
+        videoElement.currentTime = start;
     }
   }
 
@@ -355,7 +362,9 @@
       // When re-triggering after reaching the clip edge, `video.play()` can no-op because we're still at the end.
       // Reset to the clip start/end depending on direction so MIDI (or any toggle) can reliably restart playback.
       const cursor =
-        typeof cursorSec === 'number' && Number.isFinite(cursorSec) && cursorSec >= 0 ? cursorSec : null;
+        typeof cursorSec === 'number' && Number.isFinite(cursorSec) && cursorSec >= 0
+          ? cursorSec
+          : null;
       if (playRising && cursor === null) {
         const { start, end } = getRange();
         const endValue = typeof end === 'number' && Number.isFinite(end) ? end : null;
