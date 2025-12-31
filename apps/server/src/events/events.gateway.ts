@@ -29,6 +29,9 @@ function sanitizeGroup(value: unknown): string | null {
         methods: ['GET', 'POST'],
     },
     transports: ['websocket', 'polling'],
+    // Image pipeline uses DataURL payloads which can exceed Socket.IO's 1MB default.
+    // Keep this reasonably high so Push Image Upload -> Display can stream screenshots.
+    maxHttpBufferSize: 20 * 1024 * 1024,
 })
 export class EventsGateway
     implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {

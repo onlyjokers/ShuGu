@@ -209,6 +209,8 @@ function clampNumber(value: number, clamp: ClampSpec | undefined): number {
 const midiBooleanState = new Map<string, MidiBooleanState>();
 // Track client selection offsets per node (index/range).
 const clientSelectionState = new Map<string, ClientSelectionState>();
+// Throttle noisy per-frame logs (e.g. showImage streaming).
+const displayObjectLogLastAt = new Map<string, number>();
 
 function midiSourceKey(source: MidiSource | null | undefined): string | null {
   if (!source) return null;
@@ -603,7 +605,7 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
       return {
         ...base,
         process: () => ({}),
-        onSink: (inputs) => {
+        onSink: (inputs, _config, context) => {
           const raw = (inputs as any).in;
           const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
           if (commands.length === 0) return;
@@ -622,6 +624,23 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             if (!action) continue;
             const payload = ((cmd as any).payload ?? {}) as ControlPayload;
             const executeAt = (cmd as any).executeAt as number | undefined;
+
+            if (import.meta.env.DEV && (action === 'showImage' || action === 'hideImage')) {
+              const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
+              const now = Date.now();
+              const lastAt = displayObjectLogLastAt.get(nodeKey) ?? 0;
+              if (now - lastAt >= 500) {
+                displayObjectLogLastAt.set(nodeKey, now);
+                const urlCandidate = (payload as any)?.url;
+                const url = typeof urlCandidate === 'string' ? urlCandidate : '';
+                console.info('[Manager] display-object', {
+                  nodeId: context?.nodeId,
+                  via: hasLocal ? 'local' : 'server',
+                  action,
+                  urlChars: url ? url.length : null,
+                });
+              }
+            }
 
             if (hasLocal) {
               const executeAtLocal =

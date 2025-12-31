@@ -704,15 +704,20 @@ async function captureScreenshotDataUrl(opts: {
   format: ScreenshotFormat;
   quality: number;
   maxWidth: number;
-}): Promise<{ dataUrl: string; mime: ScreenshotFormat; width: number; height: number; createdAt: number } | null> {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+}): Promise<
+  | { ok: true; shot: { dataUrl: string; mime: ScreenshotFormat; width: number; height: number; createdAt: number } }
+  | { ok: false; reason: string }
+> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return { ok: false, reason: 'missing-window-or-document' };
+  }
 
   const container = document.querySelector('.visual-container') as HTMLElement | null;
-  if (!container) return null;
+  if (!container) return { ok: false, reason: 'missing-visual-container' };
 
   const viewW = container.clientWidth ?? 0;
   const viewH = container.clientHeight ?? 0;
-  if (viewW <= 0 || viewH <= 0) return null;
+  if (viewW <= 0 || viewH <= 0) return { ok: false, reason: 'visual-container-size-0' };
 
   const maxWidth = Math.max(128, Math.floor(opts.maxWidth));
   const scale = viewW > maxWidth ? maxWidth / viewW : 1;
@@ -723,7 +728,7 @@ async function captureScreenshotDataUrl(opts: {
   canvas.width = outW;
   canvas.height = outH;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
+  if (!ctx) return { ok: false, reason: 'missing-2d-context' };
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0a0a0f';
@@ -818,15 +823,23 @@ async function captureScreenshotDataUrl(opts: {
     }
   })();
 
-  if (!dataUrl) return null;
-  return { dataUrl, mime, width: outW, height: outH, createdAt: Date.now() };
+  if (!dataUrl) return { ok: false, reason: 'toDataURL-failed' };
+  return { ok: true, shot: { dataUrl, mime, width: outW, height: outH, createdAt: Date.now() } };
 }
 
 // Custom command: capture a client screenshot and upload it to the manager via `sensorType: custom`.
 async function handlePushImageUpload(payload: PushImageUploadPayload): Promise<void> {
-  if (screenshotUploadInFlight) return;
+  const seq = typeof payload?.seq === 'number' && Number.isFinite(payload.seq) ? payload.seq : null;
+
+  if (screenshotUploadInFlight) {
+    console.debug('[Client] push-image-upload skipped (inFlight)', { seq });
+    return;
+  }
   const sdkNow = sdk;
-  if (!sdkNow) return;
+  if (!sdkNow) {
+    console.warn('[Client] push-image-upload skipped (missing sdk)', { seq });
+    return;
+  }
 
   screenshotUploadInFlight = true;
   try {
@@ -834,8 +847,21 @@ async function handlePushImageUpload(payload: PushImageUploadPayload): Promise<v
     const quality = clampNumber(payload?.quality, 0.85, 0.1, 1);
     const maxWidth = clampNumber(payload?.maxWidth, 960, 128, 4096);
 
-    const shot = await captureScreenshotDataUrl({ format, quality, maxWidth });
-    if (!shot) return;
+    console.info('[Client] push-image-upload capture start', {
+      seq,
+      format,
+      quality,
+      maxWidth,
+      speed: typeof payload?.speed === 'number' && Number.isFinite(payload.speed) ? payload.speed : null,
+    });
+
+    const captured = await captureScreenshotDataUrl({ format, quality, maxWidth });
+    if (!captured.ok) {
+      console.warn('[Client] push-image-upload capture failed', { seq, reason: captured.reason });
+      return;
+    }
+
+    const shot = captured.shot;
 
     sdkNow.sendSensorData(
       'custom',
@@ -849,6 +875,15 @@ async function handlePushImageUpload(payload: PushImageUploadPayload): Promise<v
       } as any,
       { trackLatest: false }
     );
+
+    console.info('[Client] push-image-upload sent', {
+      seq,
+      mime: shot.mime,
+      width: shot.width,
+      height: shot.height,
+      dataUrlChars: shot.dataUrl.length,
+      createdAt: shot.createdAt,
+    });
   } catch (err) {
     console.warn('[Client] push-image-upload failed:', err);
   } finally {
@@ -1117,6 +1152,13 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         {
           const raw = payload as Partial<PushImageUploadPayload> | null;
           if (raw && typeof raw === 'object' && raw.kind === 'push-image-upload') {
+            console.info('[Client] push-image-upload requested', {
+              seq: typeof raw.seq === 'number' && Number.isFinite(raw.seq) ? raw.seq : null,
+              speed: typeof raw.speed === 'number' && Number.isFinite(raw.speed) ? raw.speed : null,
+              format: typeof raw.format === 'string' ? raw.format : null,
+              quality: typeof raw.quality === 'number' && Number.isFinite(raw.quality) ? raw.quality : null,
+              maxWidth: typeof raw.maxWidth === 'number' && Number.isFinite(raw.maxWidth) ? raw.maxWidth : null,
+            });
             void handlePushImageUpload(raw as PushImageUploadPayload);
             break;
           }

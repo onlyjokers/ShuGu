@@ -64,6 +64,7 @@ type MediaClipParams = {
 // Convert data-image URLs into Blob object URLs to ensure refresh + reduce retained base64 strings.
 let activeImageObjectUrl: string | null = null;
 const IMAGE_OBJECT_URL_REVOKE_DELAY_MS = 800; // allow the fade-out transition to finish
+let lastControlLogAt = 0;
 
 function isDataImageUrl(url: string): boolean {
   return url.startsWith('data:image/');
@@ -978,6 +979,17 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
       }
       const fit = clip?.fit ?? null;
       const url = normalizeImageUrlForDisplay(resolvedDisplayUrl ?? baseUrl);
+      if (import.meta.env.DEV) {
+        const now = Date.now();
+        if (now - lastControlLogAt >= 500) {
+          lastControlLogAt = now;
+          console.info('[Display] showImage', {
+            dataUrl: isDataImageUrl(baseUrl),
+            urlChars: baseUrl.length,
+            fit,
+          });
+        }
+      }
       multimediaCore?.media.showImage({
         url,
         duration: imagePayload.duration,
@@ -988,6 +1000,13 @@ function executeNow(action: ControlAction, payload: ControlPayload): void {
 
     case 'hideImage':
       clearActiveImageObjectUrl();
+      if (import.meta.env.DEV) {
+        const now = Date.now();
+        if (now - lastControlLogAt >= 500) {
+          lastControlLogAt = now;
+          console.info('[Display] hideImage');
+        }
+      }
       multimediaCore?.media.hideImage();
       return;
 

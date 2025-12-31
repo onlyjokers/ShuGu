@@ -301,24 +301,40 @@ export function connect(config: ManagerSDKConfig): void {
             if (payload?.kind === 'client-screenshot') {
                 const dataUrl = typeof payload.dataUrl === 'string' ? payload.dataUrl : '';
                 if (dataUrl) {
+                    const mime = typeof payload.mime === 'string' ? payload.mime : undefined;
+                    const width =
+                        typeof payload.width === 'number' && Number.isFinite(payload.width)
+                            ? payload.width
+                            : undefined;
+                    const height =
+                        typeof payload.height === 'number' && Number.isFinite(payload.height)
+                            ? payload.height
+                            : undefined;
+                    const createdAt =
+                        typeof payload.createdAt === 'number' && Number.isFinite(payload.createdAt)
+                            ? payload.createdAt
+                            : undefined;
+
+                    if (import.meta.env.DEV) {
+                        console.info('[Manager] client-screenshot received', {
+                            clientId: data.clientId,
+                            mime,
+                            width,
+                            height,
+                            createdAt,
+                            dataUrlChars: dataUrl.length,
+                        });
+                    }
+
                     const now = Date.now();
                     clientScreenshotUploads.update((prev) => {
                         const next = new Map(prev);
                         next.set(data.clientId, {
                             dataUrl,
-                            mime: typeof payload.mime === 'string' ? payload.mime : undefined,
-                            width:
-                                typeof payload.width === 'number' && Number.isFinite(payload.width)
-                                    ? payload.width
-                                    : undefined,
-                            height:
-                                typeof payload.height === 'number' && Number.isFinite(payload.height)
-                                    ? payload.height
-                                    : undefined,
-                            createdAt:
-                                typeof payload.createdAt === 'number' && Number.isFinite(payload.createdAt)
-                                    ? payload.createdAt
-                                    : undefined,
+                            mime,
+                            width,
+                            height,
+                            createdAt,
                             updatedAt: now,
                         });
                         return next;
