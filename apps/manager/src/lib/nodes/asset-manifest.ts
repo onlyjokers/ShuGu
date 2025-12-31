@@ -16,6 +16,7 @@ import type { GraphState } from './types';
 import { nodeEngine } from './engine';
 import { nodeRegistry } from './registry';
 import { getSDK, state as managerState } from '$lib/stores/manager';
+import { assetsStore } from '$lib/stores/assets';
 import {
   type AssetManifest,
   getLatestManifest,
@@ -188,11 +189,29 @@ function pushManifestToClientIds(clientIds: string[], manifest: AssetManifest): 
 
 let latestManifest: AssetManifest | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastGraphSnapshot: GraphState | null = null;
+let lastAllAssetIds: string[] = [];
 
-function recomputeAndMaybePush(graph: GraphState): void {
-  const assets = scanGraphForAssetRefs(graph);
-  const manifestId = hashManifest(assets);
-  const next: AssetManifest = { manifestId, assets, updatedAt: Date.now() };
+function recomputeAndMaybePush(): void {
+  const graph = lastGraphSnapshot;
+  if (!graph) return;
+
+  // Start with assets used in the graph (priority order).
+  const graphAssets = scanGraphForAssetRefs(graph);
+  const seen = new Set(graphAssets);
+
+  // Add ALL assets from the Assets Manager (so user can switch to any without delay).
+  const allAssets = [...graphAssets];
+  for (const assetId of lastAllAssetIds) {
+    const ref = `asset:${assetId}`;
+    if (!seen.has(ref)) {
+      seen.add(ref);
+      allAssets.push(ref);
+    }
+  }
+
+  const manifestId = hashManifest(allAssets);
+  const next: AssetManifest = { manifestId, assets: allAssets, updatedAt: Date.now() };
 
   if (latestManifest && latestManifest.manifestId === next.manifestId) return;
   latestManifest = next;
@@ -209,7 +228,14 @@ function recomputeAndMaybePush(graph: GraphState): void {
 
 // Keep manifest up-to-date with the graph.
 nodeEngine.graphState.subscribe((graph) => {
-  recomputeAndMaybePush(graph);
+  lastGraphSnapshot = graph;
+  recomputeAndMaybePush();
+});
+
+// Keep manifest up-to-date with all available assets.
+assetsStore.subscribe((state) => {
+  lastAllAssetIds = (state.assets ?? []).map((a) => a.id);
+  recomputeAndMaybePush();
 });
 
 // Push manifest to clients that join after the last graph update.
