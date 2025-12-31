@@ -611,9 +611,22 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
           if (commands.length === 0) return;
 
           const bridge = get(displayBridgeState);
-          const hasLocal = bridge.status === 'connected';
+          const hasLocalSession = bridge.status === 'connected';
+          const hasLocalReady = hasLocalSession && bridge.ready === true;
+          const hasRemoteDisplay = (get(state).clients ?? []).some((c: any) => String(c?.group ?? '') === 'display');
           const sdk = getSDK();
-          if (!hasLocal && !sdk) return;
+          if (!hasLocalSession && !sdk) return;
+
+          if (import.meta.env.DEV && !hasLocalSession && !hasRemoteDisplay) {
+            const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
+            const warnKey = `warn:${nodeKey}`;
+            const now = Date.now();
+            const lastAt = displayObjectLogLastAt.get(warnKey) ?? 0;
+            if (now - lastAt >= 1500) {
+              displayObjectLogLastAt.set(warnKey, now);
+              console.warn('[Manager] display-object: no Display target (open Display app or pair local Display).');
+            }
+          }
 
           // `executeAt` is expressed in server time; convert to local time for the local Display bridge.
           const offset = get(state).timeSync.offset;
@@ -635,18 +648,18 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
                 const url = typeof urlCandidate === 'string' ? urlCandidate : '';
                 console.info('[Manager] display-object', {
                   nodeId: context?.nodeId,
-                  via: hasLocal ? 'local' : 'server',
+                  via: hasLocalReady ? 'local' : hasLocalSession ? 'local+server' : 'server',
                   action,
                   urlChars: url ? url.length : null,
                 });
               }
             }
 
-            if (hasLocal) {
+            if (hasLocalSession) {
               const executeAtLocal =
                 typeof executeAt === 'number' && Number.isFinite(executeAt) ? executeAt - offset : undefined;
               sendLocalDisplayControl(action, payload, executeAtLocal);
-              continue;
+              if (hasLocalReady) continue;
             }
 
             sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
@@ -654,14 +667,15 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         },
         onDisable: () => {
           const bridge = get(displayBridgeState);
-          const hasLocal = bridge.status === 'connected';
+          const hasLocalSession = bridge.status === 'connected';
+          const hasLocalReady = hasLocalSession && bridge.ready === true;
           const sdk = getSDK();
-          if (!hasLocal && !sdk) return;
+          if (!hasLocalSession && !sdk) return;
 
           const send = (action: ControlAction, payload: ControlPayload) => {
-            if (hasLocal) {
+            if (hasLocalSession) {
               sendLocalDisplayControl(action, payload, undefined);
-              return;
+              if (hasLocalReady) return;
             }
             sdk?.sendControl(targetGroup('display'), action, payload, undefined);
           };

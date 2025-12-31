@@ -121,14 +121,16 @@ if (typeof window !== 'undefined') {
         // When disconnecting from Display mirroring, clear any long-lived effects so Display doesn't stay stuck.
         if (lastSendToDisplayEnabled === true && !enabled) {
             const bridge = get(displayBridgeState);
-            const hasLocal = bridge.status === 'connected';
+            const hasLocalSession = bridge.status === 'connected';
+            const hasLocalReady = hasLocalSession && bridge.ready === true;
             const hasRemote = get(displayClients).length > 0;
 
-            if (hasLocal) {
+            if (hasLocalSession) {
                 sendLocalDisplayControl('stopMedia', {}, undefined);
                 sendLocalDisplayControl('hideImage', {}, undefined);
                 sendLocalDisplayControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
-            } else if (hasRemote && sdk) {
+            }
+            if (!hasLocalReady && hasRemote && sdk) {
                 sdk.sendControl(targetGroup('display'), 'stopMedia', {}, undefined);
                 sdk.sendControl(targetGroup('display'), 'hideImage', {}, undefined);
                 sdk.sendControl(
@@ -528,21 +530,24 @@ function maybeMirrorToDisplay(action: ControlAction, payload: ControlPayload, ex
     if (!shouldMirrorToDisplay(action)) return;
 
     const bridge = get(displayBridgeState);
-    const hasLocal = bridge.status === 'connected';
+    const hasLocalSession = bridge.status === 'connected';
+    const hasLocalReady = hasLocalSession && bridge.ready === true;
     const hasRemote = get(displayClients).length > 0;
-    if (!hasLocal && !hasRemote) return;
+    if (!hasLocalSession && !hasRemote) return;
 
-    if (hasLocal) {
+    if (hasLocalSession) {
         const currentState = get(state);
         const executeAtLocal =
             typeof executeAt === 'number' && Number.isFinite(executeAt)
                 ? executeAt - currentState.timeSync.offset
                 : undefined;
         sendLocalDisplayControl(action, payload, executeAtLocal);
-        return;
+        if (hasLocalReady) return;
     }
 
-    sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
+    if (hasRemote) {
+        sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
+    }
 }
 
 // Control actions
