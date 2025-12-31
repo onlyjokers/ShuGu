@@ -334,8 +334,6 @@ class NodeEngineClass {
   }
 
   private runOnDisableForNodeIds(nodeIds: string[], opts?: { reason?: string }): void {
-    if (!get(this.isRunning)) return;
-
     const now = Date.now();
     for (const nodeId of nodeIds) {
       const node = this.runtime.getNode(nodeId);
@@ -368,8 +366,6 @@ class NodeEngineClass {
   }
 
   private cleanupGraphTransition(prev: GraphState, next: GraphState, opts?: { reason?: string }): void {
-    if (!get(this.isRunning)) return;
-
     const prevNodes = Array.isArray(prev.nodes) ? prev.nodes : [];
     const nextNodes = Array.isArray(next.nodes) ? next.nodes : [];
     const prevNodeIds = new Set(prevNodes.map((node) => String(node.id)));

@@ -3,7 +3,6 @@ Purpose: Display image overlay (full-screen) for the Display app.
 -->
 
 <script lang="ts">
-  import { fade } from 'svelte/transition';
   import { onDestroy } from 'svelte';
 
   export let url: string;
@@ -11,75 +10,84 @@ Purpose: Display image overlay (full-screen) for the Display app.
   export let fit: 'contain' | 'fit-screen' | 'cover' | 'fill' = 'contain';
   export let onHide: (() => void) | undefined = undefined;
 
-  let visible = false;
-  let loaded = false;
-  let lastUrl: string | null = null;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let activeUrl: string | null = null;
+  let pendingUrl: string | null = null;
+  let preloadSeq = 0;
+  let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  $: if (url !== lastUrl) {
-    loaded = false;
-    visible = false;
-    lastUrl = url;
-  }
+  const clearHideTimer = () => {
+    if (!hideTimeoutId) return;
+    clearTimeout(hideTimeoutId);
+    hideTimeoutId = null;
+  };
 
-  $: if (url && loaded) {
-    visible = true;
+  const scheduleHide = () => {
+    clearHideTimer();
+    if (!duration || duration <= 0) return;
+    hideTimeoutId = setTimeout(() => {
+      onHide?.();
+    }, duration);
+  };
 
-    // If duration is set, hide after that time
-    if (duration && duration > 0) {
-      if (timeoutId) clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        visible = false;
-        onHide?.();
-      }, duration);
+  $: if (url) {
+    if (!activeUrl) {
+      clearHideTimer();
+      activeUrl = url;
+    } else if (url !== activeUrl) {
+      clearHideTimer();
+      pendingUrl = url;
+
+      // Preload via JS Image() to avoid missing `on:load` when the src is a fast blob/data URL.
+      const currentSeq = (preloadSeq += 1);
+      const nextUrl = url;
+      const preloader = new Image();
+      preloader.crossOrigin = 'anonymous';
+      preloader.onload = () => {
+        if (currentSeq !== preloadSeq) return;
+        activeUrl = nextUrl;
+        pendingUrl = null;
+        scheduleHide();
+      };
+      preloader.onerror = () => {
+        if (currentSeq !== preloadSeq) return;
+        console.error('[ImageDisplay] Failed to preload image:', nextUrl);
+        pendingUrl = null;
+      };
+      preloader.src = nextUrl;
     }
   }
 
-  function handleLoad() {
-    loaded = true;
+  function handleActiveLoad() {
+    scheduleHide();
   }
 
-  function handleError() {
-    console.error('[ImageDisplay] Failed to load image:', url);
-    loaded = false;
+  function handleActiveError() {
+    console.error('[ImageDisplay] Failed to load image:', activeUrl);
   }
 
   export function hide() {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
-    visible = false;
+    clearHideTimer();
+    preloadSeq += 1;
+    pendingUrl = null;
     onHide?.();
   }
 
   onDestroy(() => {
-    if (timeoutId) clearTimeout(timeoutId);
+    clearHideTimer();
   });
 </script>
 
-{#if url}
-  {#if visible}
-    <div
-      class="image-overlay"
-      class:fit-screen={fit === 'fit-screen'}
-      class:fit-cover={fit === 'cover'}
-      class:fit-fill={fit === 'fill'}
-      transition:fade={{ duration: 500 }}
-    >
-      <img src={url} alt="" on:load={handleLoad} on:error={handleError} crossorigin="anonymous" />
-    </div>
-  {:else}
-    <!-- Hidden preload -->
-    <img
-      src={url}
-      alt=""
-      on:load={handleLoad}
-      on:error={handleError}
-      crossorigin="anonymous"
-      style="display: none;"
-    />
-  {/if}
+{#if activeUrl}
+  <div
+    class="image-overlay"
+    class:fit-screen={fit === 'fit-screen'}
+    class:fit-cover={fit === 'cover'}
+    class:fit-fill={fit === 'fill'}
+  >
+    {#key activeUrl}
+      <img src={activeUrl} alt="" on:load={handleActiveLoad} on:error={handleActiveError} crossorigin="anonymous" />
+    {/key}
+  </div>
 {/if}
 
 <style>
