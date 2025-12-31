@@ -36,6 +36,11 @@ export type NodeExecutorOptions = {
    * When provided, Tone nodes (load-audio-from-assets/granular) will resolve before loading.
    */
   resolveAssetRef?: (ref: string) => string;
+  /**
+   * Optional priority fetch function from MultimediaCore.
+   * Audio loading will use this to check cache and prioritize downloads.
+   */
+  prioritizeFetch?: (url: string) => Promise<Response>;
   limits?: {
     maxNodes?: number;
     minTickIntervalMs?: number;
@@ -126,6 +131,7 @@ export class NodeExecutor {
     this.toneAdapter = registerToneClientDefinitions(this.registry, {
       sdk: this.sdk,
       resolveAssetRef: options?.resolveAssetRef,
+      prioritizeFetch: options?.prioritizeFetch,
     });
 
     this.runtime = new NodeRuntime(this.registry, {

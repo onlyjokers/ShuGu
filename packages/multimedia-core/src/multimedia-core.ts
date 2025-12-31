@@ -98,6 +98,11 @@ export class MultimediaCore {
     updatedAt: Date.now(),
   };
 
+  // Priority fetch: pause background preload when an asset is urgently needed.
+  private priorityPauseSignal: AbortController | null = null;
+  private priorityResumeResolvers: (() => void)[] = [];
+  private priorityFetchedUrls = new Set<string>();
+
   constructor(config: MultimediaCoreConfig) {
     this.serverUrl = config.serverUrl;
     this.assetReadToken = config.assetReadToken?.trim() ? config.assetReadToken.trim() : null;
@@ -148,6 +153,72 @@ export class MultimediaCore {
 
   resolveAssetRef(ref: string): string {
     return resolveAssetRefToUrl(ref, { serverUrl: this.serverUrl, readToken: this.assetReadToken });
+  }
+
+  /**
+   * Fetch an asset with priority. Checks CacheAPI first; if not cached,
+   * pauses background preload, fetches the asset, caches it, then resumes.
+   * Use this from tone-adapter instead of raw `fetch` for audio assets.
+   */
+  async prioritizeFetch(url: string): Promise<Response> {
+    const cache = canUseCacheStorage() ? await caches.open(this.cacheName) : null;
+    const cacheKey = new Request(url, { method: 'GET' });
+
+    // Check cache first.
+    if (cache) {
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        console.log(`[asset] priorityFetch cache hit: ${url}`);
+        return cached;
+      }
+    }
+
+    console.log(`[asset] priorityFetch cache miss, fetching: ${url}`);
+
+    // Pause background preload.
+    if (this.abort && !this.abort.signal.aborted) {
+      console.log('[asset] priorityFetch pausing background preload');
+      this.priorityPauseSignal = new AbortController();
+      // We don't abort the main preload, but workers will wait on priorityPauseSignal.
+    }
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`prioritizeFetch failed (${res.status})`);
+      }
+
+      // Cache the response.
+      if (cache) {
+        await cache.put(cacheKey, res.clone());
+      }
+      this.priorityFetchedUrls.add(url);
+
+      console.log(`[asset] priorityFetch complete: ${url}`);
+      return res;
+    } finally {
+      // Resume background preload.
+      if (this.priorityPauseSignal) {
+        console.log('[asset] priorityFetch resuming background preload');
+        // Resolve any waiting workers.
+        for (const resolve of this.priorityResumeResolvers) {
+          try {
+            resolve();
+          } catch {
+            // ignore
+          }
+        }
+        this.priorityResumeResolvers = [];
+        this.priorityPauseSignal = null;
+      }
+    }
+  }
+
+  /**
+   * Check if a URL was already fetched via prioritizeFetch.
+   */
+  isPriorityFetched(url: string): boolean {
+    return this.priorityFetchedUrls.has(url);
   }
 
   private resolveAssetMetaUrl(assetId: string): string | null {
@@ -228,6 +299,15 @@ export class MultimediaCore {
 
     const worker = async () => {
       while (!abort.signal.aborted) {
+        // Wait if a priority fetch is in progress.
+        if (this.priorityPauseSignal) {
+          await new Promise<void>((resolve) => {
+            this.priorityResumeResolvers.push(resolve);
+          });
+          // After resume, re-check abort state.
+          if (abort.signal.aborted) return;
+        }
+
         const idx = nextIndex;
         nextIndex += 1;
         if (idx >= assets.length) return;
@@ -239,6 +319,15 @@ export class MultimediaCore {
           loaded += 1;
           this.setState({ status: 'loading', manifestId: manifest.manifestId, loaded, total, error: null });
           console.log(`[asset] preload progress ${loaded}/${total} (skip non-asset)`);
+          continue;
+        }
+
+        // Skip if already fetched via prioritizeFetch.
+        const resolvedUrl = this.resolveAssetRef(ref);
+        if (this.priorityFetchedUrls.has(resolvedUrl)) {
+          loaded += 1;
+          this.setState({ status: 'loading', manifestId: manifest.manifestId, loaded, total, error: null });
+          console.log(`[asset] preload progress ${loaded}/${total} (skip priority-fetched)`);
           continue;
         }
 
@@ -305,10 +394,15 @@ export class MultimediaCore {
     if (isMetaValid && hasCachedContent && shaValid) return meta.sizeBytes ?? sizeBytes ?? null;
 
     const isVideo = Boolean(meta.mimeType && meta.mimeType.toLowerCase().startsWith('video/'));
+    const isImage = Boolean(meta.mimeType && meta.mimeType.toLowerCase().startsWith('image/'));
 
-    if (isVideo) {
-      // For videos, do a lightweight warm-up: confirm headers and optionally preheat the first chunk.
-      // We intentionally avoid caching full video blobs in the MVP (can be huge).
+    // For very large files (> 100 MB), still do lightweight warm-up to avoid blocking.
+    const MAX_FULL_PRELOAD_BYTES = 100 * 1024 * 1024;
+    const shouldFullPreload = (meta.sizeBytes ?? sizeBytes ?? 0) < MAX_FULL_PRELOAD_BYTES;
+
+    if (isVideo && !shouldFullPreload) {
+      // For very large videos, do a lightweight warm-up: confirm headers and preheat the first chunk.
+      console.log(`[asset] preload skipping large video (${(meta.sizeBytes ?? sizeBytes ?? 0) / 1024 / 1024}MB): ${assetId}`);
       try {
         const range = await fetch(url, { method: 'GET', signal, headers: { Range: 'bytes=0-65535' } });
         if (range.ok) {
@@ -319,11 +413,18 @@ export class MultimediaCore {
         // Ignore warm-up errors; HEAD/GET at playback time will surface real issues.
       }
     } else {
+      // Full preload for audio, images, and reasonably-sized videos.
+      // This populates the HTTP cache so <video>/<img> elements can use it.
       const res = await fetch(url, { method: 'GET', signal });
       if (!res.ok) throw new Error(`GET failed (${res.status})`);
 
-      if (cache) {
+      // Cache to CacheAPI as well for audio prioritizeFetch.
+      if (cache && !isVideo) {
         await cache.put(cacheKey, res.clone());
+      }
+      // For videos, just consume the body to ensure HTTP cache is populated.
+      if (isVideo || isImage) {
+        await res.arrayBuffer().catch(() => undefined);
       }
     }
 

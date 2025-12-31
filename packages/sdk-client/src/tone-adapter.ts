@@ -22,6 +22,11 @@ type ParsedLoop = {
 type ToneAdapterDeps = {
   sdk?: ClientSDK;
   resolveAssetRef?: (ref: string) => string;
+  /**
+   * Optional priority fetch function from MultimediaCore.
+   * If provided, audio loading will use this to check cache and prioritize downloads.
+   */
+  prioritizeFetch?: (url: string) => Promise<Response>;
 };
 
 type ToneAdapterHandle = {
@@ -200,6 +205,9 @@ let latestAudioConnections: Connection[] = [];
 let latestToneLfoConnections: Connection[] = [];
 let latestToneLfoDesiredTargets = new Set<string>();
 let latestToneLfoActiveTargets = new Set<string>();
+
+// Store deps for access by standalone functions (e.g., startTonePlayerLoad).
+let latestDeps: ToneAdapterDeps = {};
 
 type VideoFinishState = {
   signature: string;
@@ -1367,10 +1375,19 @@ async function startTonePlayerLoad(instance: TonePlayerInstance, url: string): P
   instance.loadController = controller;
 
   try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`GET failed (${res.status})`);
+    let arrayBuffer: ArrayBuffer;
 
-    const arrayBuffer = await res.arrayBuffer();
+    // Use prioritizeFetch if available (checks cache, prioritizes over background preload).
+    if (latestDeps.prioritizeFetch) {
+      const res = await latestDeps.prioritizeFetch(url);
+      if (!res.ok) throw new Error(`GET failed (${res.status})`);
+      arrayBuffer = await res.arrayBuffer();
+    } else {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) throw new Error(`GET failed (${res.status})`);
+      arrayBuffer = await res.arrayBuffer();
+    }
+
     if (controller.signal.aborted) return;
 
     const audioBuffer = await toneModule.getContext().decodeAudioData(arrayBuffer);
@@ -1885,6 +1902,9 @@ export function registerToneClientDefinitions(
   registry: NodeRegistry,
   deps: ToneAdapterDeps = {}
 ): ToneAdapterHandle {
+  // Store deps for standalone functions (e.g., startTonePlayerLoad).
+  latestDeps = deps;
+
   registry.register({
     type: 'tone-osc',
     label: 'Tone Osc (client)',
