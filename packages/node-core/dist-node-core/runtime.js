@@ -512,7 +512,12 @@ export class NodeRuntime {
         catch {
             // ignore
         }
-        this.stop();
+        // Only stop the runtime for critical errors.
+        // Oscillation warnings should not halt the runtime, especially during live performances
+        // where rapid parameter changes are expected user behavior.
+        if (info.reason !== 'oscillation') {
+            this.stop();
+        }
     }
     tick() {
         const t0 = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();

@@ -1118,6 +1118,8 @@ class NodeEngineClass {
       'tone-reverb',
       'tone-granular',
       'play-media',
+      // Generators
+      'number-script',
       // Patch root
       'audio-out',
       'image-out',

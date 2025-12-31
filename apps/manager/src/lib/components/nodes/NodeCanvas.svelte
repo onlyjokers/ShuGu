@@ -101,6 +101,7 @@
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
     fuzzy: new ClassicPreset.Socket('fuzzy'),
+    array: new ClassicPreset.Socket('array'),
     any: new ClassicPreset.Socket('any'),
   } as const;
 
@@ -1034,10 +1035,7 @@
     if (inputs.length === 1 && outputs.length === 1) {
       const onlyIn: any = inputs[0];
       const onlyOut: any = outputs[0];
-      if (
-        String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') &&
-        isSafeType(onlyIn?.type)
-      ) {
+      if (String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') && isSafeType(onlyIn?.type)) {
         return true;
       }
     }
@@ -1047,10 +1045,7 @@
     if (sinkInputs.length === 1 && sinkOutputs.length === 1) {
       const onlyIn: any = sinkInputs[0];
       const onlyOut: any = sinkOutputs[0];
-      if (
-        String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') &&
-        isSafeType(onlyIn?.type)
-      ) {
+      if (String(onlyIn?.type ?? '') === String(onlyOut?.type ?? '') && isSafeType(onlyIn?.type)) {
         return true;
       }
     }
@@ -1172,7 +1167,8 @@
       const computed = nodeEngine.getLastComputedInputs(nodeId);
       const isPortConnected = (portId: string) =>
         connections.some(
-          (c) => String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === String(portId)
+          (c) =>
+            String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === String(portId)
         );
       const getEffectiveInput = (portId: 'index' | 'range' | 'random'): unknown => {
         const connected = isPortConnected(portId);
@@ -1467,7 +1463,9 @@
         }
 
         if (enabledRoots.length === 0) {
-          nodeEngine.lastError.set('Patch contains disabled nodes; enable them or remove from deploy.');
+          nodeEngine.lastError.set(
+            'Patch contains disabled nodes; enable them or remove from deploy.'
+          );
           continue;
         }
 
@@ -1486,7 +1484,9 @@
       }
 
       if (hasDisabledNodes) {
-        nodeEngine.lastError.set('Patch contains disabled nodes; enable them or remove from deploy.');
+        nodeEngine.lastError.set(
+          'Patch contains disabled nodes; enable them or remove from deploy.'
+        );
         continue;
       }
 
@@ -2371,7 +2371,9 @@
     const nodeById = new Map(graphState.nodes.map((node) => [String(node.id), node]));
     const nodes = ids.map((id) => nodeById.get(id)).filter(Boolean) as NodeInstance[];
     return {
-      nodes: nodes.map((node) => cloneNodeInstance(node, viewAdapter.getNodePosition(String(node.id)))),
+      nodes: nodes.map((node) =>
+        cloneNodeInstance(node, viewAdapter.getNodePosition(String(node.id)))
+      ),
       ids,
     };
   };
@@ -2770,7 +2772,8 @@
         // Avoid hard-stopping patches when the disabled nodes can be bypassed on the next reconcile.
         // This prevents audible restarts when toggling audio FX groups (e.g. Tone Delay).
         const shouldStop =
-          disabledInPatch.length > 0 && !disabledInPatch.every((id) => isBypassableWhenDisabled(id));
+          disabledInPatch.length > 0 &&
+          !disabledInPatch.every((id) => isBypassableWhenDisabled(id));
         if (!shouldStop) continue;
 
         stopAndRemovePatchOnClient(clientId, patch.patchId);
@@ -3170,7 +3173,9 @@
                 capture: true,
               } as any);
             if (altDuplicateDragUpHandler) {
-              window.removeEventListener('pointerup', altDuplicateDragUpHandler, { capture: true } as any);
+              window.removeEventListener('pointerup', altDuplicateDragUpHandler, {
+                capture: true,
+              } as any);
               window.removeEventListener('pointercancel', altDuplicateDragUpHandler, {
                 capture: true,
               } as any);
@@ -3473,7 +3478,9 @@
       } as any);
     }
     if (altDuplicateDragMoveHandler)
-      window.removeEventListener('pointermove', altDuplicateDragMoveHandler, { capture: true } as any);
+      window.removeEventListener('pointermove', altDuplicateDragMoveHandler, {
+        capture: true,
+      } as any);
     if (altDuplicateDragUpHandler) {
       window.removeEventListener('pointerup', altDuplicateDragUpHandler, { capture: true } as any);
       window.removeEventListener('pointercancel', altDuplicateDragUpHandler, {
