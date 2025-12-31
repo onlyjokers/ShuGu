@@ -1,0 +1,14 @@
+{
+  "type": "array-filter",
+  "label": "Array Filter",
+  "category": "Logic",
+  "inputs": [
+    { "id": "a", "label": "A", "type": "array", "defaultValue": [] },
+    { "id": "b", "label": "B", "type": "array", "defaultValue": [] }
+  ],
+  "outputs": [
+    { "id": "difference", "label": "Difference", "type": "array" }
+  ],
+  "configSchema": [],
+  "runtime": { "kind": "array-filter" }
+}

@@ -16,6 +16,7 @@ export type PortType =
   | 'client'
   | 'command'
   | 'fuzzy'
+  | 'array'
   | 'any';
 
 export type PortKind = 'data' | 'sink';

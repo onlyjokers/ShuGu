@@ -203,6 +203,11 @@
     background: rgba(99, 102, 241, 0.95) !important;
   }
 
+  :global(.node-canvas-container .socket[title='array']),
+  :global(.node-canvas-container .socket.port-array) {
+    background: rgba(234, 179, 8, 0.95) !important;
+  }
+
   :global(.node-canvas-container .socket:hover) {
     border-width: 3px !important;
   }

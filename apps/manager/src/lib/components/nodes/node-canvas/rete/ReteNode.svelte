@@ -1,7 +1,10 @@
 <!-- Purpose: Custom Rete node renderer for the node canvas. -->
 <script lang="ts">
   import Ref from 'rete-svelte-plugin/svelte/Ref.svelte';
-  import type { ClassicScheme, SvelteArea2D } from 'rete-svelte-plugin/svelte/presets/classic/types';
+  import type {
+    ClassicScheme,
+    SvelteArea2D,
+  } from 'rete-svelte-plugin/svelte/presets/classic/types';
   import { onDestroy, tick } from 'svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
 
@@ -151,7 +154,8 @@
 
     if (value === null || value === undefined) return null;
 
-    if (portType === 'boolean') return typeof value === 'boolean' ? (value ? 'true' : 'false') : null;
+    if (portType === 'boolean')
+      return typeof value === 'boolean' ? (value ? 'true' : 'false') : null;
     if (portType === 'string') return typeof value === 'string' ? value : null;
     if (portType === 'color') return typeof value === 'string' ? value : null;
     if (portType === 'client' && typeof value === 'object' && value) {
@@ -225,7 +229,11 @@
       const onlyOut = def.outputs[0];
       if (String(onlyIn.type) === String(onlyOut.type)) {
         if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
-        return { inId: String(onlyIn.id), outId: String(onlyOut.id), portType: String(onlyIn.type) };
+        return {
+          inId: String(onlyIn.id),
+          outId: String(onlyOut.id),
+          portType: String(onlyIn.type),
+        };
       }
     }
 
@@ -236,7 +244,11 @@
       const onlyOut = sinkOutputs[0];
       if (String(onlyIn.type) === String(onlyOut.type)) {
         if (onlyIn.type === 'command' || onlyIn.type === 'client') return null;
-        return { inId: String(onlyIn.id), outId: String(onlyOut.id), portType: String(onlyIn.type) };
+        return {
+          inId: String(onlyIn.id),
+          outId: String(onlyOut.id),
+          portType: String(onlyIn.type),
+        };
       }
     }
 
@@ -282,8 +294,12 @@
     await tick();
     if (!nodeEl) return;
 
-    const inSocket = nodeEl.querySelector(`.input-socket[data-port-id="${inId}"]`) as HTMLElement | null;
-    const outSocket = nodeEl.querySelector(`.output-socket[data-port-id="${outId}"]`) as HTMLElement | null;
+    const inSocket = nodeEl.querySelector(
+      `.input-socket[data-port-id="${inId}"]`
+    ) as HTMLElement | null;
+    const outSocket = nodeEl.querySelector(
+      `.output-socket[data-port-id="${outId}"]`
+    ) as HTMLElement | null;
     if (!inSocket || !outSocket) return;
 
     const nodeRect = nodeEl.getBoundingClientRect();
@@ -332,35 +348,38 @@
     cancelBypassWire();
   });
 
-  type PortValueText = { inputs: Record<string, string | null>; outputs: Record<string, string | null> };
+  type PortValueText = {
+    inputs: Record<string, string | null>;
+    outputs: Record<string, string | null>;
+  };
   let portValueText: PortValueText = { inputs: {}, outputs: {} };
 
   $: if (nodeId) {
     if (Boolean((data as any).deployedLoop) || isDeployedPatch) {
       portValueText = { inputs: {}, outputs: {} };
     } else {
-    // Depend on tickTimeStore to refresh live values (MIDI/sensors/etc).
-    const _tick = $tickTimeStore;
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    void _tick;
+      // Depend on tickTimeStore to refresh live values (MIDI/sensors/etc).
+      const _tick = $tickTimeStore;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      void _tick;
 
-    const nextInputs: Record<string, string | null> = {};
-    for (const [key] of inputs) {
-      const type = portTypeFor('input', String(key));
-      const val = effectiveInputValue(String(key));
-      const formatted = formatPortValue(type, val);
-      if (formatted !== null) nextInputs[String(key)] = formatted;
-    }
+      const nextInputs: Record<string, string | null> = {};
+      for (const [key] of inputs) {
+        const type = portTypeFor('input', String(key));
+        const val = effectiveInputValue(String(key));
+        const formatted = formatPortValue(type, val);
+        if (formatted !== null) nextInputs[String(key)] = formatted;
+      }
 
-    const nextOutputs: Record<string, string | null> = {};
-    for (const [key] of outputs) {
-      const type = portTypeFor('output', String(key));
-      const val = effectiveOutputValue(String(key));
-      const formatted = formatPortValue(type, val);
-      if (formatted !== null) nextOutputs[String(key)] = formatted;
-    }
+      const nextOutputs: Record<string, string | null> = {};
+      for (const [key] of outputs) {
+        const type = portTypeFor('output', String(key));
+        const val = effectiveOutputValue(String(key));
+        const formatted = formatPortValue(type, val);
+        if (formatted !== null) nextOutputs[String(key)] = formatted;
+      }
 
-    portValueText = { inputs: nextInputs, outputs: nextOutputs };
+      portValueText = { inputs: nextInputs, outputs: nextOutputs };
     }
   } else {
     portValueText = { inputs: {}, outputs: {} };
@@ -369,7 +388,13 @@
 
 <div
   bind:this={nodeEl}
-  class="node {isCollapsed ? 'collapsed' : ''} {data.selected ? 'selected' : ''} {data.localLoop ? 'local-loop' : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch ? 'deployed-patch' : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate' ? 'group-port-activate' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
+  class="node {isCollapsed ? 'collapsed' : ''} {data.selected ? 'selected' : ''} {data.localLoop
+    ? 'local-loop'
+    : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch
+    ? 'deployed-patch'
+    : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate'
+    ? 'group-port-activate'
+    : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
   style:width
   style:height
   data-testid="node"
@@ -404,7 +429,7 @@
         {#each controls as [key, control]}
           <Ref
             class="control"
-            data-testid={"control-" + key}
+            data-testid={'control-' + key}
             init={(element) =>
               emit({
                 type: 'render',
@@ -437,57 +462,57 @@
       {#if inputs.length}
         <div class="inputs">
           {#each inputs as [key, input]}
-          <div
-            class="port-row input {activeInputs.has(String(key)) ? 'active' : ''}"
-            data-testid={"input-" + key}
-            data-rete-node-id={data.id}
-            data-rete-port-side="input"
-            data-rete-port-key={key}
-          >
-            <Ref
-              class="input-socket"
-              data-testid="input-socket"
-              data-port-id={key}
-              init={(element) =>
-                emit({
-                  type: 'render',
-                  data: {
-                    type: 'socket',
-                    side: 'input',
-                    key,
-                    nodeId: data.id,
-                    element,
-                    payload: input.socket,
-                  },
-                })}
-              unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-            />
-            <div class="port-body">
-              <div class="port-title-line">
-                <div class="port-label" data-testid="input-title">{input.label || ''}</div>
-                {#if portValueText.inputs[String(key)] && (inputConnections[String(key)]?.length ?? 0) > 0}
-                  <div class="port-value input" data-testid={"input-value-" + key}>
-                    {portValueText.inputs[String(key)]}
-                  </div>
-                {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
-                  <Ref
-                    class="port-control port-inline-input"
-                    data-testid="input-control"
-                    init={(element) =>
-                      emit({
-                        type: 'render',
-                        data: {
-                          type: 'control',
-                          element,
-                          payload: any(input).control,
-                        },
-                      })}
-                    unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-                  />
-                {/if}
+            <div
+              class="port-row input {activeInputs.has(String(key)) ? 'active' : ''}"
+              data-testid={'input-' + key}
+              data-rete-node-id={data.id}
+              data-rete-port-side="input"
+              data-rete-port-key={key}
+            >
+              <Ref
+                class={`input-socket port-${portTypeFor('input', String(key))}`}
+                data-testid="input-socket"
+                data-port-id={key}
+                init={(element) =>
+                  emit({
+                    type: 'render',
+                    data: {
+                      type: 'socket',
+                      side: 'input',
+                      key,
+                      nodeId: data.id,
+                      element,
+                      payload: input.socket,
+                    },
+                  })}
+                unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+              />
+              <div class="port-body">
+                <div class="port-title-line">
+                  <div class="port-label" data-testid="input-title">{input.label || ''}</div>
+                  {#if portValueText.inputs[String(key)] && (inputConnections[String(key)]?.length ?? 0) > 0}
+                    <div class="port-value input" data-testid={'input-value-' + key}>
+                      {portValueText.inputs[String(key)]}
+                    </div>
+                  {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
+                    <Ref
+                      class="port-control port-inline-input"
+                      data-testid="input-control"
+                      init={(element) =>
+                        emit({
+                          type: 'render',
+                          data: {
+                            type: 'control',
+                            element,
+                            payload: any(input).control,
+                          },
+                        })}
+                      unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+                    />
+                  {/if}
+                </div>
               </div>
             </div>
-          </div>
           {/each}
         </div>
       {/if}
@@ -495,58 +520,58 @@
       {#if outputs.length}
         <div class="outputs">
           {#each outputs as [key, output]}
-          <div
-            class="port-row output {activeOutputs.has(String(key)) ? 'active' : ''}"
-            data-testid={"output-" + key}
-            data-rete-node-id={data.id}
-            data-rete-port-side="output"
-            data-rete-port-key={key}
-          >
-            <div class="port-body">
-              <div class="output-line">
-                <div class="port-label" data-testid="output-title">{output.label || ''}</div>
-                {#if portValueText.outputs[String(key)] && !any(output).control}
-                  <div class="port-value output" data-testid={"output-value-" + key}>
-                    {portValueText.outputs[String(key)]}
-                  </div>
-                {/if}
-                {#if any(output).control}
-                  <Ref
-                    class="port-control port-inline-value"
-                    data-testid="output-control"
-                    init={(element) =>
-                      emit({
-                        type: 'render',
-                        data: {
-                          type: 'control',
-                          element,
-                          payload: any(output).control,
-                        },
-                      })}
-                    unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-                  />
-                {/if}
+            <div
+              class="port-row output {activeOutputs.has(String(key)) ? 'active' : ''}"
+              data-testid={'output-' + key}
+              data-rete-node-id={data.id}
+              data-rete-port-side="output"
+              data-rete-port-key={key}
+            >
+              <div class="port-body">
+                <div class="output-line">
+                  <div class="port-label" data-testid="output-title">{output.label || ''}</div>
+                  {#if portValueText.outputs[String(key)] && !any(output).control}
+                    <div class="port-value output" data-testid={'output-value-' + key}>
+                      {portValueText.outputs[String(key)]}
+                    </div>
+                  {/if}
+                  {#if any(output).control}
+                    <Ref
+                      class="port-control port-inline-value"
+                      data-testid="output-control"
+                      init={(element) =>
+                        emit({
+                          type: 'render',
+                          data: {
+                            type: 'control',
+                            element,
+                            payload: any(output).control,
+                          },
+                        })}
+                      unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+                    />
+                  {/if}
+                </div>
               </div>
+              <Ref
+                class={`output-socket port-${portTypeFor('output', String(key))} ${any(output).disabled ? 'socket-disabled' : ''}`}
+                data-testid="output-socket"
+                data-port-id={key}
+                init={(element) =>
+                  emit({
+                    type: 'render',
+                    data: {
+                      type: 'socket',
+                      side: 'output',
+                      key,
+                      nodeId: data.id,
+                      element,
+                      payload: output.socket,
+                    },
+                  })}
+                unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
+              />
             </div>
-            <Ref
-              class={`output-socket ${any(output).disabled ? 'socket-disabled' : ''}`}
-              data-testid="output-socket"
-              data-port-id={key}
-              init={(element) =>
-                emit({
-                  type: 'render',
-                  data: {
-                    type: 'socket',
-                    side: 'output',
-                    key,
-                    nodeId: data.id,
-                    element,
-                    payload: output.socket,
-                  },
-                })}
-              unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
-            />
-          </div>
           {/each}
         </div>
       {/if}
@@ -561,7 +586,7 @@
           data-rete-port-key={key}
         >
           <Ref
-            class="input-socket"
+            class={`input-socket port-${portTypeFor('input', String(key))}`}
             data-port-id={key}
             init={(element) =>
               emit({
@@ -588,7 +613,7 @@
           data-rete-port-key={key}
         >
           <Ref
-            class={`output-socket ${any(output).disabled ? 'socket-disabled' : ''}`}
+            class={`output-socket port-${portTypeFor('output', String(key))} ${any(output).disabled ? 'socket-disabled' : ''}`}
             data-port-id={key}
             init={(element) =>
               emit({

@@ -194,6 +194,8 @@ function selectClientIdsForNode(nodeId, clients, options) {
 }
 export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createClientObjectNode(deps));
+    registry.register(createClientCountNode(deps));
+    registry.register(createArrayFilterNode());
     registry.register(createCmdAggregatorNode());
     registry.register(createClientSensorsProcessorNode());
     registry.register(createMathNode());
@@ -251,6 +253,45 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createBackCameraSceneProcessorNode());
 }
 // Audio tap: passes audio through while exposing real-time analysis data on the client runtime.
+function createClientCountNode(deps) {
+    return {
+        type: 'client-count',
+        label: 'Client Count',
+        category: 'Objects',
+        inputs: [],
+        outputs: [
+            { id: 'allIndexs', label: 'All Indexs', type: 'array' },
+            { id: 'number', label: 'Number', type: 'number' },
+        ],
+        configSchema: [],
+        process: () => {
+            const clients = deps.getAllClientIds?.() ?? [];
+            return { allIndexs: clients, number: clients.length };
+        },
+    };
+}
+function createArrayFilterNode() {
+    return {
+        type: 'array-filter',
+        label: 'Array Filter',
+        category: 'Logic',
+        inputs: [
+            { id: 'a', label: 'A', type: 'array' },
+            { id: 'b', label: 'B', type: 'array' },
+        ],
+        outputs: [
+            { id: 'difference', label: 'Difference', type: 'array' },
+        ],
+        configSchema: [],
+        process: (inputs) => {
+            const a = Array.isArray(inputs.a) ? inputs.a : [];
+            const b = Array.isArray(inputs.b) ? inputs.b : [];
+            const bSet = new Set(b.map(String));
+            const difference = a.filter((item) => !bSet.has(String(item)));
+            return { difference };
+        },
+    };
+}
 function createAudioDataNode() {
     return {
         type: 'audio-data',
@@ -1182,6 +1223,7 @@ function createClientObjectNode(deps) {
         label: 'Client',
         category: 'Objects',
         inputs: [
+            { id: 'loadIndexs', label: 'Load Indexs', type: 'array' },
             { id: 'index', label: 'Index', type: 'number', defaultValue: 1, min: 1, step: 1 },
             { id: 'range', label: 'Range', type: 'number', defaultValue: 1, min: 1, step: 1 },
             { id: 'random', label: 'Random', type: 'boolean', defaultValue: false },
@@ -1190,17 +1232,22 @@ function createClientObjectNode(deps) {
         outputs: [
             { id: 'out', label: 'Out', type: 'client' },
             { id: 'indexOut', label: 'Index Out', type: 'number' },
+            { id: 'indexs', label: 'Indexs', type: 'array' },
             { id: 'imageOut', label: 'Image Out', type: 'image' },
         ],
         configSchema: [{ key: 'clientId', label: 'Clients', type: 'client-picker', defaultValue: '' }],
         process: (inputs, config, context) => {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
-            const selection = selectClientIdsForNode(context.nodeId, available, {
-                index: inputs.index,
-                range: inputs.range,
-                random: inputs.random,
-            });
+            const loadInds = inputs.loadIndexs;
+            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const selection = loadedIds.length > 0
+                ? { index: 1, selectedIds: loadedIds }
+                : selectClientIdsForNode(context.nodeId, available, {
+                    index: inputs.index,
+                    range: inputs.range,
+                    random: inputs.random,
+                });
             const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
             const primaryClientId = selection.selectedIds[0] ?? fallbackSelected[0] ?? deps.getClientId() ?? configured;
             const latest = primaryClientId
@@ -1218,16 +1265,20 @@ function createClientObjectNode(deps) {
             const imageOut = typeof deps.getImageForClientId === 'function' && primaryClientId
                 ? deps.getImageForClientId(primaryClientId)
                 : null;
-            return { out, indexOut: selection.index, imageOut };
+            return { out, indexOut: selection.index, indexs: selection.selectedIds, imageOut };
         },
         onSink: (inputs, config, context) => {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
-            const selection = selectClientIdsForNode(context.nodeId, available, {
-                index: inputs.index,
-                range: inputs.range,
-                random: inputs.random,
-            });
+            const loadInds = inputs.loadIndexs;
+            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const selection = loadedIds.length > 0
+                ? { index: 1, selectedIds: loadedIds }
+                : selectClientIdsForNode(context.nodeId, available, {
+                    index: inputs.index,
+                    range: inputs.range,
+                    random: inputs.random,
+                });
             const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
             const fallbackSingle = deps.getClientId() ?? configured;
             const targets = selection.selectedIds.length > 0
@@ -1265,11 +1316,15 @@ function createClientObjectNode(deps) {
         onDisable: (inputs, config, context) => {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
-            const selection = selectClientIdsForNode(context.nodeId, available, {
-                index: inputs.index,
-                range: inputs.range,
-                random: inputs.random,
-            });
+            const loadInds = inputs.loadIndexs;
+            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const selection = loadedIds.length > 0
+                ? { index: 1, selectedIds: loadedIds }
+                : selectClientIdsForNode(context.nodeId, available, {
+                    index: inputs.index,
+                    range: inputs.range,
+                    random: inputs.random,
+                });
             const fallbackSelected = deps.getSelectedClientIds?.() ?? [];
             const fallbackSingle = deps.getClientId() ?? configured;
             const targets = selection.selectedIds.length > 0

@@ -1,0 +1,12 @@
+{
+  "type": "client-count",
+  "label": "Client Count",
+  "category": "Objects",
+  "inputs": [],
+  "outputs": [
+    { "id": "allIndexs", "label": "All Indexs", "type": "array" },
+    { "id": "number", "label": "Number", "type": "number" }
+  ],
+  "configSchema": [],
+  "runtime": { "kind": "client-count" }
+}

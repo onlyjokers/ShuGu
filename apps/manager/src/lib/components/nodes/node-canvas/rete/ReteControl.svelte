@@ -546,7 +546,9 @@
     return ($graphStateStore?.connections ?? []).some(
       (c) =>
         String(c.targetNodeId) === nodeId &&
-        (String(c.targetPortId) === 'index' || String(c.targetPortId) === 'range')
+        (String(c.targetPortId) === 'index' ||
+          String(c.targetPortId) === 'range' ||
+          String(c.targetPortId) === 'loadIndexs')
     );
   })();
 
