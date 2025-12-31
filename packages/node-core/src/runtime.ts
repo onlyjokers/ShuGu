@@ -511,6 +511,10 @@ export class NodeRuntime {
       'asciiResolution',
       'screenColor',
       'modulateSoundUpdate',
+      'visualSceneBox',
+      'visualSceneMel',
+      'visualSceneFrontCamera',
+      'visualSceneBackCamera',
     ]);
 
     const signatureFor = (cmd: any): string | null => {

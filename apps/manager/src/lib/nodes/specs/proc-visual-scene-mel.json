@@ -1,0 +1,27 @@
+{
+  "type": "proc-visual-scene-mel",
+  "label": "Visual Scene-Mel Spectrogram",
+  "category": "Processors",
+  "inputs": [
+    { "id": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
+  ],
+  "outputs": [{ "id": "cmd", "label": "Cmd", "type": "command" }],
+  "configSchema": [
+    { "key": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
+  ],
+  "runtime": {
+    "kind": "command",
+    "command": {
+      "action": "visualSceneMel",
+      "payload": {
+        "enabled": {
+          "kind": "booleanFromThreshold",
+          "inputKey": "enabled",
+          "configKey": "enabled",
+          "threshold": 0.5,
+          "default": false
+        }
+      }
+    }
+  }
+}

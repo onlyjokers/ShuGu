@@ -577,7 +577,7 @@ export class ManagerSDK {
     }
 
     /**
-     * Switch visual scene
+     * Switch visual scene (legacy - only one scene active at a time)
      */
     switchScene(sceneId: string, toAll = false, executeAt?: number): void {
         const payload = { sceneId };
@@ -585,6 +585,30 @@ export class ManagerSDK {
             this.sendControlToAll('visualSceneSwitch', payload, executeAt);
         } else {
             this.sendControlToSelected('visualSceneSwitch', payload, executeAt);
+        }
+    }
+
+    /**
+     * Enable/disable box scene independently
+     */
+    boxScene(enabled: boolean, toAll = false, executeAt?: number): void {
+        const payload = { enabled };
+        if (toAll) {
+            this.sendControlToAll('visualSceneBox', payload, executeAt);
+        } else {
+            this.sendControlToSelected('visualSceneBox', payload, executeAt);
+        }
+    }
+
+    /**
+     * Enable/disable Mel Spectrogram scene independently
+     */
+    melScene(enabled: boolean, toAll = false, executeAt?: number): void {
+        const payload = { enabled };
+        if (toAll) {
+            this.sendControlToAll('visualSceneMel', payload, executeAt);
+        } else {
+            this.sendControlToSelected('visualSceneMel', payload, executeAt);
         }
     }
 

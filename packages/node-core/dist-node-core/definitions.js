@@ -245,7 +245,10 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createSynthUpdateProcessorNode());
     registry.register(createAsciiEffectProcessorNode());
     registry.register(createConvolutionEffectProcessorNode());
-    registry.register(createSceneSwitchProcessorNode());
+    registry.register(createBoxSceneProcessorNode());
+    registry.register(createMelSceneProcessorNode());
+    registry.register(createFrontCameraSceneProcessorNode());
+    registry.register(createBackCameraSceneProcessorNode());
 }
 // Audio tap: passes audio through while exposing real-time analysis data on the client runtime.
 function createAudioDataNode() {
@@ -2706,41 +2709,130 @@ function createSynthUpdateProcessorNode() {
         },
     };
 }
-function createSceneSwitchProcessorNode() {
+function createBoxSceneProcessorNode() {
     return {
-        type: 'proc-scene-switch',
-        label: 'Visual Scene',
+        type: 'proc-visual-scene-box',
+        label: 'Visual Scene-Box',
         category: 'Processors',
         inputs: [
-            { id: 'index', label: 'Index', type: 'number' },
-            { id: 'sceneId', label: 'Scene', type: 'string' },
+            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
-            {
-                key: 'sceneId',
-                label: 'Scene',
-                type: 'select',
-                defaultValue: 'box-scene',
-                options: [
-                    { value: 'box-scene', label: '3D Box' },
-                    { value: 'mel-scene', label: 'Mel Spectrogram' },
-                ],
-            },
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
         ],
         process: (inputs, config) => {
-            const sceneId = (() => {
-                const fromInput = inputs.sceneId;
-                if (typeof fromInput === 'string' && fromInput.trim())
-                    return fromInput.trim();
-                const fromIndex = inputs.index;
-                if (typeof fromIndex === 'number' && Number.isFinite(fromIndex)) {
-                    return fromIndex >= 0.5 ? 'mel-scene' : 'box-scene';
-                }
-                return String(config.sceneId ?? 'box-scene');
+            const enabled = (() => {
+                const fromInput = inputs.enabled;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.enabled;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return true;
             })();
             return {
-                cmd: { action: 'visualSceneSwitch', payload: { sceneId } },
+                cmd: { action: 'visualSceneBox', payload: { enabled } },
+            };
+        },
+    };
+}
+function createMelSceneProcessorNode() {
+    return {
+        type: 'proc-visual-scene-mel',
+        label: 'Visual Scene-Mel Spectrogram',
+        category: 'Processors',
+        inputs: [
+            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+        configSchema: [
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        process: (inputs, config) => {
+            const enabled = (() => {
+                const fromInput = inputs.enabled;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.enabled;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return false;
+            })();
+            return {
+                cmd: { action: 'visualSceneMel', payload: { enabled } },
+            };
+        },
+    };
+}
+function createFrontCameraSceneProcessorNode() {
+    return {
+        type: 'proc-visual-scene-front-camera',
+        label: 'Visual Scene-Front Camera',
+        category: 'Processors',
+        inputs: [
+            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+        configSchema: [
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        process: (inputs, config) => {
+            const enabled = (() => {
+                const fromInput = inputs.enabled;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.enabled;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return false;
+            })();
+            return {
+                cmd: { action: 'visualSceneFrontCamera', payload: { enabled } },
+            };
+        },
+    };
+}
+function createBackCameraSceneProcessorNode() {
+    return {
+        type: 'proc-visual-scene-back-camera',
+        label: 'Visual Scene-Back Camera',
+        category: 'Processors',
+        inputs: [
+            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
+        configSchema: [
+            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
+        ],
+        process: (inputs, config) => {
+            const enabled = (() => {
+                const fromInput = inputs.enabled;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.enabled;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return false;
+            })();
+            return {
+                cmd: { action: 'visualSceneBackCamera', payload: { enabled } },
             };
         },
     };

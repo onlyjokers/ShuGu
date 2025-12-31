@@ -64,17 +64,27 @@ export interface SceneManager {
     register(scene: VisualScene): void;
 
     /**
-     * Switch to a scene by ID
+     * Enable or disable a specific scene independently
+     */
+    setSceneEnabled(sceneId: string, enabled: boolean): void;
+
+    /**
+     * Switch to a scene by ID (legacy - disables all other scenes)
      */
     switchTo(sceneId: string): void;
 
     /**
-     * Get current scene
+     * Get current scene (legacy)
      */
     getCurrentScene(): VisualScene | null;
 
     /**
-     * Update current scene
+     * Get all active scenes
+     */
+    getActiveScenes(): VisualScene[];
+
+    /**
+     * Update all active scenes
      */
     update(dt: number, context: VisualContext): void;
 

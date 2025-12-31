@@ -48,6 +48,10 @@ export type ControlAction =
   | 'hideImage'
   | 'shutdown'
   | 'visualSceneSwitch'
+  | 'visualSceneBox'
+  | 'visualSceneMel'
+  | 'visualSceneFrontCamera'
+  | 'visualSceneBackCamera'
   | 'convolution'
   | 'setDataReportingRate'
   | 'setSensorState'
@@ -229,6 +233,34 @@ export interface VisualSceneSwitchPayload {
 }
 
 /**
+ * Visual Scene Box payload - controls box scene independently
+ */
+export interface VisualSceneBoxPayload {
+  enabled: boolean;
+}
+
+/**
+ * Visual Scene Mel Spectrogram payload - controls mel scene independently
+ */
+export interface VisualSceneMelPayload {
+  enabled: boolean;
+}
+
+/**
+ * Visual Scene Front Camera payload - controls front camera scene
+ */
+export interface VisualSceneFrontCameraPayload {
+  enabled: boolean;
+}
+
+/**
+ * Visual Scene Back Camera payload - controls back camera scene
+ */
+export interface VisualSceneBackCameraPayload {
+  enabled: boolean;
+}
+
+/**
  * Data reporting rate configuration
  */
 export interface DataReportingRatePayload {
@@ -255,6 +287,10 @@ export type BaseControlPayload =
   | AsciiResolutionPayload
   | ConvolutionPayload
   | VisualSceneSwitchPayload
+  | VisualSceneBoxPayload
+  | VisualSceneMelPayload
+  | VisualSceneFrontCameraPayload
+  | VisualSceneBackCameraPayload
   | DataReportingRatePayload
   | Record<string, unknown>;
 

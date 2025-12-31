@@ -56,12 +56,12 @@ export class MelSpectrogramScene implements VisualScene {
         this.canvas.style.height = '100%';
         this.canvas.style.display = 'block';
 
-        const ctx = this.canvas.getContext('2d', { alpha: false });
+        const ctx = this.canvas.getContext('2d', { alpha: true });
         if (!ctx) return;
         this.ctx = ctx;
 
         this.setSize(container.clientWidth, container.clientHeight);
-        this.fillBackground();
+        // Don't fill background - let it be transparent to show scenes below
 
         container.appendChild(this.canvas);
 
@@ -70,7 +70,8 @@ export class MelSpectrogramScene implements VisualScene {
             for (const entry of entries) {
                 const { width, height } = entry.contentRect;
                 this.setSize(Math.floor(width), Math.floor(height));
-                this.fillBackground();
+                // Clear canvas on resize but don't fill with opaque background
+                this.clearCanvas();
             }
         });
         this.resizeObserver.observe(container);
@@ -132,9 +133,8 @@ export class MelSpectrogramScene implements VisualScene {
             );
         }
 
-        // Clear the new strip on the left
-        this.ctx.fillStyle = this.options.backgroundColor;
-        this.ctx.fillRect(0, 0, scroll, this.height);
+        // Clear the new strip on the left (transparent, not filled with background)
+        this.ctx.clearRect(0, 0, scroll, this.height);
 
         // Draw new column(s)
         for (let px = 0; px < scroll; px++) {
@@ -163,15 +163,19 @@ export class MelSpectrogramScene implements VisualScene {
     }
 
     private fillBackground(): void {
+        // Deprecated: kept for backward compatibility but now just clears
+        this.clearCanvas();
+    }
+
+    private clearCanvas(): void {
         if (!this.ctx) return;
-        this.ctx.fillStyle = this.options.backgroundColor;
-        this.ctx.fillRect(0, 0, this.width, this.height);
+        this.ctx.clearRect(0, 0, this.width, this.height);
     }
 
     private fadeCanvas(): void {
-        if (!this.ctx) return;
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.02)';
-        this.ctx.fillRect(0, 0, this.width, this.height);
+        // For transparent canvas, we can't use semi-transparent fill
+        // Instead, just clear a small portion or do nothing
+        // This will be handled by the scroll mechanism
     }
 
     private drawColumn(x: number, melBands: number[]): void {

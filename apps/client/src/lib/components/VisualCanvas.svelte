@@ -2,6 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     currentScene,
+    boxSceneEnabled,
+    melSceneEnabled,
+    cameraStream,
+    frontCameraEnabled,
+    backCameraEnabled,
     audioStream,
     asciiEnabled,
     asciiResolution,
@@ -26,7 +31,10 @@
     type AudioSplitFeature,
     type MelSpectrogramFeature,
   } from '@shugu/audio-plugins';
-  import { applyConvolution3x3, resolveConvolutionKernel } from '$lib/features/convolution/convolution';
+  import {
+    applyConvolution3x3,
+    resolveConvolutionKernel,
+  } from '$lib/features/convolution/convolution';
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
@@ -51,6 +59,7 @@
   let mediaCanvas: HTMLCanvasElement | null = null;
   let mediaCtx: CanvasRenderingContext2D | null = null;
   let lastTime = 0;
+  let cameraVideoElement: HTMLVideoElement;
 
   // Current context data for scene updates
   let context: VisualContext = {};
@@ -86,8 +95,9 @@
     sceneManager.register(new BoxScene());
     sceneManager.register(new MelSpectrogramScene());
 
-    // Switch to initial scene
-    sceneManager.switchTo($currentScene);
+    // Initialize scenes based on their enabled states
+    sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
+    sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
 
     // ASCII overlay setup
     asciiCtx = asciiCanvas.getContext('2d');
@@ -119,9 +129,31 @@
     audioContext = null;
   });
 
-  // React to scene changes
+  // React to legacy scene switch (for backward compatibility)
   $: if (sceneManager && $currentScene) {
-    sceneManager.switchTo($currentScene);
+    // Only use legacy switchTo if we're not using the new multi-scene mode
+    // The new mode is controlled by boxSceneEnabled and melSceneEnabled stores
+  }
+
+  // React to box scene enabled state changes
+  $: if (sceneManager) {
+    sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
+    // Invalidate cached source canvas so screenshot finds the correct one
+    sourceCanvas = null;
+  }
+
+  // React to mel scene enabled state changes
+  $: if (sceneManager) {
+    sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
+    // Invalidate cached source canvas so screenshot finds the correct one
+    sourceCanvas = null;
+  }
+
+  // Bind camera stream to video element
+  $: if (cameraVideoElement && $cameraStream) {
+    cameraVideoElement.srcObject = $cameraStream;
+  } else if (cameraVideoElement && !$cameraStream) {
+    cameraVideoElement.srcObject = null;
   }
 
   // React to audio stream changes
@@ -135,7 +167,9 @@
       const Tone: any = (mod as any).default ?? mod;
       const raw: AudioContext | null = Tone.getContext?.().rawContext ?? null;
       if (!raw) {
-        console.warn('[VisualCanvas] Tone context not available; skipping audio analysis pipeline.');
+        console.warn(
+          '[VisualCanvas] Tone context not available; skipping audio analysis pipeline.'
+        );
         return;
       }
 
@@ -276,7 +310,16 @@
     dstW: number,
     dstH: number,
     fit: MediaFit
-  ): { sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number } {
+  ): {
+    sx: number;
+    sy: number;
+    sw: number;
+    sh: number;
+    dx: number;
+    dy: number;
+    dw: number;
+    dh: number;
+  } {
     if (fit === 'fill') {
       return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx: 0, dy: 0, dw: dstW, dh: dstH };
     }
@@ -372,6 +415,44 @@
       return mediaCanvas;
     }
 
+    // Handle camera video stream
+    if (cameraVideoElement && $cameraStream && ($frontCameraEnabled || $backCameraEnabled)) {
+      const el = cameraVideoElement;
+      if (el.readyState >= 2) {
+        const srcW = el.videoWidth || 0;
+        const srcH = el.videoHeight || 0;
+        if (srcW === 0 || srcH === 0) return null;
+        const ctx = ensureMediaCanvas();
+        if (!ctx) return null;
+
+        // Camera uses cover fit to fill the screen
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
+          srcW,
+          srcH,
+          targetW,
+          targetH,
+          'cover'
+        );
+
+        try {
+          // Save context for potential mirror transform
+          ctx.save();
+
+          // Apply mirror transform for front camera
+          if ($frontCameraEnabled) {
+            ctx.translate(targetW, 0);
+            ctx.scale(-1, 1);
+          }
+
+          ctx.drawImage(el, sx, sy, sw, sh, dx, dy, dw, dh);
+          ctx.restore();
+        } catch {
+          return null;
+        }
+        return mediaCanvas;
+      }
+    }
+
     return null;
   }
 
@@ -401,7 +482,7 @@
 
     const cellCount = cols * rows;
     const targetAsciiFps = (() => {
-      if ($currentScene === 'mel-scene') return cellCount >= 12_000 ? 10 : 15;
+      if ($melSceneEnabled) return cellCount >= 12_000 ? 10 : 15;
       return cellCount >= 18_000 ? 15 : 30;
     })();
     if (now - lastAsciiDraw < 1000 / targetAsciiFps) return;
@@ -505,8 +586,10 @@
     const targetH = Math.floor(height * dpr);
     if (convolutionCanvas.width !== targetW) convolutionCanvas.width = targetW;
     if (convolutionCanvas.height !== targetH) convolutionCanvas.height = targetH;
-    if (convolutionCanvas.style.width !== `${width}px`) convolutionCanvas.style.width = `${width}px`;
-    if (convolutionCanvas.style.height !== `${height}px`) convolutionCanvas.style.height = `${height}px`;
+    if (convolutionCanvas.style.width !== `${width}px`)
+      convolutionCanvas.style.width = `${width}px`;
+    if (convolutionCanvas.style.height !== `${height}px`)
+      convolutionCanvas.style.height = `${height}px`;
 
     const scale = Math.max(0.1, Math.min(1, $convolution.scale));
     let procW = Math.max(48, Math.floor(width * scale));
@@ -648,6 +731,18 @@
     <ImageDisplay url={$imageState.url} duration={$imageState.duration} fit={$imageState.fit} />
   {/if}
 
+  <!-- Camera Display -->
+  {#if $cameraStream && ($frontCameraEnabled || $backCameraEnabled)}
+    <video
+      class="camera-display"
+      autoplay
+      playsinline
+      muted
+      bind:this={cameraVideoElement}
+      class:mirror={$frontCameraEnabled}
+    ></video>
+  {/if}
+
   <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>
   <canvas class="convolution-overlay" bind:this={convolutionCanvas}></canvas>
 </div>
@@ -685,5 +780,18 @@
     z-index: 3;
     pointer-events: none;
     mix-blend-mode: normal;
+  }
+
+  .camera-display {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+  }
+
+  .camera-display.mirror {
+    transform: scaleX(-1);
   }
 </style>

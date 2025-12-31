@@ -32,6 +32,10 @@ import type {
   ShowImagePayload,
   ModulateSoundPayload,
   VisualSceneSwitchPayload,
+  VisualSceneBoxPayload,
+  VisualSceneMelPayload,
+  VisualSceneFrontCameraPayload,
+  VisualSceneBackCameraPayload,
   ConvolutionPayload,
 } from '@shugu/protocol';
 
@@ -80,8 +84,19 @@ export const permissions = writable<{
 // Latency in ms (smooth average)
 export const latency = writable<number>(0);
 
-// Current visual scene
+// Current visual scene (legacy, kept for backward compatibility)
 export const currentScene = writable<string>('box-scene');
+
+// Independent scene enabled states (for multi-scene support)
+export const boxSceneEnabled = writable<boolean>(true);
+export const melSceneEnabled = writable<boolean>(false);
+export const frontCameraEnabled = writable<boolean>(false);
+export const backCameraEnabled = writable<boolean>(false);
+
+// Camera stream state
+export type CameraFacing = 'user' | 'environment' | null;
+export const cameraStream = writable<MediaStream | null>(null);
+export const cameraFacing = writable<CameraFacing>(null);
 
 // ASCII post-processing toggle (default on)
 export const asciiEnabled = writable<boolean>(true);
@@ -312,6 +327,41 @@ export const imageState = writable<{
 // Derived stores
 export const connectionStatus = derived(state, ($state) => $state.status);
 export const clientId = derived(state, ($state) => $state.clientId);
+
+/**
+ * Start camera stream with specified facing mode
+ */
+async function startCameraStream(facingMode: 'user' | 'environment'): Promise<void> {
+  // Stop any existing stream first
+  stopCameraStream();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facingMode } },
+      audio: false,
+    });
+    cameraStream.set(stream);
+    cameraFacing.set(facingMode);
+    console.log(`[Camera] Started ${facingMode} camera`);
+  } catch (error) {
+    console.error('[Camera] Failed to start camera:', error);
+    cameraStream.set(null);
+    cameraFacing.set(null);
+  }
+}
+
+/**
+ * Stop camera stream and release resources
+ */
+function stopCameraStream(): void {
+  const stream = get(cameraStream);
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop());
+    cameraStream.set(null);
+    cameraFacing.set(null);
+    console.log('[Camera] Stopped camera');
+  }
+}
 
 const DEVICE_ID_STORAGE_KEY = 'shugu-device-id';
 const INSTANCE_ID_STORAGE_KEY = 'shugu-client-instance-id';
@@ -736,9 +786,11 @@ async function captureScreenshotDataUrl(opts: {
 
   const convEnabled = Boolean(get(convolution)?.enabled);
   const asciiOn = Boolean(get(asciiEnabled));
+  // Priority: ASCII overlay > Convolution overlay, matching VisualCanvas visibility logic.
+  // When both are enabled, ASCII canvas is visible (using convolution output as its source).
   const overlay = (() => {
-    if (convEnabled) return container.querySelector('canvas.convolution-overlay') as HTMLCanvasElement | null;
     if (asciiOn) return container.querySelector('canvas.ascii-overlay') as HTMLCanvasElement | null;
+    if (convEnabled) return container.querySelector('canvas.convolution-overlay') as HTMLCanvasElement | null;
     return null;
   })();
 
@@ -784,6 +836,32 @@ async function captureScreenshotDataUrl(opts: {
         const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
         try {
           ctx.drawImage(img, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      // Camera video stream
+      const cameraVideo = container.querySelector('video.camera-display') as HTMLVideoElement | null;
+      const camStream = get(cameraStream);
+      const frontEnabled = get(frontCameraEnabled);
+      const backEnabled = get(backCameraEnabled);
+      if (cameraVideo && camStream && (frontEnabled || backEnabled) && cameraVideo.readyState >= 2) {
+        const srcW = cameraVideo.videoWidth || 0;
+        const srcH = cameraVideo.videoHeight || 0;
+        if (srcW <= 0 || srcH <= 0) return false;
+
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, outW, outH, 'cover');
+        try {
+          ctx.save();
+          // Apply mirror transform for front camera
+          if (frontEnabled) {
+            ctx.translate(outW, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(cameraVideo, sx, sy, sw, sh, dx, dy, dw, dh);
+          ctx.restore();
           return true;
         } catch {
           return false;
@@ -1053,6 +1131,62 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         {
           const scenePayload = payload as VisualSceneSwitchPayload;
           currentScene.set(scenePayload.sceneId);
+          // Also update individual scene states for backward compatibility
+          if (scenePayload.sceneId === 'box-scene') {
+            boxSceneEnabled.set(true);
+            melSceneEnabled.set(false);
+          } else if (scenePayload.sceneId === 'mel-scene') {
+            boxSceneEnabled.set(false);
+            melSceneEnabled.set(true);
+          }
+        }
+        break;
+
+      case 'visualSceneBox':
+        {
+          const boxPayload = payload as VisualSceneBoxPayload;
+          boxSceneEnabled.set(boxPayload.enabled);
+        }
+        break;
+
+      case 'visualSceneMel':
+        {
+          const melPayload = payload as VisualSceneMelPayload;
+          melSceneEnabled.set(melPayload.enabled);
+        }
+        break;
+
+      case 'visualSceneFrontCamera':
+        {
+          const camPayload = payload as VisualSceneFrontCameraPayload;
+          frontCameraEnabled.set(camPayload.enabled);
+          if (camPayload.enabled) {
+            // Stop back camera if it's running
+            backCameraEnabled.set(false);
+            startCameraStream('user');
+          } else {
+            // Only stop if no other camera is enabled
+            if (!get(backCameraEnabled)) {
+              stopCameraStream();
+            }
+          }
+        }
+        break;
+
+      case 'visualSceneBackCamera':
+        {
+          const camPayload = payload as VisualSceneBackCameraPayload;
+          backCameraEnabled.set(camPayload.enabled);
+          if (camPayload.enabled) {
+            // Stop front camera if it's running
+            frontCameraEnabled.set(false);
+            startCameraStream('environment');
+          } else {
+            // Only stop if no other camera is enabled
+            if (!get(frontCameraEnabled)) {
+              stopCameraStream();
+            }
+          }
         }
         break;
 
