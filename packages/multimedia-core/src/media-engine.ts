@@ -27,6 +27,10 @@ export type ImageState = {
   visible: boolean;
   duration: number | undefined;
   fit: MediaFit;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  opacity: number;
 };
 
 export type MediaEngineState = {
@@ -52,7 +56,7 @@ export class MediaEngine {
       reverse: false,
       fit: 'contain',
     },
-    image: { url: null, visible: false, duration: undefined, fit: 'contain' },
+    image: { url: null, visible: false, duration: undefined, fit: 'contain', scale: 1, offsetX: 0, offsetY: 0, opacity: 1 },
   };
 
   constructor(private readonly opts: { resolveUrl?: (url: string) => string } = {}) {}
@@ -87,16 +91,20 @@ export class MediaEngine {
     return 'contain';
   }
 
-  showImage(payload: { url: string; duration?: number; fit?: MediaFit }): void {
+  showImage(payload: { url: string; duration?: number; fit?: MediaFit; scale?: number; offsetX?: number; offsetY?: number; opacity?: number }): void {
     const url = this.resolve(payload.url);
     const fit = this.coerceFit(payload.fit);
+    const scale = typeof payload.scale === 'number' && Number.isFinite(payload.scale) ? Math.max(0.1, Math.min(10, payload.scale)) : 1;
+    const offsetX = typeof payload.offsetX === 'number' && Number.isFinite(payload.offsetX) ? payload.offsetX : 0;
+    const offsetY = typeof payload.offsetY === 'number' && Number.isFinite(payload.offsetY) ? payload.offsetY : 0;
+    const opacity = typeof payload.opacity === 'number' && Number.isFinite(payload.opacity) ? Math.max(0, Math.min(1, payload.opacity)) : 1;
     this.setState({
-      image: { url, visible: Boolean(url), duration: payload.duration, fit },
+      image: { url, visible: Boolean(url), duration: payload.duration, fit, scale, offsetX, offsetY, opacity },
     });
   }
 
   hideImage(): void {
-    this.setState({ image: { url: null, visible: false, duration: undefined, fit: 'contain' } });
+    this.setState({ image: { url: null, visible: false, duration: undefined, fit: 'contain', scale: 1, offsetX: 0, offsetY: 0, opacity: 1 } });
   }
 
   playVideo(payload: {

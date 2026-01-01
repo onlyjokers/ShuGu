@@ -182,6 +182,11 @@ type MediaClipParams = {
   cursorSec: number | null;
   sourceNodeId: string | null;
   fit: MediaFit | null;
+  // Image modulation parameters
+  scale: number | null;
+  offsetX: number | null;
+  offsetY: number | null;
+  opacity: number | null;
 };
 
 function parseMediaClipParams(raw: string): MediaClipParams {
@@ -197,6 +202,10 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       cursorSec: null,
       sourceNodeId: null,
       fit: null,
+      scale: null,
+      offsetX: null,
+      offsetY: null,
+      opacity: null,
     };
   }
 
@@ -212,6 +221,10 @@ function parseMediaClipParams(raw: string): MediaClipParams {
       cursorSec: null,
       sourceNodeId: null,
       fit: null,
+      scale: null,
+      offsetX: null,
+      offsetY: null,
+      opacity: null,
     };
   }
 
@@ -271,6 +284,17 @@ function parseMediaClipParams(raw: string): MediaClipParams {
     return null;
   })();
 
+  // Parse image modulation parameters
+  const scaleRaw = params.get('scale');
+  const offsetXRaw = params.get('offsetX');
+  const offsetYRaw = params.get('offsetY');
+  const opacityRaw = params.get('opacity');
+
+  const scale = scaleRaw === null ? null : toNumber(scaleRaw, 1);
+  const offsetX = offsetXRaw === null ? null : toNumber(offsetXRaw, 0);
+  const offsetY = offsetYRaw === null ? null : toNumber(offsetYRaw, 0);
+  const opacity = opacityRaw === null ? null : toNumber(opacityRaw, 1);
+
   return {
     baseUrl,
     startSec: Number.isFinite(startSec) ? startSec : 0,
@@ -281,6 +305,10 @@ function parseMediaClipParams(raw: string): MediaClipParams {
     cursorSec,
     sourceNodeId: typeof nodeRaw === 'string' && nodeRaw.trim() ? nodeRaw.trim() : null,
     fit,
+    scale,
+    offsetX,
+    offsetY,
+    opacity,
   };
 }
 
@@ -317,11 +345,19 @@ export const imageState = writable<{
   visible: boolean;
   duration: number | undefined;
   fit: MediaFit;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  opacity: number;
 }>({
   url: null,
   visible: false,
   duration: undefined,
   fit: 'contain',
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  opacity: 1,
 });
 
 // Derived stores
@@ -1148,10 +1184,18 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         const url =
           typeof baseUrl === 'string' ? multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl : baseUrl;
         const fit = clip?.fit ?? null;
+        const scale = clip?.scale ?? null;
+        const offsetX = clip?.offsetX ?? null;
+        const offsetY = clip?.offsetY ?? null;
+        const opacity = clip?.opacity ?? null;
         multimediaCore?.media.showImage({
           url: String(url ?? ''),
           duration: imagePayload.duration,
           ...(fit === null ? {} : { fit }),
+          ...(scale === null ? {} : { scale }),
+          ...(offsetX === null ? {} : { offsetX }),
+          ...(offsetY === null ? {} : { offsetY }),
+          ...(opacity === null ? {} : { opacity }),
         });
         break;
       }

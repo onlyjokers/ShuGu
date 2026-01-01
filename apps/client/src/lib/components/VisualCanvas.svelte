@@ -728,7 +728,15 @@
 
   <!-- Image Display (z-index: 1, below ASCII) -->
   {#if $imageState.url && $imageState.visible}
-    <ImageDisplay url={$imageState.url} duration={$imageState.duration} fit={$imageState.fit} />
+    <ImageDisplay
+      url={$imageState.url}
+      duration={$imageState.duration}
+      fit={$imageState.fit}
+      scale={$imageState.scale}
+      offsetX={$imageState.offsetX}
+      offsetY={$imageState.offsetY}
+      opacity={$imageState.opacity}
+    />
   {/if}
 
   <!-- Camera Display -->

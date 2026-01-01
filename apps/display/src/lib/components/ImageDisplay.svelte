@@ -8,12 +8,32 @@ Purpose: Display image overlay (full-screen) for the Display app.
   export let url: string;
   export let duration: number | undefined = undefined;
   export let fit: 'contain' | 'fit-screen' | 'cover' | 'fill' = 'contain';
+  export let scale: number = 1;
+  export let offsetX: number = 0;
+  export let offsetY: number = 0;
+  export let opacity: number = 1;
   export let onHide: (() => void) | undefined = undefined;
 
   let activeUrl: string | null = null;
   let pendingUrl: string | null = null;
   let preloadSeq = 0;
   let hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  // Compute transform style from scale and offset
+  $: transformStyle = (() => {
+    const parts: string[] = [];
+    if (scale !== 1 && Number.isFinite(scale) && scale > 0) {
+      parts.push(`scale(${scale})`);
+    }
+    if ((offsetX !== 0 || offsetY !== 0) && Number.isFinite(offsetX) && Number.isFinite(offsetY)) {
+      parts.push(`translate(${offsetX}px, ${offsetY}px)`);
+    }
+    return parts.length > 0 ? parts.join(' ') : undefined;
+  })();
+
+  // Compute opacity style
+  $: opacityStyle =
+    opacity !== 1 && Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : undefined;
 
   const clearHideTimer = () => {
     if (!hideTimeoutId) return;
@@ -85,7 +105,15 @@ Purpose: Display image overlay (full-screen) for the Display app.
     class:fit-fill={fit === 'fill'}
   >
     {#key activeUrl}
-      <img src={activeUrl} alt="" on:load={handleActiveLoad} on:error={handleActiveError} crossorigin="anonymous" />
+      <img
+        src={activeUrl}
+        alt=""
+        on:load={handleActiveLoad}
+        on:error={handleActiveError}
+        crossorigin="anonymous"
+        style:transform={transformStyle}
+        style:opacity={opacityStyle}
+      />
     {/key}
   </div>
 {/if}
@@ -100,6 +128,7 @@ Purpose: Display image overlay (full-screen) for the Display app.
     justify-content: center;
     background: transparent;
     padding: 24px;
+    overflow: hidden; /* Prevent scaled images from causing scroll */
   }
 
   .image-overlay.fit-cover,
@@ -117,6 +146,9 @@ Purpose: Display image overlay (full-screen) for the Display app.
     box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
     object-fit: contain;
     background: #000;
+    transition:
+      transform 0.3s ease,
+      opacity 0.3s ease;
   }
 
   .image-overlay.fit-cover img,

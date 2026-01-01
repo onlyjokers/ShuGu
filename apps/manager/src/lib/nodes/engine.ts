@@ -1111,6 +1111,11 @@ class NodeEngineClass {
       'load-image-from-local',
       'load-video-from-assets',
       'load-video-from-local',
+      // Image modulation nodes
+      'img-scale',
+      'img-fit',
+      'img-xy-offset',
+      'img-transparency',
       'tone-osc',
       'tone-delay',
       'tone-resonator',
