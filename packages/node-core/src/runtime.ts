@@ -333,7 +333,12 @@ export class NodeRuntime {
     const def = this.registry.get(node.type);
     if (!def) return null;
     const ports = this.inferDisabledBypassPorts(def);
-    if (!ports) return null;
+    if (!ports) {
+      if (['img-scale', 'img-fit', 'img-xy-offset', 'img-transparency'].includes(node.type)) {
+         console.warn(`[NodeRuntime] Bypass failed for ${node.type} (${node.id}): inferDisabledBypassPorts returned null`);
+      }
+      return null;
+    }
 
     const incoming = this.connections.filter(
       (c) => c.targetNodeId === node.id && c.targetPortId === ports.inId

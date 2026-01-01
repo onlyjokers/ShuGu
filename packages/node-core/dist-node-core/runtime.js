@@ -259,8 +259,12 @@ export class NodeRuntime {
         if (!def)
             return null;
         const ports = this.inferDisabledBypassPorts(def);
-        if (!ports)
+        if (!ports) {
+            if (['img-scale', 'img-fit', 'img-xy-offset', 'img-transparency'].includes(node.type)) {
+                console.warn(`[NodeRuntime] Bypass failed for ${node.type} (${node.id}): inferDisabledBypassPorts returned null`);
+            }
             return null;
+        }
         const incoming = this.connections.filter((c) => c.targetNodeId === node.id && c.targetPortId === ports.inId);
         if (incoming.length === 0)
             return null;

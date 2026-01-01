@@ -311,6 +311,7 @@ type LocalDisplayMediaEntry = {
 // Local-only media registry (Manager ↔ Display same machine via MessagePort).
 const displayLocalMedia = new Map<string, LocalDisplayMediaEntry>();
 const LOCAL_MEDIA_BROADCAST_CHANNEL = 'shugu:display:local-media';
+const warnedMissingDisplayLocalMedia = new Set<string>();
 
 type LocalMediaBroadcastMessage = {
   type: 'shugu:display:local-media';
@@ -382,6 +383,7 @@ function clearDisplayLocalMedia(): void {
     }
   }
   displayLocalMedia.clear();
+  warnedMissingDisplayLocalMedia.clear();
 }
 
 function registerDisplayLocalMedia(payload: Record<string, unknown> | undefined): void {
@@ -465,6 +467,10 @@ export const imageState = writable<MediaEngineState['image']>({
   visible: false,
   duration: undefined,
   fit: 'contain',
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  opacity: 1,
 });
 
 export const screenOverlay = writable<ScreenOverlayState>({
@@ -775,7 +781,21 @@ export function initializeDisplay(config: DisplayInitConfig): void {
       executeControl(cmd.action, cmd.payload, executeAtLocal);
     },
     {
-      resolveAssetRef: (ref: string) => multimediaCore?.resolveAssetRef(ref) ?? ref,
+      resolveAssetRef: (ref: string) => {
+        const resolvedDisplayUrl = resolveDisplayFileUrl(ref);
+        if (resolvedDisplayUrl) return resolvedDisplayUrl;
+
+        const displayFileId = parseDisplayFileId(ref);
+        if (displayFileId) {
+          if (!warnedMissingDisplayLocalMedia.has(displayFileId)) {
+            warnedMissingDisplayLocalMedia.add(displayFileId);
+            console.warn('[Display] missing display-local file registration:', ref);
+          }
+          return '';
+        }
+
+        return multimediaCore?.resolveAssetRef(ref) ?? ref;
+      },
     }
   );
 
