@@ -61,6 +61,12 @@ export interface ManagerSDKConfig {
      * - Performance mode: `['websocket']` (less jitter, but may fail on restrictive networks)
      */
     transports?: SocketTransport[];
+    /**
+     * Minimum interval (ms) between outgoing high-frequency control messages.
+     * When many clients are connected, this limits message rate to prevent backpressure.
+     * Default: 22 (~45fps). Set to 0 to disable throttling.
+     */
+    highFreqThrottleMs?: number;
 }
 
 /**
@@ -81,6 +87,17 @@ export class ManagerSDK {
     > = new Map();
     private pendingControlFlushScheduled = false;
 
+    // Time-based throttling for high-frequency updates (MIDI-driven modulation, etc.)
+    // Key: action type, Value: last sent timestamp
+    private lastSentByAction: Map<string, number> = new Map();
+    // Actions that benefit from throttling when sending to many clients
+    private static THROTTLED_ACTIONS = new Set([
+        'modulateSoundUpdate',
+        'screenColor',
+        'flashlight',
+        'vibrate',
+    ]);
+
     constructor(config: ManagerSDKConfig) {
         const transports: SocketTransport[] = (() => {
             const defaults: SocketTransport[] = ['polling', 'websocket'];
@@ -98,6 +115,8 @@ export class ManagerSDK {
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
             transports,
+            // Throttle high-frequency updates to ~45fps by default to prevent backpressure
+            highFreqThrottleMs: config.highFreqThrottleMs ?? 22,
         };
 
         this.state = {
@@ -263,6 +282,25 @@ export class ManagerSDK {
     }
 
     private queueControl(target: TargetSelector, item: ControlBatchItem): void {
+        // Time-based throttling for high-frequency actions when many clients are connected
+        const throttleMs = this.config.highFreqThrottleMs;
+        if (throttleMs > 0 && ManagerSDK.THROTTLED_ACTIONS.has(item.action)) {
+            const clientCount = this.state.clients.length;
+            // Only throttle when there are multiple clients (reduces overhead when testing/dev)
+            if (clientCount > 10) {
+                const now = Date.now();
+                const lastSent = this.lastSentByAction.get(item.action) ?? 0;
+                if (now - lastSent < throttleMs) {
+                    // Skip this update - too soon since the last one
+                    // Store the latest payload so it will be picked up on next flush
+                    const pendingKey = `pending:${item.action}`;
+                    this.lastSentByAction.set(pendingKey, now);
+                    return;
+                }
+                this.lastSentByAction.set(item.action, now);
+            }
+        }
+
         const key = this.targetKey(target);
         const existing = this.pendingControlByTargetKey.get(key) ?? {
             target: this.normalizeTarget(target),

@@ -13,9 +13,39 @@ import type {
 } from '@shugu/protocol';
 import { addServerTimestamp } from '@shugu/protocol';
 
+/**
+ * High-frequency control actions that can use volatile emit.
+ * These actions are typically MIDI-driven updates where missing a frame is acceptable.
+ */
+const VOLATILE_ACTIONS = new Set([
+    'modulateSoundUpdate',
+    'screenColor',
+    'flashlight',
+]);
+
+/**
+ * Actions that should always use reliable emit (never drop).
+ */
+const RELIABLE_ACTIONS = new Set([
+    'playMedia',
+    'stopMedia',
+    'playSound',
+    'stopSound',
+    'showImage',
+    'hideImage',
+    'visualSceneSwitch',
+    'visualScenes',
+    'visualEffects',
+    'modulateSound', // initial play should be reliable
+]);
+
 @Injectable()
 export class MessageRouterService {
     private server: Server | null = null;
+
+    // Rate limiting for high-frequency broadcasts
+    private lastBroadcastTime: Map<string, number> = new Map();
+    private readonly minBroadcastIntervalMs = 8; // ~120Hz max
 
     constructor(private readonly clientRegistry: ClientRegistryService) { }
 
@@ -59,11 +89,32 @@ export class MessageRouterService {
 
     /**
      * Route control message from manager to clients
+     * Uses volatile emit for high-frequency updates to prevent buffer buildup
      */
     private routeControlMessage(message: ControlMessage): void {
         const socketIds = this.resolveTargetSocketIds(message.target, 'client');
-        // console.log(`[Router] Control message "${message.action}" -> ${socketIds.length} clients`);
-        this.emitToSockets(socketIds, message);
+        if (socketIds.length === 0) return;
+
+        const action = message.action;
+        const isVolatile = VOLATILE_ACTIONS.has(action) && !RELIABLE_ACTIONS.has(action);
+
+        // Rate limiting for volatile actions when broadcasting to many clients
+        if (isVolatile && socketIds.length > 50) {
+            const now = Date.now();
+            const lastTime = this.lastBroadcastTime.get(action) ?? 0;
+            if (now - lastTime < this.minBroadcastIntervalMs) {
+                // Skip this message to prevent backpressure buildup
+                return;
+            }
+            this.lastBroadcastTime.set(action, now);
+        }
+
+        // Use volatile emit for high-frequency updates (can be dropped if buffer full)
+        if (isVolatile) {
+            this.emitVolatile(socketIds, message);
+        } else {
+            this.emitToSockets(socketIds, message);
+        }
     }
 
     /**
@@ -205,4 +256,16 @@ export class MessageRouterService {
         // Note: this still sends one packet per connection, but avoids per-socket JS loop jitter.
         this.server.to(socketIds).emit('msg', message);
     }
+
+    /**
+     * Emit with volatile flag - message will be dropped if socket buffer is full.
+     * Use for high-frequency updates where missing a frame is acceptable (e.g., MIDI-driven modulation).
+     * This prevents backpressure buildup when broadcasting to many clients.
+     */
+    private emitVolatile(socketIds: string[], message: Message): void {
+        if (!this.server) return;
+        if (socketIds.length === 0) return;
+        this.server.volatile.to(socketIds).emit('msg', message);
+    }
 }
+
