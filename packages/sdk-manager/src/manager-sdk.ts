@@ -64,7 +64,7 @@ export interface ManagerSDKConfig {
     /**
      * Minimum interval (ms) between outgoing high-frequency control messages.
      * When many clients are connected, this limits message rate to prevent backpressure.
-     * Default: 22 (~45fps). Set to 0 to disable throttling.
+     * Default: 33 (~30fps). Set to 0 to disable throttling.
      */
     highFreqThrottleMs?: number;
 }
@@ -115,8 +115,8 @@ export class ManagerSDK {
             reconnectionDelay: config.reconnectionDelay ?? 1000,
             timeSyncInterval: config.timeSyncInterval ?? 5000,
             transports,
-            // Throttle high-frequency updates to ~45fps by default to prevent backpressure
-            highFreqThrottleMs: config.highFreqThrottleMs ?? 22,
+            // Throttle high-frequency updates to ~30fps by default to prevent backpressure
+            highFreqThrottleMs: config.highFreqThrottleMs ?? 35,
         };
 
         this.state = {
