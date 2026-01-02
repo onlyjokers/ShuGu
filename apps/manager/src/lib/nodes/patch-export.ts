@@ -204,6 +204,16 @@ export function exportGraphForPatch(
 
     const dedupe = new Set(currentConnections.map(connectionKey));
 
+    const shouldDropWhenDisabledStart = (type: string, ports: { inId: string; outId: string }) => {
+      const def = registry.get(type);
+      if (!def) return false;
+      const inPort = def.inputs.find((p) => String(p.id) === ports.inId) ?? null;
+      const portType = String(inPort?.type ?? '');
+      // Some port types are explicitly designed to allow "empty chain" semantics when upstream is missing.
+      // For these, a disabled chain head should be removed so downstream nodes can still run.
+      return portType === 'scene' || portType === 'effect';
+    };
+
     for (const node of keptNodes) {
       const nodeId = String(node.id);
       if (!nodeId) continue;
@@ -220,7 +230,13 @@ export function exportGraphForPatch(
         (c) => String(c.sourceNodeId) === nodeId && String(c.sourcePortId) === ports.outId
       );
 
-      if (incoming.length === 0 || outgoing.length === 0) continue;
+      if (incoming.length === 0 || outgoing.length === 0) {
+        // Special case: a disabled chain head (no upstream) should be dropped for "empty chain" ports
+        // so the patch can still deploy and downstream nodes can start from identity.
+        if (incoming.length === 0 && outgoing.length > 0 && shouldDropWhenDisabledStart(type, ports))
+          removed.add(nodeId);
+        continue;
+      }
 
       // Only bypass when the wire would stay entirely inside the exported patch subgraph.
       if (
