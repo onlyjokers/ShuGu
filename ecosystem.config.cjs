@@ -5,7 +5,8 @@ module.exports = {
       script: './apps/server/dist-out/main.js',
       env: {
         NODE_ENV: 'production',
-        PORT: 3001
+        PORT: 3001,
+        REDIS_URL: 'redis://127.0.0.1:6379'
       }
     },
     {

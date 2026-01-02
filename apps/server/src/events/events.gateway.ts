@@ -9,6 +9,8 @@ import {
     ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient, type RedisClientType } from 'redis';
 import { ClientRegistryService } from '../client-registry/client-registry.service.js';
 import { MessageRouterService } from '../message-router/message-router.service.js';
 import type { Message, ConnectionRole, TimePingData } from '@shugu/protocol';
@@ -38,13 +40,49 @@ export class EventsGateway
     @WebSocketServer()
     server!: Server;
 
+    private pubClient: RedisClientType | null = null;
+    private subClient: RedisClientType | null = null;
+
     constructor(
         private readonly clientRegistry: ClientRegistryService,
         private readonly messageRouter: MessageRouterService,
     ) { }
 
-    afterInit(server: Server) {
+    async afterInit(server: Server) {
         console.log('[Gateway] WebSocket server initialized');
+
+        // Try to connect to Redis for better broadcast performance
+        const redisUrl = process.env.REDIS_URL;
+        if (redisUrl) {
+            try {
+                console.log('[Gateway] Connecting to Redis adapter...');
+                
+                this.pubClient = createClient({ url: redisUrl }) as RedisClientType;
+                this.subClient = this.pubClient.duplicate() as RedisClientType;
+
+                // Handle Redis errors gracefully
+                this.pubClient.on('error', (err) => {
+                    console.error('[Redis] Pub client error:', err.message);
+                });
+                this.subClient.on('error', (err) => {
+                    console.error('[Redis] Sub client error:', err.message);
+                });
+
+                await Promise.all([
+                    this.pubClient.connect(),
+                    this.subClient.connect(),
+                ]);
+
+                server.adapter(createAdapter(this.pubClient, this.subClient));
+                console.log('[Gateway] ✅ Redis adapter enabled - broadcasts optimized');
+            } catch (err) {
+                console.warn('[Gateway] ⚠️ Redis adapter failed, using default adapter:', (err as Error).message);
+                // Continue with default adapter
+            }
+        } else {
+            console.log('[Gateway] Redis not configured (set REDIS_URL to enable)');
+        }
+
         this.messageRouter.setServer(server);
     }
 
