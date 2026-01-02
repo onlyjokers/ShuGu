@@ -121,8 +121,13 @@ function createTestMessage(type: string): Message {
 async function testBroadcastLatency(
   serverUrl: string,
   clientCount: number,
-  messageType: string
-): Promise<BroadcastTestResult> {
+  messageType: string,
+  keepAlive = false
+): Promise<{
+  result: BroadcastTestResult;
+  clients: ClientSimulator[];
+  manager: ManagerSimulator;
+}> {
   console.log(`\nSetting up ${clientCount} clients...`);
   
   const clients: ClientSimulator[] = [];
@@ -190,20 +195,26 @@ async function testBroadcastLatency(
   // Wait for messages to arrive
   await delay(2000);
 
-  // Cleanup
-  console.log('Disconnecting...');
-  manager.disconnect();
-  for (const client of clients) {
-    client.disconnect();
+  if (!keepAlive) {
+    // Cleanup
+    console.log('Disconnecting...');
+    manager.disconnect();
+    for (const client of clients) {
+      client.disconnect();
+    }
   }
 
   const latencyMetrics = metrics.getLatencyMetrics();
 
   return {
-    clientCount,
-    messageType,
-    messageSize,
-    latencyMetrics,
+    result: {
+      clientCount,
+      messageType,
+      messageSize,
+      latencyMetrics,
+    },
+    clients,
+    manager,
   };
 }
 
@@ -223,13 +234,34 @@ async function runBroadcastTest(options: BroadcastTestOptions): Promise<void> {
   console.log('═══════════════════════════════════════\n');
 
   const results: BroadcastTestResult[] = [];
+  let allClients: ClientSimulator[] = [];
+  let manager: ManagerSimulator | null = null;
 
-  for (const clientCount of clientCounts) {
-    for (const messageType of messageTypes) {
+  const maxClientCount = Math.max(...clientCounts);
+
+  for (let i = 0; i < clientCounts.length; i++) {
+    const clientCount = clientCounts[i];
+    const isMaxLevel = clientCount === maxClientCount;
+
+    for (let j = 0; j < messageTypes.length; j++) {
+      const messageType = messageTypes[j];
+      const isLastMessageType = j === messageTypes.length - 1;
+      const shouldKeepAlive = isMaxLevel && isLastMessageType;
+
       console.log(`\n--- Testing ${clientCount} clients with ${messageType} messages ---`);
       
-      const result = await testBroadcastLatency(serverUrl, clientCount, messageType);
+      const { result, clients, manager: mgr } = await testBroadcastLatency(
+        serverUrl,
+        clientCount,
+        messageType,
+        shouldKeepAlive
+      );
       results.push(result);
+
+      if (shouldKeepAlive) {
+        allClients = clients;
+        manager = mgr;
+      }
 
       console.log(`\n📊 Results:`);
       console.log(`   Messages received: ${result.latencyMetrics.count}`);
@@ -239,9 +271,18 @@ async function runBroadcastTest(options: BroadcastTestOptions): Promise<void> {
       console.log(`   p99 latency: ${result.latencyMetrics.p99.toFixed(0)}ms`);
       console.log(`   Max latency: ${result.latencyMetrics.max.toFixed(0)}ms`);
 
+      // If this is the max level and last message type, break
+      if (shouldKeepAlive) {
+        console.log('\n✅ Reached maximum test level - keeping connections alive');
+        console.log(`📊 ${allClients.length} clients + 1 manager currently connected`);
+        break;
+      }
+
       // Wait between tests
       await delay(5000);
     }
+
+    if (manager) break; // Exit outer loop if we're keeping connections
   }
 
   // Display summary
@@ -268,6 +309,28 @@ async function runBroadcastTest(options: BroadcastTestOptions): Promise<void> {
   );
   
   console.log(`📊 Results saved to: ${resultsPath}\n`);
+
+  // If we have clients and manager connected, keep them alive
+  if (allClients.length > 0 && manager) {
+    console.log('═══════════════════════════════════════');
+    console.log(`🔌 Keeping ${allClients.length} clients + manager connected`);
+    console.log('Press Ctrl+C to disconnect and exit');
+    console.log('═══════════════════════════════════════\n');
+
+    // Setup cleanup handler
+    process.on('SIGINT', () => {
+      console.log('\n\nDisconnecting all clients and manager...');
+      manager?.disconnect();
+      for (const client of allClients) {
+        client.disconnect();
+      }
+      console.log('✅ All connections closed');
+      process.exit(0);
+    });
+
+    // Keep process alive
+    await new Promise(() => {}); // Wait forever until Ctrl+C
+  }
 }
 
 // Parse command line arguments

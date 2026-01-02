@@ -110,8 +110,14 @@ class ManagerSimulator {
 async function testPushImageUpload(
   serverUrl: string,
   backgroundClientCount: number,
-  options: Required<Pick<PushImageTestOptions, 'imageFormat' | 'quality' | 'maxWidth' | 'durationSec'>>
-): Promise<PushImageTestResult> {
+  options: Required<Pick<PushImageTestOptions, 'imageFormat' | 'quality' | 'maxWidth' | 'durationSec'>>,
+  keepAlive = false
+): Promise<{
+  result: PushImageTestResult;
+  backgroundClients: ClientSimulator[];
+  testClient: ClientSimulator;
+  manager: ManagerSimulator;
+}> {
   const { imageFormat, quality, maxWidth, durationSec } = options;
 
   console.log(`\nSetting up ${backgroundClientCount} background clients...`);
@@ -237,24 +243,31 @@ async function testPushImageUpload(
   const duringMetrics = backgroundMetrics.getLatencyMetrics();
   const latencyIncrease = duringMetrics.avg - baselineMetrics.avg;
 
-  // Cleanup
-  console.log('\nDisconnecting...');
-  manager.disconnect();
-  testClient.disconnect();
-  for (const client of backgroundClients) {
-    client.disconnect();
+  if (!keepAlive) {
+    // Cleanup
+    console.log('\nDisconnecting...');
+    manager.disconnect();
+    testClient.disconnect();
+    for (const client of backgroundClients) {
+      client.disconnect();
+    }
   }
 
   return {
-    backgroundClients: backgroundClientCount,
-    imageFormat,
-    quality,
-    maxWidth,
-    avgImageSize,
-    uploadRate,
-    avgLatency,
-    throughputBytesPerSec: throughput.bytesPerSec,
-    backgroundLatencyIncrease: latencyIncrease,
+    result: {
+      backgroundClients: backgroundClientCount,
+      imageFormat,
+      quality,
+      maxWidth,
+      avgImageSize,
+      uploadRate,
+      avgLatency,
+      throughputBytesPerSec: throughput.bytesPerSec,
+      backgroundLatencyIncrease: latencyIncrease,
+    },
+    backgroundClients,
+    testClient,
+    manager,
   };
 }
 
@@ -279,18 +292,37 @@ async function runPushImageTest(options: PushImageTestOptions): Promise<void> {
   console.log('═══════════════════════════════════════\n');
 
   const results: PushImageTestResult[] = [];
+  let allBackgroundClients: ClientSimulator[] = [];
+  let testClient: ClientSimulator | null = null;
+  let manager: ManagerSimulator | null = null;
 
-  for (const clientCount of backgroundClientCounts) {
+  const maxClientCount = Math.max(...backgroundClientCounts);
+
+  for (let i = 0; i < backgroundClientCounts.length; i++) {
+    const clientCount = backgroundClientCounts[i];
+    const isMaxLevel = clientCount === maxClientCount;
+
     console.log(`\n--- Testing with ${clientCount} background clients ---`);
     
-    const result = await testPushImageUpload(serverUrl, clientCount, {
-      imageFormat,
-      quality,
-      maxWidth,
-      durationSec,
-    });
+    const { result, backgroundClients, testClient: tc, manager: mgr } = await testPushImageUpload(
+      serverUrl,
+      clientCount,
+      {
+        imageFormat,
+        quality,
+        maxWidth,
+        durationSec,
+      },
+      isMaxLevel
+    );
     
     results.push(result);
+
+    if (isMaxLevel) {
+      allBackgroundClients = backgroundClients;
+      testClient = tc;
+      manager = mgr;
+    }
 
     console.log(`\n📊 Results:`);
     console.log(`   Upload rate: ${result.uploadRate.toFixed(2)} fps`);
@@ -298,6 +330,12 @@ async function runPushImageTest(options: PushImageTestOptions): Promise<void> {
     console.log(`   Avg latency: ${result.avgLatency.toFixed(0)}ms`);
     console.log(`   Throughput: ${formatBytes(result.throughputBytesPerSec)}/s`);
     console.log(`   Background latency increase: +${result.backgroundLatencyIncrease.toFixed(0)}ms`);
+
+    if (isMaxLevel) {
+      console.log('\n✅ Reached maximum test level - keeping connections alive');
+      console.log(`📊 ${allBackgroundClients.length} background clients + 1 test client + 1 manager connected`);
+      break;
+    }
 
     // Wait between tests
     await delay(5000);
@@ -327,6 +365,29 @@ async function runPushImageTest(options: PushImageTestOptions): Promise<void> {
   );
   
   console.log(`📊 Results saved to: ${resultsPath}\n`);
+
+  // If we have clients and manager connected, keep them alive
+  if (allBackgroundClients.length > 0 && testClient && manager) {
+    console.log('═══════════════════════════════════════');
+    console.log(`🔌 Keeping ${allBackgroundClients.length} background clients + test client + manager connected`);
+    console.log('Press Ctrl+C to disconnect and exit');
+    console.log('═══════════════════════════════════════\n');
+
+    // Setup cleanup handler
+    process.on('SIGINT', () => {
+      console.log('\n\nDisconnecting all connections...');
+      manager?.disconnect();
+      testClient?.disconnect();
+      for (const client of allBackgroundClients) {
+        client.disconnect();
+      }
+      console.log('✅ All connections closed');
+      process.exit(0);
+    });
+
+    // Keep process alive
+    await new Promise(() => {}); // Wait forever until Ctrl+C
+  }
 }
 
 // Parse command line arguments

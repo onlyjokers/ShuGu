@@ -991,6 +991,19 @@ function setupSensorReporting(): void {
  * Handle control messages from manager
  */
 function handleControlMessage(message: ControlMessage): void {
+  // Calculate and log message size
+  try {
+    const messageJson = JSON.stringify(message);
+    const messageSizeBytes = new Blob([messageJson]).size;
+    const messageSizeKB = (messageSizeBytes / 1024).toFixed(2);
+    
+    console.log(
+      `[Message] Received ${message.action} | Size: ${messageSizeBytes} bytes (${messageSizeKB} KB)`
+    );
+  } catch (err) {
+    console.warn('[Message] Failed to calculate message size:', err);
+  }
+  
   executeControl(message.action, message.payload, message.executeAt);
 }
 
