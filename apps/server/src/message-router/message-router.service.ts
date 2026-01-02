@@ -45,7 +45,7 @@ export class MessageRouterService {
 
     // Rate limiting for high-frequency broadcasts
     private lastBroadcastTime: Map<string, number> = new Map();
-    private readonly minBroadcastIntervalMs = 33; // ~30fps max
+    private readonly minBroadcastIntervalMs = 22; // ~45fps max
 
     constructor(private readonly clientRegistry: ClientRegistryService) { }
 
