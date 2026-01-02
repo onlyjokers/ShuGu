@@ -2,12 +2,12 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     currentScene,
-    boxSceneEnabled,
     melSceneEnabled,
     cameraStream,
     frontCameraEnabled,
     backCameraEnabled,
     audioStream,
+    visualScenes,
     visualEffects,
     videoState,
     imageState,
@@ -93,10 +93,6 @@
     sceneManager.register(new BoxScene());
     sceneManager.register(new MelSpectrogramScene());
 
-    // Initialize scenes based on their enabled states
-    sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
-    sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
-
     // Effect pipeline setup
     effectCtx = effectCanvas.getContext('2d');
     frameA = document.createElement('canvas');
@@ -138,12 +134,7 @@
 
   // React to box scene enabled state changes
   $: if (sceneManager) {
-    sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
-  }
-
-  // React to mel scene enabled state changes
-  $: if (sceneManager) {
-    sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
+    applySceneLayer($visualScenes);
   }
 
   // Bind camera stream to video element
@@ -314,6 +305,44 @@
 
   const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, value));
+
+  function applySceneLayer(scenes: unknown[]): void {
+    if (!sceneManager) return;
+
+    const list = Array.isArray(scenes) ? scenes : [];
+    const desiredSceneIds: string[] = [];
+
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const type = typeof (item as any).type === 'string' ? String((item as any).type) : '';
+      if (type === 'box') desiredSceneIds.push('box-scene');
+      if (type === 'mel') desiredSceneIds.push('mel-scene');
+    }
+
+    const enabled = new Set(desiredSceneIds);
+    sceneManager.setSceneEnabled('box-scene', enabled.has('box-scene'));
+    sceneManager.setSceneEnabled('mel-scene', enabled.has('mel-scene'));
+
+    // Best-effort: keep DOM canvas order in sync with the scene chain.
+    reorderSceneCanvases(desiredSceneIds);
+  }
+
+  function reorderSceneCanvases(sceneIds: string[]): void {
+    if (!container || !effectCanvas) return;
+
+    for (const id of sceneIds) {
+      const canvas = container.querySelector(
+        `canvas[data-shugu-scene-id="${id}"]`
+      ) as HTMLCanvasElement | null;
+      if (!canvas) continue;
+
+      try {
+        container.insertBefore(canvas, effectCanvas);
+      } catch {
+        // ignore
+      }
+    }
+  }
 
   function setBaseLayerVisibility(show: boolean) {
     if (!container) return;

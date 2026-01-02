@@ -1,7 +1,7 @@
 {
   "type": "proc-visual-scene-box",
-  "label": "Visual Scene-Box",
-  "category": "Processors",
+  "label": "Legacy Visual Scene-Box",
+  "category": "Legacy",
   "inputs": [
     { "id": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": true }
   ],

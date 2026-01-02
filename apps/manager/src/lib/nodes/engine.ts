@@ -61,6 +61,7 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'image-out') return 'visual';
   if (type === 'video-out') return 'visual';
   if (type === 'effect-out') return 'visual';
+  if (type === 'scene-out') return 'visual';
   return null;
 }
 
@@ -501,7 +502,7 @@ class NodeEngineClass {
       const typeById = new Map(nodes.map((n) => [String(n.id), String(n.type)]));
 
       const patchRoots = nodes.filter((n) =>
-        ['audio-out', 'image-out', 'video-out', 'effect-out'].includes(String(n.type))
+        ['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out'].includes(String(n.type))
       );
       if (patchRoots.length === 0) return null;
 
@@ -1071,7 +1072,7 @@ class NodeEngineClass {
     const ids = Array.from(new Set((rootNodeIds ?? []).map(String).filter(Boolean))).sort();
     if (ids.length === 0) throw new Error('No patch root ids provided.');
 
-    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out', 'effect-out']);
+    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out']);
     const nodeById = new Map((snapshot.nodes ?? []).map((n) => [String(n.id), n]));
     const roots = ids.map((id) => {
       const node = nodeById.get(String(id)) ?? null;
@@ -1126,6 +1127,11 @@ class NodeEngineClass {
       // Visual effects chain
       'effect-ascii',
       'effect-convolution',
+      // Visual scenes chain
+      'scene-box',
+      'scene-mel',
+      'scene-front-camera',
+      'scene-back-camera',
       'tone-osc',
       'tone-delay',
       'tone-resonator',
@@ -1140,6 +1146,7 @@ class NodeEngineClass {
       'image-out',
       'video-out',
       'effect-out',
+      'scene-out',
     ]);
 
     for (const n of patch.graph.nodes) {
@@ -1201,7 +1208,7 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
-    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out'] as const;
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out'] as const;
     const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
     if (roots.length === 0) {
       throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);

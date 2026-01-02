@@ -1,7 +1,7 @@
 {
   "type": "proc-visual-scene-back-camera",
-  "label": "Visual Scene-Back Camera",
-  "category": "Processors",
+  "label": "Legacy Visual Scene-Back Camera",
+  "category": "Legacy",
   "inputs": [
     { "id": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
   ],

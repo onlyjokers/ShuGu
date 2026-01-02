@@ -98,6 +98,7 @@
     audio: new ClassicPreset.Socket('audio'),
     image: new ClassicPreset.Socket('image'),
     video: new ClassicPreset.Socket('video'),
+    scene: new ClassicPreset.Socket('scene'),
     effect: new ClassicPreset.Socket('effect'),
     client: new ClassicPreset.Socket('client'),
     command: new ClassicPreset.Socket('command'),
@@ -1080,7 +1081,7 @@
   };
 
   const resolvePatchDeploymentPlan = (): PatchDeploymentPlan | null => {
-    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out'] as const;
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out'] as const;
     const disabled = get(groupController.groupDisabledNodeIds);
     const roots = (graphState.nodes ?? [])
       .filter((n) => patchRootTypes.includes(String(n.type) as any))

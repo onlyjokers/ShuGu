@@ -129,6 +129,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     'Logic',
     'Parameters',
     'Processors',
+    'Scene',
     'Effect',
     'Player',
     'Other',

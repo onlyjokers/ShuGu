@@ -41,6 +41,8 @@ import type {
   VisualSceneMelPayload,
   VisualSceneFrontCameraPayload,
   VisualSceneBackCameraPayload,
+  VisualSceneLayerItem,
+  VisualScenesPayload,
   ConvolutionPayload,
   VisualEffect,
   VisualEffectsPayload,
@@ -99,6 +101,116 @@ export const boxSceneEnabled = writable<boolean>(true);
 export const melSceneEnabled = writable<boolean>(false);
 export const frontCameraEnabled = writable<boolean>(false);
 export const backCameraEnabled = writable<boolean>(false);
+
+// Visual scene layer applied on top of the visual layer (first -> last).
+// Default keeps the legacy behavior (Box scene enabled by default).
+export const visualScenes = writable<VisualSceneLayerItem[]>([{ type: 'box' }]);
+
+function buildLegacyVisualScenes(): VisualSceneLayerItem[] {
+  const scenes: VisualSceneLayerItem[] = [];
+
+  if (get(boxSceneEnabled)) scenes.push({ type: 'box' });
+  if (get(melSceneEnabled)) scenes.push({ type: 'mel' });
+
+  // Camera is mutually exclusive; prefer the currently enabled one.
+  if (get(frontCameraEnabled)) {
+    scenes.push({ type: 'frontCamera' });
+  } else if (get(backCameraEnabled)) {
+    scenes.push({ type: 'backCamera' });
+  }
+
+  return scenes;
+}
+
+function syncLegacyVisualScenes(): void {
+  visualScenes.set(buildLegacyVisualScenes());
+}
+
+function normalizeVisualScenesPayload(payload: unknown): VisualSceneLayerItem[] {
+  const raw = payload && typeof payload === 'object' ? (payload as any).scenes : null;
+  if (!Array.isArray(raw)) return [];
+
+  const limited = raw.slice(0, 12);
+  const out: VisualSceneLayerItem[] = [];
+
+  for (const item of limited) {
+    if (!item || typeof item !== 'object') continue;
+    const type = typeof (item as any).type === 'string' ? String((item as any).type) : '';
+    if (type === 'box') {
+      out.push({ type: 'box' });
+      continue;
+    }
+    if (type === 'mel') {
+      out.push({ type: 'mel' });
+      continue;
+    }
+    if (type === 'frontCamera') {
+      out.push({ type: 'frontCamera' });
+      continue;
+    }
+    if (type === 'backCamera') {
+      out.push({ type: 'backCamera' });
+    }
+  }
+
+  // De-duplicate scene types, keeping the last occurrence so ordering is preserved.
+  const deduped: VisualSceneLayerItem[] = [];
+  const seen = new Set<string>();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const entry = out[i]!;
+    if (seen.has(entry.type)) continue;
+    seen.add(entry.type);
+    deduped.push(entry);
+  }
+  deduped.reverse();
+
+  // Camera is mutually exclusive; keep only the last camera item if both appear.
+  const lastCameraIndex = (() => {
+    for (let i = deduped.length - 1; i >= 0; i--) {
+      const t = deduped[i]!.type;
+      if (t === 'frontCamera' || t === 'backCamera') return i;
+    }
+    return -1;
+  })();
+
+  if (lastCameraIndex >= 0) {
+    const keep = deduped[lastCameraIndex]!.type;
+    return deduped.filter((s) =>
+      s.type === 'frontCamera' || s.type === 'backCamera' ? s.type === keep : true
+    );
+  }
+
+  return deduped;
+}
+
+function syncVisualScenesToLegacyStores(scenes: VisualSceneLayerItem[]): void {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const types = new Set(list.map((s) => s.type));
+
+  boxSceneEnabled.set(types.has('box'));
+  melSceneEnabled.set(types.has('mel'));
+
+  const lastCamera = (() => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const t = list[i]!.type;
+      if (t === 'frontCamera' || t === 'backCamera') return t;
+    }
+    return null;
+  })();
+
+  const front = lastCamera === 'frontCamera';
+  const back = lastCamera === 'backCamera';
+  frontCameraEnabled.set(front);
+  backCameraEnabled.set(back);
+
+  if (front) {
+    startCameraStream('user');
+  } else if (back) {
+    startCameraStream('environment');
+  } else {
+    stopCameraStream();
+  }
+}
 
 // Camera stream state
 export type CameraFacing = 'user' | 'environment' | null;
@@ -1395,6 +1507,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
             boxSceneEnabled.set(false);
             melSceneEnabled.set(true);
           }
+          syncLegacyVisualScenes();
         }
         break;
 
@@ -1402,6 +1515,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         {
           const boxPayload = payload as VisualSceneBoxPayload;
           boxSceneEnabled.set(boxPayload.enabled);
+          syncLegacyVisualScenes();
         }
         break;
 
@@ -1409,6 +1523,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         {
           const melPayload = payload as VisualSceneMelPayload;
           melSceneEnabled.set(melPayload.enabled);
+          syncLegacyVisualScenes();
         }
         break;
 
@@ -1426,6 +1541,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
               stopCameraStream();
             }
           }
+          syncLegacyVisualScenes();
         }
         break;
 
@@ -1443,6 +1559,15 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
               stopCameraStream();
             }
           }
+          syncLegacyVisualScenes();
+        }
+        break;
+
+      case 'visualScenes':
+        {
+          const scenes = normalizeVisualScenesPayload(payload as VisualScenesPayload);
+          visualScenes.set(scenes);
+          syncVisualScenesToLegacyStores(scenes);
         }
         break;
 

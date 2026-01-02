@@ -1,7 +1,7 @@
 {
   "type": "proc-visual-scene-mel",
-  "label": "Visual Scene-Mel Spectrogram",
-  "category": "Processors",
+  "label": "Legacy Visual Scene-Mel Spectrogram",
+  "category": "Legacy",
   "inputs": [
     { "id": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
   ],

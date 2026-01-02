@@ -52,6 +52,7 @@ export type ControlAction =
   | 'visualSceneMel'
   | 'visualSceneFrontCamera'
   | 'visualSceneBackCamera'
+  | 'visualScenes'
   | 'visualEffects'
   | 'convolution'
   | 'setDataReportingRate'
@@ -217,6 +218,28 @@ export interface ConvolutionPayload {
 }
 
 /**
+ * Visual scene layer item.
+ *
+ * Used by `visualScenes` to describe an ordered enabled scene list on the client.
+ * Items are applied in array order.
+ */
+export type VisualSceneLayerItem =
+  | { type: 'box' }
+  | { type: 'mel' }
+  | { type: 'frontCamera' }
+  | { type: 'backCamera' };
+
+/**
+ * Visual scenes pipeline payload.
+ *
+ * Sets the ordered enabled scene list applied on the client visual layer.
+ * An empty list disables all visual scenes (box/mel/camera).
+ */
+export interface VisualScenesPayload {
+  scenes: VisualSceneLayerItem[];
+}
+
+/**
  * Visual effect description.
  *
  * Used by `visualEffects` to describe an ordered post-processing chain on the client.
@@ -316,6 +339,7 @@ export type BaseControlPayload =
   | AsciiModePayload
   | AsciiResolutionPayload
   | ConvolutionPayload
+  | VisualScenesPayload
   | VisualEffectsPayload
   | VisualSceneSwitchPayload
   | VisualSceneBoxPayload

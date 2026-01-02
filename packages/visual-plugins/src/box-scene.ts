@@ -67,6 +67,8 @@ export class BoxScene implements VisualScene {
         });
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit for performance
+        this.renderer.domElement.dataset.shuguSceneId = this.id;
+        this.renderer.domElement.classList.add('shugu-scene-canvas');
         container.appendChild(this.renderer.domElement);
 
         // Create box

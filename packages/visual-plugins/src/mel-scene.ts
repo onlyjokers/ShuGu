@@ -52,6 +52,8 @@ export class MelSpectrogramScene implements VisualScene {
         this.container = container;
 
         this.canvas = document.createElement('canvas');
+        this.canvas.dataset.shuguSceneId = this.id;
+        this.canvas.classList.add('shugu-scene-canvas');
         this.canvas.style.width = '100%';
         this.canvas.style.height = '100%';
         this.canvas.style.display = 'block';

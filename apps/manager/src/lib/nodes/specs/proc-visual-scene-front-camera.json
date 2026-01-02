@@ -1,7 +1,7 @@
 {
   "type": "proc-visual-scene-front-camera",
-  "label": "Visual Scene-Front Camera",
-  "category": "Processors",
+  "label": "Legacy Visual Scene-Front Camera",
+  "category": "Legacy",
   "inputs": [
     { "id": "enabled", "label": "Enabled", "type": "boolean", "defaultValue": false }
   ],

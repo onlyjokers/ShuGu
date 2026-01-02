@@ -3,6 +3,8 @@ import type {
   ControlPayload,
   SensorPayload,
   SensorType,
+  VisualSceneLayerItem,
+  VisualScenesPayload,
   VisualEffect,
   VisualEffectsPayload,
 } from '@shugu/protocol';
@@ -329,11 +331,17 @@ export function registerDefaultNodeDefinitions(
   registry.register(createImageOutNode(deps));
   registry.register(createVideoOutNode(deps));
   registry.register(createEffectOutNode(deps));
+  registry.register(createSceneOutNode(deps));
   registry.register(createFlashlightProcessorNode());
   registry.register(createShowImageProcessorNode());
   registry.register(createPushImageUploadNode());
   registry.register(createScreenColorProcessorNode());
   registry.register(createSynthUpdateProcessorNode());
+  // Visual scene chain
+  registry.register(createSceneBoxNode());
+  registry.register(createSceneMelNode());
+  registry.register(createSceneFrontCameraNode());
+  registry.register(createSceneBackCameraNode());
   registry.register(createEffectConvolutionNode());
   registry.register(createEffectAsciiNode());
   registry.register(createAsciiEffectProcessorNode());
@@ -1660,6 +1668,63 @@ function createEffectOutNode(deps: ClientObjectDeps): NodeDefinition {
       const effects = coerceEffectChain(inputs.in);
       const payload: VisualEffectsPayload = { effects };
       deps.executeCommand({ action: 'visualEffects', payload });
+    },
+    onDisable: () => {
+      clear();
+    },
+  };
+}
+
+function createSceneOutNode(deps: ClientObjectDeps): NodeDefinition {
+  const clear = () => {
+    const payload: VisualScenesPayload = { scenes: [] };
+    deps.executeCommand({ action: 'visualScenes', payload });
+  };
+
+  const coerceSceneChain = (raw: unknown): VisualSceneLayerItem[] => {
+    if (!Array.isArray(raw)) return [];
+    const scenes: VisualSceneLayerItem[] = [];
+
+    for (const item of raw.slice(0, 12)) {
+      if (!item || typeof item !== 'object') continue;
+      const type = typeof (item as any).type === 'string' ? String((item as any).type) : '';
+
+      if (type === 'box') {
+        scenes.push({ type: 'box' });
+        continue;
+      }
+      if (type === 'mel') {
+        scenes.push({ type: 'mel' });
+        continue;
+      }
+      if (type === 'frontCamera') {
+        scenes.push({ type: 'frontCamera' });
+        continue;
+      }
+      if (type === 'backCamera') {
+        scenes.push({ type: 'backCamera' });
+      }
+    }
+
+    return scenes;
+  };
+
+  return {
+    type: 'scene-out',
+    label: 'Scene Layer Player',
+    category: 'Player',
+    inputs: [{ id: 'in', label: 'In', type: 'scene', kind: 'sink' }],
+    outputs: [
+      // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+      // This output is not part of the exported client patch subgraph.
+      { id: 'cmd', label: 'Deploy', type: 'command' },
+    ],
+    configSchema: [],
+    process: () => ({}),
+    onSink: (inputs) => {
+      const scenes = coerceSceneChain(inputs.in);
+      const payload: VisualScenesPayload = { scenes };
+      deps.executeCommand({ action: 'visualScenes', payload });
     },
     onDisable: () => {
       clear();
@@ -3417,8 +3482,8 @@ function createSynthUpdateProcessorNode(): NodeDefinition {
 function createBoxSceneProcessorNode(): NodeDefinition {
   return {
     type: 'proc-visual-scene-box',
-    label: 'Visual Scene-Box',
-    category: 'Processors',
+    label: 'Legacy Visual Scene-Box',
+    category: 'Legacy',
     inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true }],
@@ -3443,8 +3508,8 @@ function createBoxSceneProcessorNode(): NodeDefinition {
 function createMelSceneProcessorNode(): NodeDefinition {
   return {
     type: 'proc-visual-scene-mel',
-    label: 'Visual Scene-Mel Spectrogram',
-    category: 'Processors',
+    label: 'Legacy Visual Scene-Mel Spectrogram',
+    category: 'Legacy',
     inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
@@ -3469,8 +3534,8 @@ function createMelSceneProcessorNode(): NodeDefinition {
 function createFrontCameraSceneProcessorNode(): NodeDefinition {
   return {
     type: 'proc-visual-scene-front-camera',
-    label: 'Visual Scene-Front Camera',
-    category: 'Processors',
+    label: 'Legacy Visual Scene-Front Camera',
+    category: 'Legacy',
     inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
@@ -3495,8 +3560,8 @@ function createFrontCameraSceneProcessorNode(): NodeDefinition {
 function createBackCameraSceneProcessorNode(): NodeDefinition {
   return {
     type: 'proc-visual-scene-back-camera',
-    label: 'Visual Scene-Back Camera',
-    category: 'Processors',
+    label: 'Legacy Visual Scene-Back Camera',
+    category: 'Legacy',
     inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
     outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
     configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
@@ -3514,6 +3579,94 @@ function createBackCameraSceneProcessorNode(): NodeDefinition {
       return {
         cmd: { action: 'visualSceneBackCamera', payload: { enabled } },
       };
+    },
+  };
+}
+
+function createSceneBoxNode(): NodeDefinition {
+  const coerceSceneChain = (raw: unknown): VisualSceneLayerItem[] =>
+    (Array.isArray(raw) ? raw : []).filter(
+      (v): v is VisualSceneLayerItem =>
+        Boolean(v) && typeof v === 'object' && typeof (v as any).type === 'string'
+    );
+
+  return {
+    type: 'scene-box',
+    label: 'Scene Box',
+    category: 'Scene',
+    inputs: [{ id: 'in', label: 'In', type: 'scene' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'scene' }],
+    configSchema: [],
+    process: (inputs) => {
+      const chain = coerceSceneChain(inputs.in);
+      const scene: VisualSceneLayerItem = { type: 'box' };
+      return { out: [...chain, scene] };
+    },
+  };
+}
+
+function createSceneMelNode(): NodeDefinition {
+  const coerceSceneChain = (raw: unknown): VisualSceneLayerItem[] =>
+    (Array.isArray(raw) ? raw : []).filter(
+      (v): v is VisualSceneLayerItem =>
+        Boolean(v) && typeof v === 'object' && typeof (v as any).type === 'string'
+    );
+
+  return {
+    type: 'scene-mel',
+    label: 'Scene Mel Spectrogram',
+    category: 'Scene',
+    inputs: [{ id: 'in', label: 'In', type: 'scene' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'scene' }],
+    configSchema: [],
+    process: (inputs) => {
+      const chain = coerceSceneChain(inputs.in);
+      const scene: VisualSceneLayerItem = { type: 'mel' };
+      return { out: [...chain, scene] };
+    },
+  };
+}
+
+function createSceneFrontCameraNode(): NodeDefinition {
+  const coerceSceneChain = (raw: unknown): VisualSceneLayerItem[] =>
+    (Array.isArray(raw) ? raw : []).filter(
+      (v): v is VisualSceneLayerItem =>
+        Boolean(v) && typeof v === 'object' && typeof (v as any).type === 'string'
+    );
+
+  return {
+    type: 'scene-front-camera',
+    label: 'Scene Front Camera',
+    category: 'Scene',
+    inputs: [{ id: 'in', label: 'In', type: 'scene' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'scene' }],
+    configSchema: [],
+    process: (inputs) => {
+      const chain = coerceSceneChain(inputs.in);
+      const scene: VisualSceneLayerItem = { type: 'frontCamera' };
+      return { out: [...chain, scene] };
+    },
+  };
+}
+
+function createSceneBackCameraNode(): NodeDefinition {
+  const coerceSceneChain = (raw: unknown): VisualSceneLayerItem[] =>
+    (Array.isArray(raw) ? raw : []).filter(
+      (v): v is VisualSceneLayerItem =>
+        Boolean(v) && typeof v === 'object' && typeof (v as any).type === 'string'
+    );
+
+  return {
+    type: 'scene-back-camera',
+    label: 'Scene Back Camera',
+    category: 'Scene',
+    inputs: [{ id: 'in', label: 'In', type: 'scene' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'scene' }],
+    configSchema: [],
+    process: (inputs) => {
+      const chain = coerceSceneChain(inputs.in);
+      const scene: VisualSceneLayerItem = { type: 'backCamera' };
+      return { out: [...chain, scene] };
     },
   };
 }
