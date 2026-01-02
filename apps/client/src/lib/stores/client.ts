@@ -1757,7 +1757,19 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
  * Handle plugin control messages
  */
 function handlePluginControlMessage(message: PluginControlMessage): void {
-  console.log('[Client] Plugin control:', message.pluginId, message.command);
+  // Calculate and log message size
+  try {
+    const messageJson = JSON.stringify(message);
+    const messageSizeBytes = new Blob([messageJson]).size;
+    const messageSizeKB = (messageSizeBytes / 1024).toFixed(2);
+    
+    console.log(
+      `[Plugin] ${message.pluginId} ${message.command} | Size: ${messageSizeBytes} bytes (${messageSizeKB} KB)`
+    );
+  } catch (err) {
+    console.log('[Client] Plugin control:', message.pluginId, message.command);
+  }
+  
   if (message.pluginId === 'node-executor') {
     nodeExecutor?.handlePluginControl(message);
     return;
