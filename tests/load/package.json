@@ -1,0 +1,22 @@
+{
+  "name": "@shugu/load-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Load testing suite for ShuGu server",
+  "scripts": {
+    "test:all": "tsx run-all.ts",
+    "test:connection": "tsx 1-connection-test.ts",
+    "test:broadcast": "tsx 2-broadcast-test.ts",
+    "test:push-image": "tsx 3-push-image-test.ts"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.2",
+    "@shugu/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}
