@@ -52,8 +52,13 @@ export class EventsGateway
         console.log('[Gateway] WebSocket server initialized');
 
         // Try to connect to Redis for better broadcast performance
+        // Set DISABLE_REDIS_ADAPTER=1 to compare performance with/without Redis
         const redisUrl = process.env.REDIS_URL;
-        if (redisUrl) {
+        const disableRedis = process.env.DISABLE_REDIS_ADAPTER === '1';
+        
+        if (disableRedis) {
+            console.log('[Gateway] Redis adapter disabled via DISABLE_REDIS_ADAPTER=1');
+        } else if (redisUrl) {
             try {
                 console.log('[Gateway] Connecting to Redis adapter...');
                 

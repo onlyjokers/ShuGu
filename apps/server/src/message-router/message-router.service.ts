@@ -119,9 +119,40 @@ export class MessageRouterService {
 
     /**
      * Route sensor data from client to managers
-     * Only send detailed data from selected clients
+     * Filter out high-frequency sensor data to reduce Redis/network overhead.
+     * Keep important system messages like Push Image uploads and readiness signals.
      */
     private routeSensorDataMessage(message: SensorDataMessage): void {
+        const sensorType = message.sensorType;
+        
+        // Block high-frequency sensor data that causes network congestion
+        // Allowed types: 'gyro' | 'accel' | 'orientation' | 'mic' | 'camera' | 'custom'
+        if (sensorType === 'mic' || sensorType === 'gyro' || sensorType === 'accel' || sensorType === 'orientation') {
+            // Drop these - they're too frequent and not critical
+            return;
+        }
+        
+        // For 'custom' sensor type, allow only important system messages
+        if (sensorType === 'custom') {
+            const payload = message.payload as Record<string, unknown> | undefined;
+            const kind = payload?.kind;
+            
+            // Allowlist: only these custom kinds are forwarded
+            const allowedKinds = [
+                'client-screenshot',    // Push Image upload - MUST keep
+                'multimedia-core',      // Asset preload status
+                'tone',                 // Tone.js readiness
+                'node-media',           // Media playback events
+                'display',              // Display readiness
+            ];
+            
+            if (typeof kind !== 'string' || !allowedKinds.includes(kind)) {
+                // Unknown or high-frequency custom data - drop it
+                return;
+            }
+        }
+        
+        // Forward allowed sensor data to managers
         const managerSocketIds = this.clientRegistry.getAllManagerSocketIds();
         this.emitToSockets(managerSocketIds, message);
     }
