@@ -60,6 +60,7 @@ function capabilityForNodeType(type: string | undefined): string | null {
   if (type === 'load-video-from-local') return 'visual';
   if (type === 'image-out') return 'visual';
   if (type === 'video-out') return 'visual';
+  if (type === 'effect-out') return 'visual';
   return null;
 }
 
@@ -305,7 +306,9 @@ class NodeEngineClass {
     return changed ? { ...state, nodes: nextNodes } : state;
   }
 
-  private countSinkConnectionsByNodeId(state: Pick<GraphState, 'nodes' | 'connections'>): Map<string, number> {
+  private countSinkConnectionsByNodeId(
+    state: Pick<GraphState, 'nodes' | 'connections'>
+  ): Map<string, number> {
     const nodes = Array.isArray(state.nodes) ? state.nodes : [];
     const connections = Array.isArray(state.connections) ? state.connections : [];
 
@@ -365,7 +368,11 @@ class NodeEngineClass {
     }
   }
 
-  private cleanupGraphTransition(prev: GraphState, next: GraphState, opts?: { reason?: string }): void {
+  private cleanupGraphTransition(
+    prev: GraphState,
+    next: GraphState,
+    opts?: { reason?: string }
+  ): void {
     const prevNodes = Array.isArray(prev.nodes) ? prev.nodes : [];
     const nextNodes = Array.isArray(next.nodes) ? next.nodes : [];
     const prevNodeIds = new Set(prevNodes.map((node) => String(node.id)));
@@ -494,7 +501,7 @@ class NodeEngineClass {
       const typeById = new Map(nodes.map((n) => [String(n.id), String(n.type)]));
 
       const patchRoots = nodes.filter((n) =>
-        ['audio-out', 'image-out', 'video-out'].includes(String(n.type))
+        ['audio-out', 'image-out', 'video-out', 'effect-out'].includes(String(n.type))
       );
       if (patchRoots.length === 0) return null;
 
@@ -1064,7 +1071,7 @@ class NodeEngineClass {
     const ids = Array.from(new Set((rootNodeIds ?? []).map(String).filter(Boolean))).sort();
     if (ids.length === 0) throw new Error('No patch root ids provided.');
 
-    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out']);
+    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out', 'effect-out']);
     const nodeById = new Map((snapshot.nodes ?? []).map((n) => [String(n.id), n]));
     const roots = ids.map((id) => {
       const node = nodeById.get(String(id)) ?? null;
@@ -1116,6 +1123,9 @@ class NodeEngineClass {
       'img-fit',
       'img-xy-offset',
       'img-transparency',
+      // Visual effects chain
+      'effect-ascii',
+      'effect-convolution',
       'tone-osc',
       'tone-delay',
       'tone-resonator',
@@ -1129,6 +1139,7 @@ class NodeEngineClass {
       'audio-out',
       'image-out',
       'video-out',
+      'effect-out',
     ]);
 
     for (const n of patch.graph.nodes) {
@@ -1139,7 +1150,9 @@ class NodeEngineClass {
             ? 'Client is manager-only; screenshots/images must be routed via commands (e.g. Client.Image Out → Show Image → Display), not deployed as a patch.'
             : '';
         throw new Error(
-          hint ? `Patch contains non-deployable node type: ${type}. ${hint}` : `Patch contains non-deployable node type: ${type}`
+          hint
+            ? `Patch contains non-deployable node type: ${type}. ${hint}`
+            : `Patch contains non-deployable node type: ${type}`
         );
       }
     }
@@ -1188,7 +1201,7 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
-    const patchRootTypes = ['audio-out', 'image-out', 'video-out'] as const;
+    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out'] as const;
     const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
     if (roots.length === 0) {
       throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);

@@ -17,7 +17,12 @@ import {
   type ClientSDKConfig,
   type ClientIdentity,
 } from '@shugu/sdk-client';
-import { MultimediaCore, toneAudioEngine, type MediaEngineState, type MediaFit } from '@shugu/multimedia-core';
+import {
+  MultimediaCore,
+  toneAudioEngine,
+  type MediaEngineState,
+  type MediaFit,
+} from '@shugu/multimedia-core';
 import type {
   ControlMessage,
   PluginControlMessage,
@@ -37,6 +42,8 @@ import type {
   VisualSceneFrontCameraPayload,
   VisualSceneBackCameraPayload,
   ConvolutionPayload,
+  VisualEffect,
+  VisualEffectsPayload,
 } from '@shugu/protocol';
 
 // SDK and controller instances
@@ -134,6 +141,118 @@ export const convolution = writable<ConvolutionState>({
   normalize: true,
   scale: 0.5,
 });
+
+// Visual post-processing chain applied on top of the visual layer (first -> last).
+// Default keeps the legacy behavior (ASCII on by default).
+export const visualEffects = writable<VisualEffect[]>([{ type: 'ascii', cellSize: 11 }]);
+
+function buildLegacyVisualEffects(): VisualEffect[] {
+  const effects: VisualEffect[] = [];
+
+  const conv = get(convolution);
+  if (conv?.enabled) {
+    effects.push({
+      type: 'convolution',
+      preset: conv.preset,
+      ...(Array.isArray(conv.kernel) && conv.kernel.length === 9 ? { kernel: conv.kernel } : {}),
+      mix: conv.mix,
+      bias: conv.bias,
+      normalize: conv.normalize,
+      scale: conv.scale,
+    });
+  }
+
+  const asciiOn = Boolean(get(asciiEnabled));
+  if (asciiOn) {
+    effects.push({
+      type: 'ascii',
+      cellSize: clampNumber(get(asciiResolution), 11, 1, 100),
+    });
+  }
+
+  return effects;
+}
+
+function syncLegacyVisualEffects(): void {
+  visualEffects.set(buildLegacyVisualEffects());
+}
+
+function normalizeVisualEffectsPayload(payload: unknown): VisualEffect[] {
+  const raw = payload && typeof payload === 'object' ? (payload as any).effects : null;
+  if (!Array.isArray(raw)) return [];
+  const limited = raw.slice(0, 12);
+  const out: VisualEffect[] = [];
+
+  for (const item of limited) {
+    if (!item || typeof item !== 'object') continue;
+    const type = typeof (item as any).type === 'string' ? String((item as any).type) : '';
+    if (type === 'ascii') {
+      const cellSize = clampNumber((item as any).cellSize, 11, 1, 100);
+      out.push({ type: 'ascii', cellSize: Math.round(cellSize) });
+      continue;
+    }
+    if (type === 'convolution') {
+      const preset =
+        typeof (item as any).preset === 'string' ? String((item as any).preset) : undefined;
+      const kernel = Array.isArray((item as any).kernel)
+        ? (item as any).kernel
+            .map((n: unknown) => (typeof n === 'number' ? n : Number(n)))
+            .filter((n: number) => Number.isFinite(n))
+            .slice(0, 9)
+        : undefined;
+
+      out.push({
+        type: 'convolution',
+        ...(preset ? { preset: preset as any } : {}),
+        ...(kernel && kernel.length === 9 ? { kernel } : {}),
+        mix: clampNumber((item as any).mix, 1, 0, 1),
+        bias: clampNumber((item as any).bias, 0, -1, 1),
+        normalize: typeof (item as any).normalize === 'boolean' ? (item as any).normalize : true,
+        scale: clampNumber((item as any).scale, 0.5, 0.1, 1),
+      });
+    }
+  }
+
+  return out;
+}
+
+function syncVisualEffectsToLegacyStores(effects: VisualEffect[]): void {
+  const list = Array.isArray(effects) ? effects : [];
+  const firstAscii = list.find((e) => e.type === 'ascii') as
+    | Extract<VisualEffect, { type: 'ascii' }>
+    | undefined;
+  const firstConv = list.find((e) => e.type === 'convolution') as
+    | Extract<VisualEffect, { type: 'convolution' }>
+    | undefined;
+
+  asciiEnabled.set(Boolean(firstAscii));
+  if (firstAscii) {
+    asciiResolution.set(clampNumber(firstAscii.cellSize, 11, 1, 100));
+  }
+
+  convolution.update((prev) => {
+    const next: ConvolutionState = { ...prev, enabled: Boolean(firstConv) };
+    if (!firstConv) return next;
+
+    if (typeof firstConv.preset === 'string') {
+      next.preset = firstConv.preset as ConvolutionPreset;
+    }
+
+    if (Array.isArray(firstConv.kernel) && firstConv.kernel.length === 9) {
+      next.kernel = firstConv.kernel.slice(0, 9);
+    } else {
+      next.kernel = null;
+    }
+
+    next.mix = clampNumber(firstConv.mix, next.mix, 0, 1);
+    next.bias = clampNumber(firstConv.bias, next.bias, -1, 1);
+    next.normalize =
+      typeof firstConv.normalize === 'boolean' ? firstConv.normalize : next.normalize;
+    next.scale = clampNumber(firstConv.scale, next.scale, 0.1, 1);
+
+    return next;
+  });
+}
 
 // Audio stream for plugins
 export const audioStream = writable<MediaStream | null>(null);
@@ -271,7 +390,9 @@ function parseMediaClipParams(raw: string): MediaClipParams {
 
   const cursorParsed = cursorRaw === null ? null : toNumber(cursorRaw, -1);
   const cursorSec =
-    cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0 ? cursorParsed : null;
+    cursorParsed !== null && Number.isFinite(cursorParsed) && cursorParsed >= 0
+      ? cursorParsed
+      : null;
 
   const fit = (() => {
     if (fitRaw === null) return null;
@@ -448,7 +569,9 @@ export function startEarlyPreload(serverUrl: string): void {
   if (multimediaCore) return; // Already initialized
 
   const assetReadToken =
-    typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
+    typeof window !== 'undefined'
+      ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY)
+      : null;
 
   multimediaCore = new MultimediaCore({
     serverUrl,
@@ -529,7 +652,9 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
   // Reuse existing instance if startEarlyPreload was called.
   if (!multimediaCore) {
     const assetReadToken =
-      typeof window !== 'undefined' ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY) : null;
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem(ASSET_READ_TOKEN_STORAGE_KEY)
+        : null;
     multimediaCore = new MultimediaCore({
       serverUrl: config.serverUrl,
       assetReadToken,
@@ -565,7 +690,8 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
     };
     const signature = JSON.stringify(payload);
     try {
-      const connected = Boolean(sdk?.getState?.().clientId) && sdk?.getState?.().status === 'connected';
+      const connected =
+        Boolean(sdk?.getState?.().clientId) && sdk?.getState?.().status === 'connected';
       // Don't "consume" the state signature until we are actually able to send it.
       if (!connected) return;
 
@@ -603,8 +729,7 @@ export function initialize(config: ClientSDKConfig, options?: { autoConnect?: bo
         return true;
       },
       resolveAssetRef: (ref: string) => multimediaCore?.resolveAssetRef(ref) ?? ref,
-      prioritizeFetch: (url: string) =>
-        multimediaCore?.prioritizeFetch(url) ?? fetch(url),
+      prioritizeFetch: (url: string) => multimediaCore?.prioritizeFetch(url) ?? fetch(url),
     }
   );
 
@@ -796,7 +921,16 @@ function getFittedDrawParams(
   dstW: number,
   dstH: number,
   fit: MediaFit
-): { sx: number; sy: number; sw: number; sh: number; dx: number; dy: number; dw: number; dh: number } {
+): {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+} {
   if (fit === 'fill') {
     return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx: 0, dy: 0, dw: dstW, dh: dstH };
   }
@@ -811,7 +945,9 @@ function getFittedDrawParams(
   }
 
   const scale =
-    fit === 'fit-screen' ? Math.min(dstW / srcW, dstH / srcH) : Math.min(1, dstW / srcW, dstH / srcH);
+    fit === 'fit-screen'
+      ? Math.min(dstW / srcW, dstH / srcH)
+      : Math.min(1, dstW / srcW, dstH / srcH);
   const dw = srcW * scale;
   const dh = srcH * scale;
   const dx = (dstW - dw) / 2;
@@ -824,7 +960,16 @@ async function captureScreenshotDataUrl(opts: {
   quality: number;
   maxWidth: number;
 }): Promise<
-  | { ok: true; shot: { dataUrl: string; mime: ScreenshotFormat; width: number; height: number; createdAt: number } }
+  | {
+      ok: true;
+      shot: {
+        dataUrl: string;
+        mime: ScreenshotFormat;
+        width: number;
+        height: number;
+        createdAt: number;
+      };
+    }
   | { ok: false; reason: string }
 > {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -853,17 +998,12 @@ async function captureScreenshotDataUrl(opts: {
   ctx.fillStyle = '#0a0a0f';
   ctx.fillRect(0, 0, outW, outH);
 
-  const convEnabled = Boolean(get(convolution)?.enabled);
-  const asciiOn = Boolean(get(asciiEnabled));
-  // Priority: ASCII overlay > Convolution overlay, matching VisualCanvas visibility logic.
-  // When both are enabled, ASCII canvas is visible (using convolution output as its source).
-  const overlay = (() => {
-    if (asciiOn) return container.querySelector('canvas.ascii-overlay') as HTMLCanvasElement | null;
-    if (convEnabled) return container.querySelector('canvas.convolution-overlay') as HTMLCanvasElement | null;
-    return null;
-  })();
+  const effectsActive = (get(visualEffects) ?? []).length > 0;
+  const overlay = effectsActive
+    ? (container.querySelector('canvas.effect-output') as HTMLCanvasElement | null)
+    : null;
 
-  // If a full-frame overlay is active, it already represents what the user sees (ASCII / convolution).
+  // If a full-frame overlay is active, it already represents what the user sees (effect pipeline).
   if (overlay && overlay.width > 0 && overlay.height > 0) {
     ctx.drawImage(overlay, 0, 0, outW, outH);
   } else {
@@ -904,7 +1044,23 @@ async function captureScreenshotDataUrl(opts: {
 
         const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
         try {
-          ctx.drawImage(img, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+          const stateNow = get(imageState);
+          const imgScale = clampNumber(stateNow.scale, 1, 0.1, 10);
+          const offsetX = clampNumber(stateNow.offsetX, 0, -10_000, 10_000) * scale;
+          const offsetY = clampNumber(stateNow.offsetY, 0, -10_000, 10_000) * scale;
+          const opacity = clampNumber(stateNow.opacity, 1, 0, 1);
+
+          const centerX = padding + dx + dw / 2;
+          const centerY = padding + dy + dh / 2;
+          const scaledW = dw * imgScale;
+          const scaledH = dh * imgScale;
+          const drawX = centerX - scaledW / 2 + offsetX;
+          const drawY = centerY - scaledH / 2 + offsetY;
+
+          ctx.save();
+          ctx.globalAlpha = opacity;
+          ctx.drawImage(img, sx, sy, sw, sh, drawX, drawY, scaledW, scaledH);
+          ctx.restore();
           return true;
         } catch {
           return false;
@@ -912,16 +1068,29 @@ async function captureScreenshotDataUrl(opts: {
       }
 
       // Camera video stream
-      const cameraVideo = container.querySelector('video.camera-display') as HTMLVideoElement | null;
+      const cameraVideo = container.querySelector(
+        'video.camera-display'
+      ) as HTMLVideoElement | null;
       const camStream = get(cameraStream);
       const frontEnabled = get(frontCameraEnabled);
       const backEnabled = get(backCameraEnabled);
-      if (cameraVideo && camStream && (frontEnabled || backEnabled) && cameraVideo.readyState >= 2) {
+      if (
+        cameraVideo &&
+        camStream &&
+        (frontEnabled || backEnabled) &&
+        cameraVideo.readyState >= 2
+      ) {
         const srcW = cameraVideo.videoWidth || 0;
         const srcH = cameraVideo.videoHeight || 0;
         if (srcW <= 0 || srcH <= 0) return false;
 
-        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, outW, outH, 'cover');
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
+          srcW,
+          srcH,
+          outW,
+          outH,
+          'cover'
+        );
         try {
           ctx.save();
           // Apply mirror transform for front camera
@@ -943,7 +1112,7 @@ async function captureScreenshotDataUrl(opts: {
     const drewMedia = drawMedia();
     if (!drewMedia) {
       const baseCanvas = Array.from(container.querySelectorAll('canvas')).find(
-        (c) => !c.classList.contains('ascii-overlay') && !c.classList.contains('convolution-overlay')
+        (c) => !c.classList.contains('effect-output')
       ) as HTMLCanvasElement | undefined;
       if (baseCanvas && baseCanvas.width > 0 && baseCanvas.height > 0) {
         try {
@@ -999,7 +1168,8 @@ async function handlePushImageUpload(payload: PushImageUploadPayload): Promise<v
       format,
       quality,
       maxWidth,
-      speed: typeof payload?.speed === 'number' && Number.isFinite(payload.speed) ? payload.speed : null,
+      speed:
+        typeof payload?.speed === 'number' && Number.isFinite(payload.speed) ? payload.speed : null,
     });
 
     const captured = await captureScreenshotDataUrl({ format, quality, maxWidth });
@@ -1043,7 +1213,9 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
   if (action === 'custom' && isControlBatchPayload(payload)) {
     const batch = payload as ControlBatchPayload;
     const batchExecuteAt =
-      typeof batch.executeAt === 'number' && Number.isFinite(batch.executeAt) ? batch.executeAt : executeAt;
+      typeof batch.executeAt === 'number' && Number.isFinite(batch.executeAt)
+        ? batch.executeAt
+        : executeAt;
 
     for (const raw of batch.items) {
       if (!raw || typeof raw !== 'object') continue;
@@ -1052,7 +1224,9 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
       const itemPayload = ((raw as any).payload ?? {}) as ControlPayload;
       const itemExecuteAtRaw = (raw as any).executeAt;
       const itemExecuteAt =
-        typeof itemExecuteAtRaw === 'number' && Number.isFinite(itemExecuteAtRaw) ? itemExecuteAtRaw : batchExecuteAt;
+        typeof itemExecuteAtRaw === 'number' && Number.isFinite(itemExecuteAtRaw)
+          ? itemExecuteAtRaw
+          : batchExecuteAt;
       executeControl(itemAction, itemPayload, itemExecuteAt);
     }
     return;
@@ -1097,8 +1271,7 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           waveform: (payload as ModulateSoundPayload).waveform,
           modFrequency: (payload as ModulateSoundPayload).modFrequency,
           modDepth: (payload as ModulateSoundPayload).modDepth,
-          durationMs:
-            (payload as any).durationMs ?? (payload as ModulateSoundPayload).duration,
+          durationMs: (payload as any).durationMs ?? (payload as ModulateSoundPayload).duration,
         });
         break;
 
@@ -1106,7 +1279,9 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         {
           const soundPayload = payload as PlaySoundPayload;
           const url =
-            typeof soundPayload.url === 'string' ? multimediaCore?.resolveAssetRef(soundPayload.url) ?? soundPayload.url : soundPayload.url;
+            typeof soundPayload.url === 'string'
+              ? (multimediaCore?.resolveAssetRef(soundPayload.url) ?? soundPayload.url)
+              : soundPayload.url;
           // Always go through ToneSoundPlayer; it has an internal HTMLAudio fallback path.
           toneSoundPlayer?.play({ ...soundPayload, url }, delaySeconds);
         }
@@ -1119,12 +1294,14 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
         const baseUrl = clip ? clip.baseUrl : mediaPayload.url;
         const resolvedUrl =
           typeof baseUrl === 'string'
-            ? multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl
+            ? (multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl)
             : baseUrl;
         // Check if it's a video by extension or explicit type
-        const resolvedUrlString = typeof resolvedUrl === 'string' ? resolvedUrl : String(resolvedUrl ?? '');
+        const resolvedUrlString =
+          typeof resolvedUrl === 'string' ? resolvedUrl : String(resolvedUrl ?? '');
         const isVideo =
-          mediaPayload.mediaType === 'video' || /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
+          mediaPayload.mediaType === 'video' ||
+          /\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(resolvedUrlString);
 
         if (isVideo) {
           const loop = clip?.loop ?? mediaPayload.loop ?? false;
@@ -1182,7 +1359,9 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
           typeof imagePayload.url === 'string' ? parseMediaClipParams(imagePayload.url) : null;
         const baseUrl = clip ? clip.baseUrl : imagePayload.url;
         const url =
-          typeof baseUrl === 'string' ? multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl : baseUrl;
+          typeof baseUrl === 'string'
+            ? (multimediaCore?.resolveAssetRef(baseUrl) ?? baseUrl)
+            : baseUrl;
         const fit = clip?.fit ?? null;
         const scale = clip?.scale ?? null;
         const offsetX = clip?.offsetX ?? null;
@@ -1291,10 +1470,20 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
       case 'asciiMode':
         asciiEnabled.set((payload as { enabled: boolean }).enabled);
+        syncLegacyVisualEffects();
         break;
 
       case 'asciiResolution':
         asciiResolution.set((payload as { cellSize: number }).cellSize);
+        syncLegacyVisualEffects();
+        break;
+
+      case 'visualEffects':
+        {
+          const effects = normalizeVisualEffectsPayload(payload as VisualEffectsPayload);
+          visualEffects.set(effects);
+          syncVisualEffectsToLegacyStores(effects);
+        }
         break;
 
       case 'convolution':
@@ -1319,7 +1508,8 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
             }
 
             const presetCandidate =
-              typeof convPayload.preset === 'string' && allowed.includes(convPayload.preset as ConvolutionPreset)
+              typeof convPayload.preset === 'string' &&
+              allowed.includes(convPayload.preset as ConvolutionPreset)
                 ? (convPayload.preset as ConvolutionPreset)
                 : null;
 
@@ -1356,6 +1546,8 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
 
             return next;
           });
+
+          syncLegacyVisualEffects();
         }
         break;
 
@@ -1367,8 +1559,14 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
               seq: typeof raw.seq === 'number' && Number.isFinite(raw.seq) ? raw.seq : null,
               speed: typeof raw.speed === 'number' && Number.isFinite(raw.speed) ? raw.speed : null,
               format: typeof raw.format === 'string' ? raw.format : null,
-              quality: typeof raw.quality === 'number' && Number.isFinite(raw.quality) ? raw.quality : null,
-              maxWidth: typeof raw.maxWidth === 'number' && Number.isFinite(raw.maxWidth) ? raw.maxWidth : null,
+              quality:
+                typeof raw.quality === 'number' && Number.isFinite(raw.quality)
+                  ? raw.quality
+                  : null,
+              maxWidth:
+                typeof raw.maxWidth === 'number' && Number.isFinite(raw.maxWidth)
+                  ? raw.maxWidth
+                  : null,
             });
             void handlePushImageUpload(raw as PushImageUploadPayload);
             break;
@@ -1387,13 +1585,14 @@ function executeControl(action: ControlAction, payload: ControlPayload, executeA
     const shouldUseAudioScheduling =
       action === 'modulateSound' ||
       action === 'playSound' ||
-      (action === 'playMedia' && (() => {
-        const mediaType = (payload as any)?.mediaType;
-        if (mediaType === 'video') return false;
-        const rawUrl = (payload as any)?.url;
-        const url = typeof rawUrl === 'string' ? rawUrl : String(rawUrl ?? '');
-        return !/\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(url);
-      })());
+      (action === 'playMedia' &&
+        (() => {
+          const mediaType = (payload as any)?.mediaType;
+          if (mediaType === 'video') return false;
+          const rawUrl = (payload as any)?.url;
+          const url = typeof rawUrl === 'string' ? rawUrl : String(rawUrl ?? '');
+          return !/\.(mp4|webm|mov|avi|mkv|m4v)$/i.test(url);
+        })());
 
     if (shouldUseAudioScheduling) {
       const delayMs = sdk.getDelayUntil(executeAt);
@@ -1430,7 +1629,9 @@ function handlePluginControlMessage(message: PluginControlMessage): void {
     const manifestId = typeof payload.manifestId === 'string' ? payload.manifestId : '';
     const assets = Array.isArray(payload.assets) ? payload.assets.map(String) : [];
     const updatedAt =
-      typeof payload.updatedAt === 'number' && Number.isFinite(payload.updatedAt) ? payload.updatedAt : undefined;
+      typeof payload.updatedAt === 'number' && Number.isFinite(payload.updatedAt)
+        ? payload.updatedAt
+        : undefined;
     if (!manifestId) return;
     multimediaCore?.setAssetManifest({ manifestId, assets, updatedAt });
     return;

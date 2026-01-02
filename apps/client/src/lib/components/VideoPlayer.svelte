@@ -192,7 +192,8 @@
       const { start, end } = getRange();
       const hasEnd = typeof end === 'number' && Number.isFinite(end) && end > start;
       const endValue = hasEnd ? end! : null;
-      const epsilon = 0.03;
+      // Looser epsilon to avoid missing Finish due to tiny clock/float drift.
+      const epsilon = 0.1;
 
       if (reverse) {
         // Manual reverse stepping: keep video paused and move `currentTime` backwards.
@@ -219,7 +220,6 @@
             } catch {
               // ignore
             }
-            visible = false;
             handleFinish();
             stopRaf();
           }
@@ -240,7 +240,6 @@
           } catch {
             // ignore
           }
-          visible = false;
           handleFinish();
           stopRaf();
         }
@@ -284,7 +283,6 @@
 
   function handleNativeEnded(): void {
     if (loop) return;
-    visible = false;
     stopRaf();
     handleFinish();
   }
@@ -368,7 +366,7 @@
       if (playRising && cursor === null) {
         const { start, end } = getRange();
         const endValue = typeof end === 'number' && Number.isFinite(end) ? end : null;
-        const epsilon = 0.03;
+        const epsilon = 0.1;
 
         if (reverse) {
           const desiredEnd = endValue ?? durationSec ?? start;
@@ -449,7 +447,7 @@
   .video-overlay {
     position: fixed;
     inset: 0;
-    z-index: 0; /* Below ASCII overlay so ASCII can cover */
+    z-index: 0; /* Below effect output so post-processing can cover */
     display: flex;
     align-items: center;
     justify-content: center;

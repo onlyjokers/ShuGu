@@ -245,11 +245,14 @@ export function registerDefaultNodeDefinitions(registry, deps) {
     registry.register(createAudioOutNode());
     registry.register(createImageOutNode(deps));
     registry.register(createVideoOutNode(deps));
+    registry.register(createEffectOutNode(deps));
     registry.register(createFlashlightProcessorNode());
     registry.register(createShowImageProcessorNode());
     registry.register(createPushImageUploadNode());
     registry.register(createScreenColorProcessorNode());
     registry.register(createSynthUpdateProcessorNode());
+    registry.register(createEffectConvolutionNode());
+    registry.register(createEffectAsciiNode());
     registry.register(createAsciiEffectProcessorNode());
     registry.register(createConvolutionEffectProcessorNode());
     registry.register(createBoxSceneProcessorNode());
@@ -284,9 +287,7 @@ function createArrayFilterNode() {
             { id: 'a', label: 'A', type: 'array' },
             { id: 'b', label: 'B', type: 'array' },
         ],
-        outputs: [
-            { id: 'difference', label: 'Difference', type: 'array' },
-        ],
+        outputs: [{ id: 'difference', label: 'Difference', type: 'array' }],
         configSchema: [],
         process: (inputs) => {
             const a = Array.isArray(inputs.a) ? inputs.a : [];
@@ -329,9 +330,33 @@ function createAudioDataNode() {
                     { value: '8192', label: '8192' },
                 ],
             },
-            { key: 'smoothing', label: 'Smoothing', type: 'number', defaultValue: 0.2, min: 0, max: 0.99, step: 0.01 },
-            { key: 'lowCutoffHz', label: 'Low Cutoff (Hz)', type: 'number', defaultValue: 300, min: 20, max: 20000, step: 10 },
-            { key: 'highCutoffHz', label: 'High Cutoff (Hz)', type: 'number', defaultValue: 3000, min: 20, max: 20000, step: 10 },
+            {
+                key: 'smoothing',
+                label: 'Smoothing',
+                type: 'number',
+                defaultValue: 0.2,
+                min: 0,
+                max: 0.99,
+                step: 0.01,
+            },
+            {
+                key: 'lowCutoffHz',
+                label: 'Low Cutoff (Hz)',
+                type: 'number',
+                defaultValue: 300,
+                min: 20,
+                max: 20000,
+                step: 10,
+            },
+            {
+                key: 'highCutoffHz',
+                label: 'High Cutoff (Hz)',
+                type: 'number',
+                defaultValue: 3000,
+                min: 20,
+                max: 20000,
+                step: 10,
+            },
             { key: 'detectBPM', label: 'Detect BPM', type: 'boolean', defaultValue: true },
         ],
         process: (inputs) => ({
@@ -489,7 +514,15 @@ function createLoadAudioFromAssetsNode() {
             },
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-            { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+            {
+                key: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             {
                 key: 'timeline',
                 label: 'Timeline',
@@ -585,7 +618,15 @@ function createLoadAudioFromLocalNode() {
             },
             { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
             { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-            { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+            {
+                key: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             {
                 key: 'timeline',
                 label: 'Timeline',
@@ -707,11 +748,27 @@ function createImgScaleNode() {
         category: 'Image',
         inputs: [
             { id: 'in', label: 'In', type: 'image' },
-            { id: 'scale', label: 'Scale', type: 'number', defaultValue: 1, min: 0.1, max: 10, step: 0.1 },
+            {
+                id: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 1,
+                min: 0.1,
+                max: 10,
+                step: 0.1,
+            },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'image' }],
         configSchema: [
-            { key: 'scale', label: 'Scale', type: 'number', defaultValue: 1, min: 0.1, max: 10, step: 0.1 },
+            {
+                key: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 1,
+                min: 0.1,
+                max: 10,
+                step: 0.1,
+            },
         ],
         process: (inputs, config) => {
             const inRef = typeof inputs.in === 'string' ? inputs.in.trim() : '';
@@ -791,11 +848,27 @@ function createImgTransparencyNode() {
         category: 'Image',
         inputs: [
             { id: 'in', label: 'In', type: 'image' },
-            { id: 'opacity', label: 'Opacity', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            {
+                id: 'opacity',
+                label: 'Opacity',
+                type: 'number',
+                defaultValue: 1,
+                min: 0,
+                max: 1,
+                step: 0.01,
+            },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'image' }],
         configSchema: [
-            { key: 'opacity', label: 'Opacity', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            {
+                key: 'opacity',
+                label: 'Opacity',
+                type: 'number',
+                defaultValue: 1,
+                min: 0,
+                max: 1,
+                step: 0.01,
+            },
         ],
         process: (inputs, config) => {
             const inRef = typeof inputs.in === 'string' ? inputs.in.trim() : '';
@@ -827,7 +900,15 @@ function createLoadVideoFromAssetsNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+            {
+                id: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
         ],
         outputs: [
@@ -893,7 +974,9 @@ function createLoadVideoFromAssetsNode() {
                     : cursorClamped
                 : null;
             const positionParam = cursorForPlayback !== null ? `&p=${cursorForPlayback}` : '';
-            const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+            const nodeParam = context?.nodeId
+                ? `&node=${encodeURIComponent(String(context.nodeId))}`
+                : '';
             const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
             const refBase = assetId
                 ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeGain}&muted=${mutedEffective ? 1 : 0}${positionParam}${nodeParam}`
@@ -957,7 +1040,12 @@ function createLoadVideoFromAssetsNode() {
             }
             state.lastPlay = playActive;
             loadVideoTimelineState.set(context.nodeId, state);
-            const ended = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+            const ended = (() => {
+                if (loop || durationMs === null)
+                    return false;
+                const finishThresholdMs = Math.max(0, durationMs - 100);
+                return state.accumulatedMs >= finishThresholdMs;
+            })();
             return { ref: refWithFit, ended };
         },
         onDisable: (_inputs, _config, context) => {
@@ -986,7 +1074,15 @@ function createLoadVideoFromLocalNode() {
             { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
             { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
             { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-            { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+            {
+                id: 'volume',
+                label: 'Volume',
+                type: 'number',
+                defaultValue: 0,
+                min: -1,
+                max: 100,
+                step: 0.01,
+            },
             { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
         ],
         outputs: [
@@ -1057,7 +1153,9 @@ function createLoadVideoFromLocalNode() {
                     : cursorClamped
                 : null;
             const positionParam = cursorForPlayback !== null ? `&p=${cursorForPlayback}` : '';
-            const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+            const nodeParam = context?.nodeId
+                ? `&node=${encodeURIComponent(String(context.nodeId))}`
+                : '';
             const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
             const baseUrl = (() => {
                 if (!localRef)
@@ -1127,7 +1225,12 @@ function createLoadVideoFromLocalNode() {
             }
             state.lastPlay = playActive;
             loadVideoTimelineState.set(context.nodeId, state);
-            const ended = !loop && durationMs !== null && state.accumulatedMs >= durationMs;
+            const ended = (() => {
+                if (loop || durationMs === null)
+                    return false;
+                const finishThresholdMs = Math.max(0, durationMs - 100);
+                return state.accumulatedMs >= finishThresholdMs;
+            })();
             return { ref: refWithFit, ended };
         },
         onDisable: (_inputs, _config, context) => {
@@ -1302,6 +1405,72 @@ function createVideoOutNode(deps) {
         },
     };
 }
+function createEffectOutNode(deps) {
+    const clear = () => {
+        const payload = { effects: [] };
+        deps.executeCommand({ action: 'visualEffects', payload });
+    };
+    const coerceEffectChain = (raw) => {
+        if (!Array.isArray(raw))
+            return [];
+        const effects = [];
+        for (const item of raw) {
+            if (!item || typeof item !== 'object')
+                continue;
+            const type = typeof item.type === 'string' ? String(item.type) : '';
+            if (type === 'ascii') {
+                const cellSizeRaw = item.cellSize;
+                const cellSize = clampInt(cellSizeRaw, 11, 1, 100);
+                effects.push({ type: 'ascii', cellSize });
+                continue;
+            }
+            if (type === 'convolution') {
+                const preset = typeof item.preset === 'string' ? String(item.preset) : undefined;
+                const kernel = Array.isArray(item.kernel)
+                    ? item.kernel
+                        .map((n) => (typeof n === 'number' ? n : Number(n)))
+                        .filter((n) => Number.isFinite(n))
+                        .slice(0, 9)
+                    : undefined;
+                const mix = clampNumber(coerceNumber(item.mix, 1), 0, 1);
+                const bias = clampNumber(coerceNumber(item.bias, 0), -1, 1);
+                const normalize = coerceBooleanOr(item.normalize, true);
+                const scale = clampNumber(coerceNumber(item.scale, 0.5), 0.1, 1);
+                effects.push({
+                    type: 'convolution',
+                    ...(preset ? { preset: preset } : {}),
+                    ...(kernel && kernel.length === 9 ? { kernel } : {}),
+                    mix,
+                    bias,
+                    normalize,
+                    scale,
+                });
+            }
+        }
+        return effects;
+    };
+    return {
+        type: 'effect-out',
+        label: 'Effect Layer Player',
+        category: 'Player',
+        inputs: [{ id: 'in', label: 'In', type: 'effect', kind: 'sink' }],
+        outputs: [
+            // Manager-only routing: connect to `client-object(in)` to indicate patch target(s).
+            // This output is not part of the exported client patch subgraph.
+            { id: 'cmd', label: 'Deploy', type: 'command' },
+        ],
+        configSchema: [],
+        process: () => ({}),
+        onSink: (inputs) => {
+            const effects = coerceEffectChain(inputs.in);
+            const payload = { effects };
+            deps.executeCommand({ action: 'visualEffects', payload });
+        },
+        onDisable: () => {
+            clear();
+        },
+    };
+}
 function createClientObjectNode(deps) {
     return {
         type: 'client-object',
@@ -1325,7 +1494,9 @@ function createClientObjectNode(deps) {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
             const loadInds = inputs.loadIndexs;
-            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const loadedIds = Array.isArray(loadInds)
+                ? loadInds.map(String).filter((id) => available.includes(id))
+                : [];
             const selection = loadedIds.length > 0
                 ? { index: 1, selectedIds: loadedIds }
                 : selectClientIdsForNode(context.nodeId, available, {
@@ -1356,7 +1527,9 @@ function createClientObjectNode(deps) {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
             const loadInds = inputs.loadIndexs;
-            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const loadedIds = Array.isArray(loadInds)
+                ? loadInds.map(String).filter((id) => available.includes(id))
+                : [];
             const selection = loadedIds.length > 0
                 ? { index: 1, selectedIds: loadedIds }
                 : selectClientIdsForNode(context.nodeId, available, {
@@ -1402,7 +1575,9 @@ function createClientObjectNode(deps) {
             const configured = typeof config.clientId === 'string' ? String(config.clientId) : '';
             const available = deps.getAllClientIds?.() ?? [];
             const loadInds = inputs.loadIndexs;
-            const loadedIds = Array.isArray(loadInds) ? loadInds.map(String).filter((id) => available.includes(id)) : [];
+            const loadedIds = Array.isArray(loadInds)
+                ? loadInds.map(String).filter((id) => available.includes(id))
+                : [];
             const selection = loadedIds.length > 0
                 ? { index: 1, selectedIds: loadedIds }
                 : selectClientIdsForNode(context.nodeId, available, {
@@ -2233,13 +2408,27 @@ function createToneResonatorNode() {
         category: 'Audio',
         inputs: [
             { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-            { id: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6, min: 0, max: 0.9999 },
+            {
+                id: 'resonance',
+                label: 'Resonance',
+                type: 'number',
+                defaultValue: 0.6,
+                min: 0,
+                max: 0.9999,
+            },
             { id: 'dampening', label: 'Dampening', type: 'number', defaultValue: 3000 },
             { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
         ],
         outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
         configSchema: [
-            { key: 'resonance', label: 'Resonance', type: 'number', defaultValue: 0.6, min: 0, max: 0.9999 },
+            {
+                key: 'resonance',
+                label: 'Resonance',
+                type: 'number',
+                defaultValue: 0.6,
+                min: 0,
+                max: 0.9999,
+            },
             { key: 'dampening', label: 'Dampening (Hz)', type: 'number', defaultValue: 3000 },
             { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.4 },
         ],
@@ -2494,10 +2683,26 @@ function createPushImageUploadNode() {
                     { value: 'image/webp', label: 'WebP' },
                 ],
             },
-            { key: 'quality', label: 'Quality', type: 'number', defaultValue: 0.85, min: 0.1, max: 1, step: 0.01 },
+            {
+                key: 'quality',
+                label: 'Quality',
+                type: 'number',
+                defaultValue: 0.85,
+                min: 0.1,
+                max: 1,
+                step: 0.01,
+            },
             { key: 'maxWidth', label: 'Max Width', type: 'number', defaultValue: 960, min: 128, step: 1 },
             // Upload rate (best-effort): manager sends one capture request per interval while Push=true.
-            { key: 'speed', label: 'Speed (fps)', type: 'number', defaultValue: 1, min: 0.1, max: 30, step: 0.1 },
+            {
+                key: 'speed',
+                label: 'Speed (fps)',
+                type: 'number',
+                defaultValue: 1,
+                min: 0.1,
+                max: 30,
+                step: 0.1,
+            },
         ],
         process: (inputs, config, context) => {
             const triggerActive = coerceBooleanOr(inputs.trigger, false);
@@ -2854,13 +3059,9 @@ function createBoxSceneProcessorNode() {
         type: 'proc-visual-scene-box',
         label: 'Visual Scene-Box',
         category: 'Processors',
-        inputs: [
-            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-        ],
+        inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true }],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
-        configSchema: [
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-        ],
+        configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true }],
         process: (inputs, config) => {
             const enabled = (() => {
                 const fromInput = inputs.enabled;
@@ -2886,13 +3087,9 @@ function createMelSceneProcessorNode() {
         type: 'proc-visual-scene-mel',
         label: 'Visual Scene-Mel Spectrogram',
         category: 'Processors',
-        inputs: [
-            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
-        configSchema: [
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         process: (inputs, config) => {
             const enabled = (() => {
                 const fromInput = inputs.enabled;
@@ -2918,13 +3115,9 @@ function createFrontCameraSceneProcessorNode() {
         type: 'proc-visual-scene-front-camera',
         label: 'Visual Scene-Front Camera',
         category: 'Processors',
-        inputs: [
-            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
-        configSchema: [
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         process: (inputs, config) => {
             const enabled = (() => {
                 const fromInput = inputs.enabled;
@@ -2950,13 +3143,9 @@ function createBackCameraSceneProcessorNode() {
         type: 'proc-visual-scene-back-camera',
         label: 'Visual Scene-Back Camera',
         category: 'Processors',
-        inputs: [
-            { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        inputs: [{ id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
-        configSchema: [
-            { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
-        ],
+        configSchema: [{ key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false }],
         process: (inputs, config) => {
             const enabled = (() => {
                 const fromInput = inputs.enabled;
@@ -2977,19 +3166,230 @@ function createBackCameraSceneProcessorNode() {
         },
     };
 }
+function createEffectAsciiNode() {
+    const coerceEffectChain = (raw) => (Array.isArray(raw) ? raw : []).filter((v) => Boolean(v) && typeof v === 'object' && typeof v.type === 'string');
+    return {
+        type: 'effect-ascii',
+        label: 'Effect ASCII',
+        category: 'Effect',
+        inputs: [
+            { id: 'in', label: 'In', type: 'effect' },
+            {
+                id: 'resolution',
+                label: 'Resolution',
+                type: 'number',
+                defaultValue: 11,
+                min: 1,
+                max: 100,
+                step: 1,
+            },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'effect' }],
+        configSchema: [
+            {
+                key: 'resolution',
+                label: 'Resolution',
+                type: 'number',
+                defaultValue: 11,
+                min: 1,
+                max: 100,
+                step: 1,
+            },
+        ],
+        process: (inputs, config) => {
+            const chain = coerceEffectChain(inputs.in);
+            const resolution = (() => {
+                const fromInput = inputs.resolution;
+                const fromConfig = config.resolution;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 11);
+                const clamped = Number.isFinite(raw) ? Math.max(1, Math.min(100, raw)) : 11;
+                return Math.round(clamped);
+            })();
+            const effect = { type: 'ascii', cellSize: resolution };
+            return { out: [...chain, effect] };
+        },
+    };
+}
+function createEffectConvolutionNode() {
+    const coerceEffectChain = (raw) => (Array.isArray(raw) ? raw : []).filter((v) => Boolean(v) && typeof v === 'object' && typeof v.type === 'string');
+    return {
+        type: 'effect-convolution',
+        label: 'Effect Convolution',
+        category: 'Effect',
+        inputs: [
+            { id: 'in', label: 'In', type: 'effect' },
+            { id: 'preset', label: 'Preset', type: 'string' },
+            { id: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            {
+                id: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.05,
+            },
+            { id: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+            { id: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
+            { id: 'kernel', label: 'Kernel (3x3)', type: 'string' },
+        ],
+        outputs: [{ id: 'out', label: 'Out', type: 'effect' }],
+        configSchema: [
+            {
+                key: 'preset',
+                label: 'Preset',
+                type: 'select',
+                defaultValue: 'sharpen',
+                options: [
+                    { value: 'blur', label: 'Blur' },
+                    { value: 'gaussianBlur', label: 'Gaussian Blur' },
+                    { value: 'sharpen', label: 'Sharpen' },
+                    { value: 'edge', label: 'Edge Detect' },
+                    { value: 'emboss', label: 'Emboss' },
+                    { value: 'sobelX', label: 'Sobel X' },
+                    { value: 'sobelY', label: 'Sobel Y' },
+                    { value: 'custom', label: 'Custom Kernel' },
+                ],
+            },
+            { key: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
+            {
+                key: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.05,
+            },
+            { key: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
+            { key: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
+            { key: 'kernel', label: 'Kernel (3x3)', type: 'string', defaultValue: '' },
+        ],
+        process: (inputs, config) => {
+            const chain = coerceEffectChain(inputs.in);
+            const preset = (() => {
+                const allowed = [
+                    'blur',
+                    'gaussianBlur',
+                    'sharpen',
+                    'edge',
+                    'emboss',
+                    'sobelX',
+                    'sobelY',
+                    'custom',
+                ];
+                const fromInput = inputs.preset;
+                const fromConfig = config.preset;
+                const raw = typeof fromInput === 'string' && fromInput.trim()
+                    ? fromInput.trim()
+                    : typeof fromConfig === 'string' && fromConfig.trim()
+                        ? fromConfig.trim()
+                        : 'sharpen';
+                return allowed.includes(raw) ? raw : 'sharpen';
+            })();
+            const mix = (() => {
+                const fromInput = inputs.mix;
+                const fromConfig = config.mix;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 1);
+                if (!Number.isFinite(raw))
+                    return 1;
+                return Math.max(0, Math.min(1, raw));
+            })();
+            const scale = (() => {
+                const fromInput = inputs.scale;
+                const fromConfig = config.scale;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0.5);
+                if (!Number.isFinite(raw))
+                    return 0.5;
+                return Math.max(0.1, Math.min(1, raw));
+            })();
+            const bias = (() => {
+                const fromInput = inputs.bias;
+                const fromConfig = config.bias;
+                const raw = typeof fromInput === 'number' ? fromInput : Number(fromInput ?? fromConfig ?? 0);
+                if (!Number.isFinite(raw))
+                    return 0;
+                return Math.max(-1, Math.min(1, raw));
+            })();
+            const normalize = (() => {
+                const fromInput = inputs.normalize;
+                if (typeof fromInput === 'number' && Number.isFinite(fromInput))
+                    return fromInput >= 0.5;
+                if (typeof fromInput === 'boolean')
+                    return fromInput;
+                const fromConfig = config.normalize;
+                if (typeof fromConfig === 'number' && Number.isFinite(fromConfig))
+                    return fromConfig >= 0.5;
+                if (typeof fromConfig === 'boolean')
+                    return fromConfig;
+                return true;
+            })();
+            const kernel = (() => {
+                if (preset !== 'custom')
+                    return undefined;
+                const fromInput = inputs.kernel;
+                const fromConfig = config.kernel;
+                const raw = typeof fromInput === 'string' && fromInput.trim()
+                    ? fromInput.trim()
+                    : typeof fromConfig === 'string' && fromConfig.trim()
+                        ? fromConfig.trim()
+                        : '';
+                if (!raw)
+                    return undefined;
+                const parts = raw
+                    .split(/[\s,]+/g)
+                    .map((p) => p.trim())
+                    .filter(Boolean)
+                    .slice(0, 9);
+                if (parts.length !== 9)
+                    return undefined;
+                const parsed = parts.map((p) => Number(p));
+                if (parsed.some((n) => !Number.isFinite(n)))
+                    return undefined;
+                return parsed;
+            })();
+            const effect = {
+                type: 'convolution',
+                preset: preset,
+                ...(kernel ? { kernel } : {}),
+                mix,
+                bias,
+                normalize,
+                scale,
+            };
+            return { out: [...chain, effect] };
+        },
+    };
+}
 function createAsciiEffectProcessorNode() {
     return {
         type: 'proc-visual-effect-ascii',
-        label: 'Visual Effect-ASCII',
-        category: 'Processors',
+        label: 'Legacy Visual Effect-ASCII',
+        category: 'Legacy',
         inputs: [
             { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-            { id: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 1, max: 100, step: 1 },
+            {
+                id: 'resolution',
+                label: 'Resolution',
+                type: 'number',
+                defaultValue: 11,
+                min: 1,
+                max: 100,
+                step: 1,
+            },
         ],
         outputs: [{ id: 'cmd', label: 'Cmd', type: 'command' }],
         configSchema: [
             { key: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: true },
-            { key: 'resolution', label: 'Resolution', type: 'number', defaultValue: 11, min: 1, max: 100, step: 1 },
+            {
+                key: 'resolution',
+                label: 'Resolution',
+                type: 'number',
+                defaultValue: 11,
+                min: 1,
+                max: 100,
+                step: 1,
+            },
         ],
         process: (inputs, config) => {
             const enabled = (() => {
@@ -3024,13 +3424,21 @@ function createAsciiEffectProcessorNode() {
 function createConvolutionEffectProcessorNode() {
     return {
         type: 'proc-visual-effect-conv',
-        label: 'Visual Effect-Conv',
-        category: 'Processors',
+        label: 'Legacy Visual Effect-Conv',
+        category: 'Legacy',
         inputs: [
             { id: 'enabled', label: 'Enabled', type: 'boolean', defaultValue: false },
             { id: 'preset', label: 'Preset', type: 'string' },
             { id: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
-            { id: 'scale', label: 'Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+            {
+                id: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.05,
+            },
             { id: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
             { id: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
             { id: 'kernel', label: 'Kernel (3x3)', type: 'string' },
@@ -3055,7 +3463,15 @@ function createConvolutionEffectProcessorNode() {
                 ],
             },
             { key: 'mix', label: 'Mix', type: 'number', defaultValue: 1, min: 0, max: 1, step: 0.01 },
-            { key: 'scale', label: 'Scale', type: 'number', defaultValue: 0.5, min: 0.1, max: 1, step: 0.05 },
+            {
+                key: 'scale',
+                label: 'Scale',
+                type: 'number',
+                defaultValue: 0.5,
+                min: 0.1,
+                max: 1,
+                step: 0.05,
+            },
             { key: 'bias', label: 'Bias', type: 'number', defaultValue: 0, min: -1, max: 1, step: 0.01 },
             { key: 'normalize', label: 'Normalize', type: 'boolean', defaultValue: true },
             { key: 'kernel', label: 'Kernel (3x3)', type: 'string', defaultValue: '' },
@@ -3258,13 +3674,12 @@ function createNumberScriptNode() {
                 : Number(config.start ?? 0);
             const start = Number.isFinite(startValue) ? startValue : 0;
             const endRaw = inputs.end;
-            const endValue = typeof endRaw === 'number' && Number.isFinite(endRaw)
-                ? endRaw
-                : Number(config.end ?? 1);
+            const endValue = typeof endRaw === 'number' && Number.isFinite(endRaw) ? endRaw : Number(config.end ?? 1);
             const end = Number.isFinite(endValue) ? endValue : 1;
             // Parse bezier curve: [x1, y1, x2, y2]
             const curveRaw = config.curve;
-            const bezier = Array.isArray(curveRaw) && curveRaw.length === 4 &&
+            const bezier = Array.isArray(curveRaw) &&
+                curveRaw.length === 4 &&
                 curveRaw.every((v) => typeof v === 'number' && Number.isFinite(v))
                 ? curveRaw
                 : [0.25, 0.1, 0.25, 1.0];

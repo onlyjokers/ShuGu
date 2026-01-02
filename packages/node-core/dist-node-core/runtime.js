@@ -420,6 +420,7 @@ export class NodeRuntime {
         // naturally change frequently when the user adjusts sliders/knobs.
         const continuousActions = new Set([
             'convolution',
+            'visualEffects',
             'asciiMode',
             'asciiResolution',
             'screenColor',

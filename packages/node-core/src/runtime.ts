@@ -1,4 +1,11 @@
-import type { Connection, GraphState, NodeDefinition, NodeInstance, NodePort, ProcessContext } from './types.js';
+import type {
+  Connection,
+  GraphState,
+  NodeDefinition,
+  NodeInstance,
+  NodePort,
+  ProcessContext,
+} from './types.js';
 import type { NodeRegistry } from './registry.js';
 
 const DEFAULT_TICK_INTERVAL_MS = 33;
@@ -262,7 +269,8 @@ export class NodeRuntime {
   }
 
   private runDisableHooks(now: number): void {
-    const nodesInOrder = this.executionOrder.length > 0 ? this.executionOrder : Array.from(this.nodes.values());
+    const nodesInOrder =
+      this.executionOrder.length > 0 ? this.executionOrder : Array.from(this.nodes.values());
     const context: ProcessContext = { nodeId: '', time: now, deltaTime: 0 };
 
     for (const node of nodesInOrder) {
@@ -335,7 +343,9 @@ export class NodeRuntime {
     const ports = this.inferDisabledBypassPorts(def);
     if (!ports) {
       if (['img-scale', 'img-fit', 'img-xy-offset', 'img-transparency'].includes(node.type)) {
-         console.warn(`[NodeRuntime] Bypass failed for ${node.type} (${node.id}): inferDisabledBypassPorts returned null`);
+        console.warn(
+          `[NodeRuntime] Bypass failed for ${node.type} (${node.id}): inferDisabledBypassPorts returned null`
+        );
       }
       return null;
     }
@@ -512,6 +522,7 @@ export class NodeRuntime {
     // naturally change frequently when the user adjusts sliders/knobs.
     const continuousActions = new Set([
       'convolution',
+      'visualEffects',
       'asciiMode',
       'asciiResolution',
       'screenColor',
@@ -921,7 +932,8 @@ export class NodeRuntime {
       if (value === null) return 'null';
       if (value === undefined) return 'undefined';
       if (typeof value === 'string') return `str:${value}`;
-      if (typeof value === 'number') return Number.isFinite(value) ? `num:${value}` : `num:${String(value)}`;
+      if (typeof value === 'number')
+        return Number.isFinite(value) ? `num:${value}` : `num:${String(value)}`;
       if (typeof value === 'boolean') return `bool:${value}`;
       try {
         return `json:${JSON.stringify(value)}`;

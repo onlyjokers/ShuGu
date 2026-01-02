@@ -110,7 +110,7 @@
   .image-overlay {
     position: fixed;
     inset: 0;
-    z-index: 0; /* Below ASCII overlay so ASCII can cover */
+    z-index: 0; /* Below effect output so post-processing can cover */
     display: flex;
     align-items: center;
     justify-content: center;

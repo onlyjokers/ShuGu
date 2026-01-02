@@ -8,9 +8,7 @@
     frontCameraEnabled,
     backCameraEnabled,
     audioStream,
-    asciiEnabled,
-    asciiResolution,
-    convolution,
+    visualEffects,
     videoState,
     imageState,
     getSDK,
@@ -38,26 +36,26 @@
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
-  let asciiCanvas: HTMLCanvasElement;
-  let convolutionCanvas: HTMLCanvasElement;
+  let effectCanvas: HTMLCanvasElement;
   let splitPlugin: AudioSplitPlugin | null = null;
   let melPlugin: MelSpectrogramPlugin | null = null;
   let audioContext: AudioContext | null = null;
   let animationId: number;
+  let effectCtx: CanvasRenderingContext2D | null = null;
+  let frameA: HTMLCanvasElement | null = null;
+  let frameACtx: CanvasRenderingContext2D | null = null;
+  let frameB: HTMLCanvasElement | null = null;
+  let frameBCtx: CanvasRenderingContext2D | null = null;
   let tinyCanvas: HTMLCanvasElement | null = null;
   let tinyCtx: CanvasRenderingContext2D | null = null;
-  let asciiCtx: CanvasRenderingContext2D | null = null;
-  let convCtx: CanvasRenderingContext2D | null = null;
   let convWorkCanvas: HTMLCanvasElement | null = null;
   let convWorkCtx: CanvasRenderingContext2D | null = null;
   let convOutput: ImageData | null = null;
   let convWorkW = 0;
   let convWorkH = 0;
-  let lastConvDraw = 0;
-  let lastAsciiDraw = 0;
-  let sourceCanvas: HTMLCanvasElement | null = null;
-  let mediaCanvas: HTMLCanvasElement | null = null;
-  let mediaCtx: CanvasRenderingContext2D | null = null;
+  let lastEffectDraw = 0;
+  let lastEffectsSignature = '';
+  let baseVisible = true;
   let lastTime = 0;
   let cameraVideoElement: HTMLVideoElement;
 
@@ -99,11 +97,14 @@
     sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
     sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
 
-    // ASCII overlay setup
-    asciiCtx = asciiCanvas.getContext('2d');
+    // Effect pipeline setup
+    effectCtx = effectCanvas.getContext('2d');
+    frameA = document.createElement('canvas');
+    frameACtx = frameA.getContext('2d');
+    frameB = document.createElement('canvas');
+    frameBCtx = frameB.getContext('2d');
     tinyCanvas = document.createElement('canvas');
     tinyCtx = tinyCanvas.getContext('2d', { willReadFrequently: true });
-    convCtx = convolutionCanvas.getContext('2d');
     convWorkCanvas = document.createElement('canvas');
     convWorkCtx = convWorkCanvas.getContext('2d', { willReadFrequently: true });
     handleResize();
@@ -138,15 +139,11 @@
   // React to box scene enabled state changes
   $: if (sceneManager) {
     sceneManager.setSceneEnabled('box-scene', $boxSceneEnabled);
-    // Invalidate cached source canvas so screenshot finds the correct one
-    sourceCanvas = null;
   }
 
   // React to mel scene enabled state changes
   $: if (sceneManager) {
     sceneManager.setSceneEnabled('mel-scene', $melSceneEnabled);
-    // Invalidate cached source canvas so screenshot finds the correct one
-    sourceCanvas = null;
   }
 
   // Bind camera stream to video element
@@ -256,50 +253,19 @@
     const dt = (now - lastTime) / 1000; // Convert to seconds
     lastTime = now;
 
-    if (sceneManager) {
-      sceneManager.update(dt, context);
-    }
+    sceneManager?.update(dt, context);
 
-    if ($convolution.enabled) {
-      drawConvolutionOverlay();
-    } else if (convCtx) {
-      convCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
-    }
-
-    if ($asciiEnabled) {
-      drawAsciiOverlay();
-    } else if (asciiCtx) {
-      asciiCtx.clearRect(0, 0, container?.clientWidth ?? 0, container?.clientHeight ?? 0);
-    }
-
-    if ($asciiEnabled) {
-      setBaseCanvasVisibility(false);
-      if (asciiCanvas) asciiCanvas.style.visibility = 'visible';
-      if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
-    } else if ($convolution.enabled) {
-      setBaseCanvasVisibility(false);
-      if (asciiCanvas) asciiCanvas.style.visibility = 'hidden';
-      if (convolutionCanvas) convolutionCanvas.style.visibility = 'visible';
+    const effects = Array.isArray($visualEffects) ? $visualEffects : [];
+    if (effects.length > 0) {
+      const ok = renderEffects(effects, now);
+      setBaseLayerVisibility(!ok);
+      if (effectCanvas) effectCanvas.style.visibility = ok ? 'visible' : 'hidden';
     } else {
-      setBaseCanvasVisibility(true);
-      if (asciiCanvas) asciiCanvas.style.visibility = 'hidden';
-      if (convolutionCanvas) convolutionCanvas.style.visibility = 'hidden';
+      setBaseLayerVisibility(true);
+      if (effectCanvas) effectCanvas.style.visibility = 'hidden';
     }
 
     animationId = requestAnimationFrame(animate);
-  }
-
-  function ensureSourceCanvas(): HTMLCanvasElement | null {
-    const media = updateMediaCanvas();
-    if (media) {
-      sourceCanvas = media;
-      return sourceCanvas;
-    }
-
-    if (sourceCanvas && sourceCanvas.isConnected) return sourceCanvas;
-    const canvases = Array.from(container.querySelectorAll('canvas')) as HTMLCanvasElement[];
-    sourceCanvas = canvases.find((c) => c !== asciiCanvas && c !== convolutionCanvas) ?? null;
-    return sourceCanvas;
   }
 
   type MediaFit = 'contain' | 'fit-screen' | 'cover' | 'fill';
@@ -346,172 +312,428 @@
     return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx, dy, dw, dh };
   }
 
-  function updateMediaCanvas(): HTMLCanvasElement | null {
-    const video = container?.querySelector('video');
-    const img = container?.querySelector('img');
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
 
-    const targetW = container?.clientWidth ?? 0;
-    const targetH = container?.clientHeight ?? 0;
-    if (targetW === 0 || targetH === 0) return null;
+  function setBaseLayerVisibility(show: boolean) {
+    if (!container) return;
+    if (baseVisible === show) return;
+    baseVisible = show;
 
-    const ensureMediaCanvas = () => {
-      if (!mediaCanvas) {
-        mediaCanvas = document.createElement('canvas');
-        mediaCtx = mediaCanvas.getContext('2d');
-      }
-      if (!mediaCtx) return null;
-      if (mediaCanvas.width !== targetW) mediaCanvas.width = targetW;
-      if (mediaCanvas.height !== targetH) mediaCanvas.height = targetH;
-      mediaCtx.setTransform(1, 0, 0, 1, 0, 0);
-      mediaCtx.clearRect(0, 0, targetW, targetH);
-      mediaCtx.fillStyle = '#0a0a0f';
-      mediaCtx.fillRect(0, 0, targetW, targetH);
-      return mediaCtx;
-    };
-
-    if (video && $videoState.url && (video as HTMLVideoElement).readyState >= 2) {
-      const el = video as HTMLVideoElement;
-      const srcW = el.videoWidth || 0;
-      const srcH = el.videoHeight || 0;
-      if (srcW === 0 || srcH === 0) return null;
-      const ctx = ensureMediaCanvas();
-      if (!ctx) return null;
-
-      const fit = ($videoState.fit ?? 'contain') as MediaFit;
-      const padding = fit === 'contain' ? 24 : 0;
-      const dstW = Math.max(0, targetW - padding * 2);
-      const dstH = Math.max(0, targetH - padding * 2);
-      if (dstW === 0 || dstH === 0) return null;
-      const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
-
-      try {
-        ctx.drawImage(el, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
-      } catch {
-        return null; // cross-origin without CORS
-      }
-      return mediaCanvas;
+    const canvases = Array.from(container.querySelectorAll('canvas')) as HTMLCanvasElement[];
+    for (const c of canvases) {
+      if (c === effectCanvas) continue;
+      c.style.visibility = show ? 'visible' : 'hidden';
     }
 
-    if (img && $imageState.visible && $imageState.url) {
-      const el = img as HTMLImageElement;
-      const srcW = el.naturalWidth || el.clientWidth || 0;
-      const srcH = el.naturalHeight || el.clientHeight || 0;
-      if (srcW === 0 || srcH === 0) return null;
-      const ctx = ensureMediaCanvas();
-      if (!ctx) return null;
-
-      const fit = ($imageState.fit ?? 'contain') as MediaFit;
-      const padding = fit === 'contain' ? 24 : 0;
-      const dstW = Math.max(0, targetW - padding * 2);
-      const dstH = Math.max(0, targetH - padding * 2);
-      if (dstW === 0 || dstH === 0) return null;
-      const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(srcW, srcH, dstW, dstH, fit);
-
-      try {
-        ctx.drawImage(el, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
-      } catch {
-        return null; // cross-origin without CORS
-      }
-      return mediaCanvas;
+    const overlays = Array.from(
+      container.querySelectorAll('.video-overlay, .image-overlay, video.camera-display')
+    ) as HTMLElement[];
+    for (const el of overlays) {
+      el.style.visibility = show ? 'visible' : 'hidden';
     }
-
-    // Handle camera video stream
-    if (cameraVideoElement && $cameraStream && ($frontCameraEnabled || $backCameraEnabled)) {
-      const el = cameraVideoElement;
-      if (el.readyState >= 2) {
-        const srcW = el.videoWidth || 0;
-        const srcH = el.videoHeight || 0;
-        if (srcW === 0 || srcH === 0) return null;
-        const ctx = ensureMediaCanvas();
-        if (!ctx) return null;
-
-        // Camera uses cover fit to fill the screen
-        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
-          srcW,
-          srcH,
-          targetW,
-          targetH,
-          'cover'
-        );
-
-        try {
-          // Save context for potential mirror transform
-          ctx.save();
-
-          // Apply mirror transform for front camera
-          if ($frontCameraEnabled) {
-            ctx.translate(targetW, 0);
-            ctx.scale(-1, 1);
-          }
-
-          ctx.drawImage(el, sx, sy, sw, sh, dx, dy, dw, dh);
-          ctx.restore();
-        } catch {
-          return null;
-        }
-        return mediaCanvas;
-      }
-    }
-
-    return null;
   }
 
-  function drawAsciiOverlay() {
-    if (!asciiCtx || !tinyCtx || !tinyCanvas) return;
+  function computeEffectTargetFps(effects: unknown[], width: number, height: number): number {
+    let fps = 30;
 
-    const now = performance.now();
-    const src = $convolution.enabled ? convolutionCanvas : ensureSourceCanvas();
+    for (const effect of effects) {
+      if (!effect || typeof effect !== 'object') continue;
+      const type = typeof (effect as any).type === 'string' ? String((effect as any).type) : '';
+
+      if (type === 'convolution') {
+        const scale = clamp(Number((effect as any).scale ?? 0.5), 0.1, 1);
+        let procW = Math.max(48, Math.floor(width * scale));
+        let procH = Math.max(48, Math.floor(height * scale));
+
+        const maxPixels = 260_000;
+        const pixels = procW * procH;
+        if (pixels > maxPixels) {
+          const ratio = Math.sqrt(maxPixels / pixels);
+          procW = Math.max(48, Math.floor(procW * ratio));
+          procH = Math.max(48, Math.floor(procH * ratio));
+        }
+
+        const convFps = procW * procH > 180_000 ? 15 : 30;
+        fps = Math.min(fps, convFps);
+        continue;
+      }
+
+      if (type === 'ascii') {
+        const cellSize = Math.max(
+          1,
+          Math.min(100, Math.round(Number((effect as any).cellSize ?? 11)))
+        );
+        const cols = Math.max(24, Math.floor(width / cellSize));
+        const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
+
+        const cellCount = cols * rows;
+        const asciiFps = (() => {
+          if ($melSceneEnabled) return cellCount >= 12_000 ? 10 : 15;
+          return cellCount >= 18_000 ? 15 : 30;
+        })();
+        fps = Math.min(fps, asciiFps);
+      }
+    }
+
+    return Math.max(5, Math.min(60, fps));
+  }
+
+  function renderEffects(effects: unknown[], nowMs: number): boolean {
+    if (!effectCtx || !frameA || !frameACtx || !frameB || !frameBCtx) return false;
+    if (!tinyCanvas || !tinyCtx) return false;
+    if (!convWorkCanvas || !convWorkCtx) return false;
+
     const width = container?.clientWidth ?? 0;
     const height = container?.clientHeight ?? 0;
-    if (!src || width === 0 || height === 0) {
-      asciiCtx.clearRect(0, 0, width, height);
-      return;
+    if (width === 0 || height === 0) return false;
+
+    const signature = (() => {
+      try {
+        return JSON.stringify(effects);
+      } catch {
+        return '';
+      }
+    })();
+    if (signature !== lastEffectsSignature) {
+      lastEffectsSignature = signature;
+      lastEffectDraw = 0;
     }
+
+    const targetFps = computeEffectTargetFps(effects, width, height);
+    if (nowMs - lastEffectDraw < 1000 / targetFps) return true;
+    lastEffectDraw = nowMs;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const targetW = Math.floor(width * dpr);
     const targetH = Math.floor(height * dpr);
-    if (asciiCanvas.width !== targetW) asciiCanvas.width = targetW;
-    if (asciiCanvas.height !== targetH) asciiCanvas.height = targetH;
-    if (asciiCanvas.style.width !== `${width}px`) asciiCanvas.style.width = `${width}px`;
-    if (asciiCanvas.style.height !== `${height}px`) asciiCanvas.style.height = `${height}px`;
+    if (targetW === 0 || targetH === 0) return false;
 
-    const cellSize = Math.max(1, Math.min(100, $asciiResolution));
+    if (effectCanvas.width !== targetW) effectCanvas.width = targetW;
+    if (effectCanvas.height !== targetH) effectCanvas.height = targetH;
+    if (effectCanvas.style.width !== `${width}px`) effectCanvas.style.width = `${width}px`;
+    if (effectCanvas.style.height !== `${height}px`) effectCanvas.style.height = `${height}px`;
+
+    if (frameA.width !== targetW) frameA.width = targetW;
+    if (frameA.height !== targetH) frameA.height = targetH;
+    if (frameB.width !== targetW) frameB.width = targetW;
+    if (frameB.height !== targetH) frameB.height = targetH;
+
+    drawBaseFrame(frameACtx, width, height, dpr);
+
+    let srcCanvas: HTMLCanvasElement = frameA;
+    let srcCtx: CanvasRenderingContext2D = frameACtx;
+    let dstCanvas: HTMLCanvasElement = frameB;
+    let dstCtx: CanvasRenderingContext2D = frameBCtx;
+
+    for (const effect of effects) {
+      if (!effect || typeof effect !== 'object') continue;
+      const type = typeof (effect as any).type === 'string' ? String((effect as any).type) : '';
+
+      const applied = (() => {
+        if (type === 'convolution')
+          return applyConvolutionEffect(srcCanvas, dstCtx, width, height, dpr, effect as any);
+        if (type === 'ascii')
+          return applyAsciiEffect(srcCanvas, dstCtx, width, height, dpr, effect as any);
+        return false;
+      })();
+
+      if (!applied) {
+        // Best-effort fallback: pass-through when the effect can't run (e.g. canvas tainted by CORS).
+        dstCtx.setTransform(1, 0, 0, 1, 0, 0);
+        dstCtx.clearRect(0, 0, targetW, targetH);
+        dstCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+      }
+
+      // Swap buffers for the next pass.
+      [srcCanvas, dstCanvas] = [dstCanvas, srcCanvas];
+      [srcCtx, dstCtx] = [dstCtx, srcCtx];
+    }
+
+    effectCtx.setTransform(1, 0, 0, 1, 0, 0);
+    effectCtx.clearRect(0, 0, targetW, targetH);
+    effectCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
+    return true;
+  }
+
+  function drawBaseFrame(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    dpr: number
+  ): void {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw any mounted scene canvases first (Box, Mel, ...).
+    const sceneCanvases = Array.from(
+      container?.querySelectorAll('canvas') ?? []
+    ) as HTMLCanvasElement[];
+    for (const c of sceneCanvases) {
+      if (c === effectCanvas) continue;
+      if (!c.width || !c.height) continue;
+      try {
+        ctx.drawImage(c, 0, 0, width, height);
+      } catch {
+        // ignore
+      }
+    }
+
+    // Draw video (if any) on top of scenes.
+    const video = container?.querySelector('.video-overlay video') as HTMLVideoElement | null;
+    if (video && $videoState.url && video.readyState >= 2) {
+      const srcW = video.videoWidth || 0;
+      const srcH = video.videoHeight || 0;
+      if (srcW > 0 && srcH > 0) {
+        const fit = ($videoState.fit ?? 'contain') as MediaFit;
+        const padding = fit === 'contain' ? 24 : 0;
+        const dstW = Math.max(0, width - padding * 2);
+        const dstH = Math.max(0, height - padding * 2);
+        if (dstW > 0 && dstH > 0) {
+          const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
+            srcW,
+            srcH,
+            dstW,
+            dstH,
+            fit
+          );
+          try {
+            ctx.drawImage(video, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
+          } catch {
+            // cross-origin without CORS
+          }
+        }
+      }
+    }
+
+    // Draw image (if any) on top of video.
+    const img = container?.querySelector('.image-overlay img') as HTMLImageElement | null;
+    if (img && $imageState.visible && $imageState.url) {
+      const srcW = img.naturalWidth || img.clientWidth || 0;
+      const srcH = img.naturalHeight || img.clientHeight || 0;
+      if (srcW > 0 && srcH > 0) {
+        const fit = ($imageState.fit ?? 'contain') as MediaFit;
+        const padding = fit === 'contain' ? 24 : 0;
+        const dstW = Math.max(0, width - padding * 2);
+        const dstH = Math.max(0, height - padding * 2);
+        if (dstW > 0 && dstH > 0) {
+          const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
+            srcW,
+            srcH,
+            dstW,
+            dstH,
+            fit
+          );
+
+          const scale = (() => {
+            const raw = typeof $imageState.scale === 'number' ? $imageState.scale : 1;
+            return Number.isFinite(raw) ? Math.max(0.1, Math.min(10, raw)) : 1;
+          })();
+          const offsetX = (() => {
+            const raw = typeof $imageState.offsetX === 'number' ? $imageState.offsetX : 0;
+            return Number.isFinite(raw) ? raw : 0;
+          })();
+          const offsetY = (() => {
+            const raw = typeof $imageState.offsetY === 'number' ? $imageState.offsetY : 0;
+            return Number.isFinite(raw) ? raw : 0;
+          })();
+          const opacity = (() => {
+            const raw = typeof $imageState.opacity === 'number' ? $imageState.opacity : 1;
+            return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 1;
+          })();
+
+          const centerX = padding + dx + dw / 2;
+          const centerY = padding + dy + dh / 2;
+          const scaledW = dw * scale;
+          const scaledH = dh * scale;
+          const drawX = centerX - scaledW / 2 + offsetX;
+          const drawY = centerY - scaledH / 2 + offsetY;
+
+          try {
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            ctx.drawImage(img, sx, sy, sw, sh, drawX, drawY, scaledW, scaledH);
+            ctx.restore();
+          } catch {
+            // cross-origin without CORS
+          }
+        }
+      }
+    }
+
+    // Draw camera on top (if enabled).
+    if (
+      cameraVideoElement &&
+      $cameraStream &&
+      ($frontCameraEnabled || $backCameraEnabled) &&
+      cameraVideoElement.readyState >= 2
+    ) {
+      const srcW = cameraVideoElement.videoWidth || 0;
+      const srcH = cameraVideoElement.videoHeight || 0;
+      if (srcW > 0 && srcH > 0) {
+        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
+          srcW,
+          srcH,
+          width,
+          height,
+          'cover'
+        );
+        try {
+          ctx.save();
+          if ($frontCameraEnabled) {
+            ctx.translate(width, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(cameraVideoElement, sx, sy, sw, sh, dx, dy, dw, dh);
+          ctx.restore();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  function applyConvolutionEffect(
+    src: HTMLCanvasElement,
+    dstCtx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    dpr: number,
+    effect: {
+      preset?: unknown;
+      kernel?: unknown;
+      mix?: unknown;
+      bias?: unknown;
+      normalize?: unknown;
+      scale?: unknown;
+    }
+  ): boolean {
+    if (!convWorkCanvas || !convWorkCtx) return false;
+
+    const scale = clamp(Number(effect.scale ?? 0.5), 0.1, 1);
+    let procW = Math.max(48, Math.floor(width * scale));
+    let procH = Math.max(48, Math.floor(height * scale));
+
+    const maxPixels = 260_000;
+    const pixels = procW * procH;
+    if (pixels > maxPixels) {
+      const ratio = Math.sqrt(maxPixels / pixels);
+      procW = Math.max(48, Math.floor(procW * ratio));
+      procH = Math.max(48, Math.floor(procH * ratio));
+    }
+
+    if (convWorkW !== procW || convWorkH !== procH) {
+      convWorkW = procW;
+      convWorkH = procH;
+      convWorkCanvas.width = procW;
+      convWorkCanvas.height = procH;
+      convOutput = convWorkCtx.createImageData(procW, procH);
+    }
+
+    try {
+      convWorkCtx.setTransform(1, 0, 0, 1, 0, 0);
+      convWorkCtx.drawImage(src, 0, 0, procW, procH);
+    } catch {
+      return false;
+    }
+
+    let input: ImageData;
+    try {
+      input = convWorkCtx.getImageData(0, 0, procW, procH);
+    } catch {
+      return false;
+    }
+
+    if (!convOutput) return false;
+
+    const presetRaw = typeof effect.preset === 'string' ? effect.preset : 'sharpen';
+    const preset = (() => {
+      const allowed = [
+        'blur',
+        'gaussianBlur',
+        'sharpen',
+        'edge',
+        'emboss',
+        'sobelX',
+        'sobelY',
+        'custom',
+      ];
+      return allowed.includes(presetRaw) ? presetRaw : 'sharpen';
+    })();
+    const kernel = (() => {
+      const raw = effect.kernel;
+      if (!Array.isArray(raw)) return null;
+      const parsed = raw
+        .map((n) => (typeof n === 'number' ? n : Number(n)))
+        .filter((n) => Number.isFinite(n))
+        .slice(0, 9);
+      return parsed.length === 9 ? parsed : null;
+    })();
+
+    const mix = clamp(Number(effect.mix ?? 1), 0, 1);
+    const bias = clamp(Number(effect.bias ?? 0), -1, 1);
+    const normalize = typeof effect.normalize === 'boolean' ? effect.normalize : true;
+
+    const resolvedKernel = resolveConvolutionKernel(preset as any, kernel);
+    applyConvolution3x3(input.data, procW, procH, convOutput.data, {
+      kernel: resolvedKernel,
+      mix,
+      bias,
+      normalize,
+    });
+
+    convWorkCtx.putImageData(convOutput, 0, 0);
+
+    dstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.fillStyle = '#0a0a0f';
+    dstCtx.fillRect(0, 0, width, height);
+    dstCtx.drawImage(convWorkCanvas, 0, 0, width, height);
+    return true;
+  }
+
+  function applyAsciiEffect(
+    src: HTMLCanvasElement,
+    dstCtx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    dpr: number,
+    effect: { cellSize?: unknown }
+  ): boolean {
+    if (!tinyCtx || !tinyCanvas) return false;
+
+    const cellSize = Math.max(1, Math.min(100, Math.round(Number(effect.cellSize ?? 11))));
     const cols = Math.max(24, Math.floor(width / cellSize));
     const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
 
-    const cellCount = cols * rows;
-    const targetAsciiFps = (() => {
-      if ($melSceneEnabled) return cellCount >= 12_000 ? 10 : 15;
-      return cellCount >= 18_000 ? 15 : 30;
-    })();
-    if (now - lastAsciiDraw < 1000 / targetAsciiFps) return;
-    lastAsciiDraw = now;
-
     if (tinyCanvas.width !== cols) tinyCanvas.width = cols;
     if (tinyCanvas.height !== rows) tinyCanvas.height = rows;
+
     try {
       tinyCtx.drawImage(src, 0, 0, cols, rows);
-    } catch (e) {
-      // Cross-origin or invalid source; skip drawing this frame
-      return;
+    } catch {
+      // Cross-origin or invalid source; skip this frame
+      return false;
     }
 
     let data: Uint8ClampedArray;
     try {
       data = tinyCtx.getImageData(0, 0, cols, rows).data;
-    } catch (e) {
+    } catch {
       // Canvas tainted (likely cross-origin media without CORS)
-      return;
+      return false;
     }
 
-    asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    asciiCtx.fillStyle = '#0a0a0f';
-    asciiCtx.fillRect(0, 0, width, height);
-    asciiCtx.textAlign = 'center';
-    asciiCtx.textBaseline = 'middle';
+    dstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    dstCtx.fillStyle = '#0a0a0f';
+    dstCtx.fillRect(0, 0, width, height);
+    dstCtx.textAlign = 'center';
+    dstCtx.textBaseline = 'middle';
     const fontSize = Math.max(9, Math.round(height / rows));
-    asciiCtx.font = `${fontSize}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
+    dstCtx.font = `${fontSize}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
 
     const ramp = ['.', '`', ',', ':', ';', '-', '~', '+', '*', 'x', 'o', 'O', '%', '#', '@'];
     const strokes = ['/', '\\', '|', '-', '='];
@@ -533,8 +755,8 @@
 
         // bright -> solid block
         if (brightness >= 0.82) {
-          asciiCtx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.94)`;
-          asciiCtx.fillRect(
+          dstCtx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.94)`;
+          dstCtx.fillRect(
             posX - width / cols / 2,
             posY - height / rows / 2,
             width / cols + 0.75,
@@ -550,102 +772,13 @@
         const glyph = brightness > 0.62 ? strokes[glyphIndex] : ramp[glyphIndex];
 
         const alpha = 0.35 + brightness * 0.55;
-        asciiCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, alpha)})`;
-        asciiCtx.fillText(glyph, posX, posY);
+        dstCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, alpha)})`;
+        dstCtx.fillText(glyph, posX, posY);
       }
     }
 
-    drawBorder(asciiCtx, width, height, cols, rows);
-  }
-
-  function setBaseCanvasVisibility(show: boolean) {
-    const canvases = Array.from(container?.querySelectorAll('canvas') ?? []) as HTMLCanvasElement[];
-    canvases
-      .filter((c) => c !== asciiCanvas && c !== convolutionCanvas)
-      .forEach((c) => {
-        c.style.visibility = show ? 'visible' : 'hidden';
-      });
-  }
-
-  function drawConvolutionOverlay() {
-    if (!convCtx || !convolutionCanvas || !convWorkCanvas || !convWorkCtx) return;
-
-    const now = performance.now();
-    const width = container?.clientWidth ?? 0;
-    const height = container?.clientHeight ?? 0;
-    if (width === 0 || height === 0) return;
-
-    const src = ensureSourceCanvas();
-    if (!src) {
-      convCtx.clearRect(0, 0, width, height);
-      return;
-    }
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const targetW = Math.floor(width * dpr);
-    const targetH = Math.floor(height * dpr);
-    if (convolutionCanvas.width !== targetW) convolutionCanvas.width = targetW;
-    if (convolutionCanvas.height !== targetH) convolutionCanvas.height = targetH;
-    if (convolutionCanvas.style.width !== `${width}px`)
-      convolutionCanvas.style.width = `${width}px`;
-    if (convolutionCanvas.style.height !== `${height}px`)
-      convolutionCanvas.style.height = `${height}px`;
-
-    const scale = Math.max(0.1, Math.min(1, $convolution.scale));
-    let procW = Math.max(48, Math.floor(width * scale));
-    let procH = Math.max(48, Math.floor(height * scale));
-
-    const maxPixels = 260_000;
-    const pixels = procW * procH;
-    if (pixels > maxPixels) {
-      const ratio = Math.sqrt(maxPixels / pixels);
-      procW = Math.max(48, Math.floor(procW * ratio));
-      procH = Math.max(48, Math.floor(procH * ratio));
-    }
-
-    const targetFps = procW * procH > 180_000 ? 15 : 30;
-    if (now - lastConvDraw < 1000 / targetFps) return;
-    lastConvDraw = now;
-
-    if (convWorkW !== procW || convWorkH !== procH) {
-      convWorkW = procW;
-      convWorkH = procH;
-      convWorkCanvas.width = procW;
-      convWorkCanvas.height = procH;
-      convOutput = convWorkCtx.createImageData(procW, procH);
-    }
-
-    try {
-      convWorkCtx.setTransform(1, 0, 0, 1, 0, 0);
-      convWorkCtx.drawImage(src, 0, 0, procW, procH);
-    } catch {
-      return;
-    }
-
-    let input: ImageData;
-    try {
-      input = convWorkCtx.getImageData(0, 0, procW, procH);
-    } catch {
-      return;
-    }
-
-    if (!convOutput) return;
-
-    const kernel = resolveConvolutionKernel($convolution.preset, $convolution.kernel);
-    applyConvolution3x3(input.data, procW, procH, convOutput.data, {
-      kernel,
-      mix: $convolution.mix,
-      bias: $convolution.bias,
-      normalize: $convolution.normalize,
-    });
-
-    convWorkCtx.putImageData(convOutput, 0, 0);
-
-    convCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    convCtx.imageSmoothingEnabled = true;
-    convCtx.fillStyle = '#0a0a0f';
-    convCtx.fillRect(0, 0, width, height);
-    convCtx.drawImage(convWorkCanvas, 0, 0, width, height);
+    drawBorder(dstCtx, width, height, cols, rows);
+    return true;
   }
 
   function drawBorder(
@@ -695,12 +828,8 @@
   }
 
   function handleResize() {
-    if (asciiCtx && container) {
-      asciiCtx.clearRect(0, 0, container.clientWidth, container.clientHeight);
-    }
-    if (convCtx && container) {
-      convCtx.clearRect(0, 0, container.clientWidth, container.clientHeight);
-    }
+    lastEffectDraw = 0;
+    lastEffectsSignature = '';
     convWorkW = 0;
     convWorkH = 0;
     convOutput = null;
@@ -708,7 +837,7 @@
 </script>
 
 <div class="visual-container" bind:this={container}>
-  <!-- Video Player (z-index: 1, below ASCII) -->
+  <!-- Video Player (base visual layer) -->
   {#if $videoState.url}
     <VideoPlayer
       url={$videoState.url}
@@ -726,7 +855,7 @@
     />
   {/if}
 
-  <!-- Image Display (z-index: 1, below ASCII) -->
+  <!-- Image Display (base visual layer) -->
   {#if $imageState.url && $imageState.visible}
     <ImageDisplay
       url={$imageState.url}
@@ -751,8 +880,7 @@
     ></video>
   {/if}
 
-  <canvas class="ascii-overlay" bind:this={asciiCanvas}></canvas>
-  <canvas class="convolution-overlay" bind:this={convolutionCanvas}></canvas>
+  <canvas class="effect-output" bind:this={effectCanvas}></canvas>
 </div>
 
 <style>
@@ -770,24 +898,14 @@
     display: block;
   }
 
-  .ascii-overlay {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 2;
-    pointer-events: none;
-    mix-blend-mode: normal;
-  }
-
-  .convolution-overlay {
+  .effect-output {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
     z-index: 3;
     pointer-events: none;
-    mix-blend-mode: normal;
+    visibility: hidden;
   }
 
   .camera-display {

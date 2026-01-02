@@ -52,6 +52,7 @@ export type ControlAction =
   | 'visualSceneMel'
   | 'visualSceneFrontCamera'
   | 'visualSceneBackCamera'
+  | 'visualEffects'
   | 'convolution'
   | 'setDataReportingRate'
   | 'setSensorState'
@@ -192,15 +193,7 @@ export interface ConvolutionPayload {
   /**
    * Optional preset kernel id. Ignored if `kernel` is provided.
    */
-  preset?:
-    | 'blur'
-    | 'gaussianBlur'
-    | 'sharpen'
-    | 'edge'
-    | 'emboss'
-    | 'sobelX'
-    | 'sobelY'
-    | 'custom';
+  preset?: 'blur' | 'gaussianBlur' | 'sharpen' | 'edge' | 'emboss' | 'sobelX' | 'sobelY' | 'custom';
   /**
    * Optional 3x3 kernel values (row-major, length 9).
    */
@@ -221,6 +214,43 @@ export interface ConvolutionPayload {
    * Processing scale 0.1..1 (lower = faster).
    */
   scale?: number;
+}
+
+/**
+ * Visual effect description.
+ *
+ * Used by `visualEffects` to describe an ordered post-processing chain on the client.
+ * Effects are applied in array order (first -> last).
+ */
+export type VisualEffect =
+  | {
+      type: 'ascii';
+      /** Cell size in pixels (lower = finer). */
+      cellSize: number;
+    }
+  | {
+      type: 'convolution';
+      preset?: ConvolutionPayload['preset'];
+      /** Optional 3x3 kernel values (row-major, length 9). */
+      kernel?: number[];
+      /** Blend factor 0..1 (0 = original, 1 = fully convolved). */
+      mix?: number;
+      /** Bias added after convolution in normalized units (-1..1). */
+      bias?: number;
+      /** When true, normalizes by the kernel sum when non-zero. */
+      normalize?: boolean;
+      /** Processing scale 0.1..1 (lower = faster). */
+      scale?: number;
+    };
+
+/**
+ * Visual effects pipeline payload.
+ *
+ * Sets the ordered post-processing chain applied on the client visual layer.
+ * An empty list disables all effects.
+ */
+export interface VisualEffectsPayload {
+  effects: VisualEffect[];
 }
 
 /**
@@ -286,6 +316,7 @@ export type BaseControlPayload =
   | AsciiModePayload
   | AsciiResolutionPayload
   | ConvolutionPayload
+  | VisualEffectsPayload
   | VisualSceneSwitchPayload
   | VisualSceneBoxPayload
   | VisualSceneMelPayload

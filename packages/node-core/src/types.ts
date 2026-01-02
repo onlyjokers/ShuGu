@@ -13,6 +13,7 @@ export type PortType =
   | 'audio'
   | 'image'
   | 'video'
+  | 'effect'
   | 'client'
   | 'command'
   | 'fuzzy'

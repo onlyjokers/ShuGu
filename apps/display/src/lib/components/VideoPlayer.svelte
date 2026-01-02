@@ -196,7 +196,8 @@ Purpose: Display video overlay (full-screen) for the Display app.
       const { start, end } = getRange();
       const hasEnd = typeof end === 'number' && Number.isFinite(end) && end > start;
       const endValue = hasEnd ? end! : null;
-      const epsilon = 0.03;
+      // Looser epsilon to avoid missing Finish due to tiny clock/float drift.
+      const epsilon = 0.1;
 
       if (reverse) {
         // Manual reverse stepping: keep video paused and move `currentTime` backwards.
@@ -223,7 +224,6 @@ Purpose: Display video overlay (full-screen) for the Display app.
             } catch {
               // ignore
             }
-            visible = false;
             handleFinish();
             stopRaf();
           }
@@ -244,7 +244,6 @@ Purpose: Display video overlay (full-screen) for the Display app.
           } catch {
             // ignore
           }
-          visible = false;
           handleFinish();
           stopRaf();
         }
@@ -288,7 +287,6 @@ Purpose: Display video overlay (full-screen) for the Display app.
 
   function handleNativeEnded(): void {
     if (loop) return;
-    visible = false;
     stopRaf();
     handleFinish();
   }
@@ -372,7 +370,7 @@ Purpose: Display video overlay (full-screen) for the Display app.
       if (playRising && cursor === null) {
         const { start, end } = getRange();
         const endValue = typeof end === 'number' && Number.isFinite(end) ? end : null;
-        const epsilon = 0.03;
+        const epsilon = 0.1;
 
         if (reverse) {
           const desiredEnd = endValue ?? durationSec ?? start;
