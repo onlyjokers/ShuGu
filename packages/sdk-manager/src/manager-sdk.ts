@@ -116,7 +116,7 @@ export class ManagerSDK {
             timeSyncInterval: config.timeSyncInterval ?? 5000,
             transports,
             // Throttle high-frequency updates to ~30fps by default to prevent backpressure
-            highFreqThrottleMs: config.highFreqThrottleMs ?? 35,
+            highFreqThrottleMs: config.highFreqThrottleMs ?? 33,
         };
 
         this.state = {
