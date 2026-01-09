@@ -27,4 +27,16 @@
 - [x] Phase 0 文档产出：新增 `docs/PlanDocs/0109_RootManagerControlPlane/phase0_artifacts.md`（依赖规则 v0 / 删除清单 v1 / 回归清单 v1）。
 - [x] Phase 0 拆分：`packages/node-core/src/definitions.ts` 拆为 `packages/node-core/src/definitions/*` 模块，保留原有导出入口。
 - [x] Phase 0 验证：运行 `pnpm --filter @shugu/node-core run lint`（仅 warnings：no-explicit-any / unused-vars，历史问题未处理）。
-- [ ] Phase 0 进行中：拆巨石与 transport 抽象尚未开始（待你确认优先顺序与切分策略）。
+- [x] Phase 0 拆分：`apps/manager/src/lib/components/nodes/NodeCanvas.svelte` 拆出 runtime 模块 `apps/manager/src/lib/components/nodes/node-canvas/runtime/*`（patch 部署/override、client selection、sleep socket sync）；主文件 3793 → 2295 行。
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/manager run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
+- [x] Phase 0 拆分：继续按职责拆分 `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`，新增 controller/utils 模块：
+  - `apps/manager/src/lib/components/nodes/node-canvas/controllers/focus-controller.ts`
+  - `apps/manager/src/lib/components/nodes/node-canvas/controllers/group-port-nodes-controller.ts`
+  - `apps/manager/src/lib/components/nodes/node-canvas/controllers/clipboard-controller.ts`
+  - `apps/manager/src/lib/components/nodes/node-canvas/controllers/frame-drag-controller.ts`
+  - `apps/manager/src/lib/components/nodes/node-canvas/utils/group-port-utils.ts`
+
+  主文件 2295 → 1573 行。
+- [x] Phase 0 格式化：运行 `pnpm exec prettier --write apps/manager/src/lib/components/nodes/NodeCanvas.svelte`（修复 tab/space 混用，避免 eslint `no-mixed-spaces-and-tabs`）。
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/manager run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
+- [ ] Phase 0 进行中：`packages/sdk-client/src/tone-adapter.ts`、`apps/client/src/lib/stores/client.ts`、transport 抽象（display bridge/group 模式收敛）仍未开始。
