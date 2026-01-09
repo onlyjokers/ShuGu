@@ -42,4 +42,22 @@
 - [x] Phase 0 Transport：新增 Display transport 抽象骨架 `apps/manager/src/lib/display/display-transport.ts`（local MessagePort bridge 优先；未 ready 时 server `group=display` fallback）。
 - [x] Phase 0 收敛：`apps/manager/src/lib/stores/manager.ts`、`apps/manager/src/lib/nodes/specs/register.ts` 的 Display 控制发送统一走 `displayTransport.sendControl(...)`（减少重复判断/offset 换算）。
 - [x] Phase 0 验证：运行 `pnpm --filter @shugu/manager run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
-- [ ] Phase 0 进行中：`packages/sdk-client/src/tone-adapter.ts`、`apps/client/src/lib/stores/client.ts` 仍未开始。
+- [x] Phase 0 拆分：`apps/client/src/lib/stores/client.ts` 拆为可维护模块（保留 `$lib/stores/client` 单入口导出）：
+  - `apps/client/src/lib/stores/client/client-state.ts`（state/permissions/latency）
+  - `apps/client/src/lib/stores/client/client-visual.ts`（visual scenes/camera/effects）
+  - `apps/client/src/lib/stores/client/client-media.ts`（audioStream + media clip + video/image state）
+  - `apps/client/src/lib/stores/client/client-control.ts`（executeControl + plugin control）
+  - `apps/client/src/lib/stores/client/client-runtime.ts`（SDK lifecycle + controllers + permissions flow）
+  - `apps/client/src/lib/stores/client/client-tone.ts`（Tone enablement + readiness reporting）
+  - `apps/client/src/lib/stores/client/client-screenshot.ts`（push-image-upload 截图上传）
+  - `apps/client/src/lib/stores/client/client-identity.ts`（device/session identity）
+  - `apps/client/src/lib/stores/client/client-utils.ts`（shared utils）
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/client run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
+- [x] Phase 0 拆分：`packages/sdk-client/src/tone-adapter.ts` 拆为可维护模块（保留原入口为薄导出层）：
+  - `packages/sdk-client/src/tone-adapter/engine-host.ts`（Tone 加载 / transport / graph wiring）
+  - `packages/sdk-client/src/tone-adapter/nodes.ts`（node instances + loop/scheduling + audio-data）
+  - `packages/sdk-client/src/tone-adapter/register.ts`（NodeRegistry definitions）
+  - `packages/sdk-client/src/tone-adapter/state.ts`（shared state/constants）
+  - `packages/sdk-client/src/tone-adapter/utils.ts`（parsing helpers）
+  - `packages/sdk-client/src/tone-adapter/types.ts`（shared types）
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/sdk-client run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。

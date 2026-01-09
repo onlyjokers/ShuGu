@@ -590,6 +590,14 @@ Graph 侧只看到：
 - 依赖护栏生效（CI/本地脚本能挡住跨层倒挂）。
 - 巨石拆分完成且职责边界清晰（至少把 4 个最大的巨石拆出关键模块）。
 
+固定验证命令（Phase 0 必跑）：
+
+- `pnpm guard:deps`
+- `pnpm --filter @shugu/node-core run test`
+- `pnpm --filter @shugu/sdk-client run build`
+- `pnpm --filter @shugu/manager run lint`
+- `pnpm --filter @shugu/client run lint`
+
 ## Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
 
 目标：在 Phase 0 的新骨架上把“现有能力”完整跑通，形成可作为基线的稳定版本；同时把性能/稳定性最致命的问题（Manager 卡顿/退出）降到可接受。
@@ -622,6 +630,14 @@ Graph 侧只看到：
 
 - 你列出的“必须保留能力”在新骨架上全量通过（手动 checklist + 最小自动化 smoke）。
 - Manager 的卡顿与“误退出”问题不再是阻断级（至少可稳定跑完整场排练）。
+
+固定验证命令（Phase 1 必跑）：
+
+- `pnpm guard:deps`
+- `pnpm --filter @shugu/node-core run test`
+- `pnpm --filter @shugu/sdk-client run build`
+- `pnpm --filter @shugu/manager run build`
+- `pnpm --filter @shugu/client run build`
 
 ## Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 
