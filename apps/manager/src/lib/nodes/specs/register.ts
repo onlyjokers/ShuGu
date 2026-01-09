@@ -12,7 +12,6 @@
 import { get } from 'svelte/store';
 import {
   targetClients,
-  targetGroup,
   type ControlAction,
   type ControlPayload,
 } from '@shugu/protocol';
@@ -22,6 +21,7 @@ import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
 import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
+import { createDisplayTransport } from '$lib/display/display-transport';
 import { clientScreenshotUploads, getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
@@ -215,6 +215,15 @@ const midiBooleanState = new Map<string, MidiBooleanState>();
 const clientSelectionState = new Map<string, ClientSelectionState>();
 // Throttle noisy per-frame logs (e.g. showImage streaming).
 const displayObjectLogLastAt = new Map<string, number>();
+
+const displayTransport = createDisplayTransport({
+  managerState: state,
+  displayBridgeState,
+  getSDK,
+  local: {
+    sendControl: sendLocalDisplayControl,
+  },
+});
 
 function midiSourceKey(source: MidiSource | null | undefined): string | null {
   if (!source) return null;
@@ -614,14 +623,11 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
           const commands = (Array.isArray(raw) ? raw : [raw]) as unknown[];
           if (commands.length === 0) return;
 
-          const bridge = get(displayBridgeState);
-          const hasLocalSession = bridge.status === 'connected';
-          const hasLocalReady = hasLocalSession && bridge.ready === true;
-          const hasRemoteDisplay = (get(state).clients ?? []).some((c: any) => String(c?.group ?? '') === 'display');
           const sdk = getSDK();
-          if (!hasLocalSession && !sdk) return;
+          const availability = displayTransport.getAvailability();
+          if (!availability.hasLocalSession && !sdk) return;
 
-          if (import.meta.env.DEV && !hasLocalSession && !hasRemoteDisplay) {
+          if (import.meta.env.DEV && !availability.hasLocalSession && !availability.hasRemoteDisplay) {
             const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
             const warnKey = `warn:${nodeKey}`;
             const now = Date.now();
@@ -632,15 +638,14 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             }
           }
 
-          // `executeAt` is expressed in server time; convert to local time for the local Display bridge.
-          const offset = get(state).timeSync.offset;
-
           for (const cmd of commands) {
             if (!cmd || typeof cmd !== 'object') continue;
             const action = (cmd as any).action as ControlAction | undefined;
             if (!action) continue;
             const payload = ((cmd as any).payload ?? {}) as ControlPayload;
             const executeAt = (cmd as any).executeAt as number | undefined;
+
+            const sendResult = displayTransport.sendControl(action, payload, executeAt);
 
             if (import.meta.env.DEV && (action === 'showImage' || action === 'hideImage')) {
               const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
@@ -652,42 +657,19 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
                 const url = typeof urlCandidate === 'string' ? urlCandidate : '';
                 console.info('[Manager] display-object', {
                   nodeId: context?.nodeId,
-                  via: hasLocalReady ? 'local' : hasLocalSession ? 'local+server' : 'server',
+                  via: sendResult.route,
                   action,
                   urlChars: url ? url.length : null,
                 });
               }
             }
-
-            if (hasLocalSession) {
-              const executeAtLocal =
-                typeof executeAt === 'number' && Number.isFinite(executeAt) ? executeAt - offset : undefined;
-              sendLocalDisplayControl(action, payload, executeAtLocal);
-              if (hasLocalReady) continue;
-            }
-
-            sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
           }
         },
         onDisable: () => {
-          const bridge = get(displayBridgeState);
-          const hasLocalSession = bridge.status === 'connected';
-          const hasLocalReady = hasLocalSession && bridge.ready === true;
-          const sdk = getSDK();
-          if (!hasLocalSession && !sdk) return;
-
-          const send = (action: ControlAction, payload: ControlPayload) => {
-            if (hasLocalSession) {
-              sendLocalDisplayControl(action, payload, undefined);
-              if (hasLocalReady) return;
-            }
-            sdk?.sendControl(targetGroup('display'), action, payload, undefined);
-          };
-
           // Clear any long-lived effects when the Display route is disabled (e.g. group gate closed / graph stop).
-          send('stopMedia', {});
-          send('hideImage', {});
-          send('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any);
+          displayTransport.sendControl('stopMedia', {}, undefined);
+          displayTransport.sendControl('hideImage', {}, undefined);
+          displayTransport.sendControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
         },
       };
     }

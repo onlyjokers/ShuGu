@@ -39,4 +39,7 @@
   主文件 2295 → 1573 行。
 - [x] Phase 0 格式化：运行 `pnpm exec prettier --write apps/manager/src/lib/components/nodes/NodeCanvas.svelte`（修复 tab/space 混用，避免 eslint `no-mixed-spaces-and-tabs`）。
 - [x] Phase 0 验证：运行 `pnpm --filter @shugu/manager run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
-- [ ] Phase 0 进行中：`packages/sdk-client/src/tone-adapter.ts`、`apps/client/src/lib/stores/client.ts`、transport 抽象（display bridge/group 模式收敛）仍未开始。
+- [x] Phase 0 Transport：新增 Display transport 抽象骨架 `apps/manager/src/lib/display/display-transport.ts`（local MessagePort bridge 优先；未 ready 时 server `group=display` fallback）。
+- [x] Phase 0 收敛：`apps/manager/src/lib/stores/manager.ts`、`apps/manager/src/lib/nodes/specs/register.ts` 的 Display 控制发送统一走 `displayTransport.sendControl(...)`（减少重复判断/offset 换算）。
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/manager run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
+- [ ] Phase 0 进行中：`packages/sdk-client/src/tone-adapter.ts`、`apps/client/src/lib/stores/client.ts` 仍未开始。

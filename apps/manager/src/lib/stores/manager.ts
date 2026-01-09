@@ -4,7 +4,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
 import type { SensorDataMessage, ScreenColorPayload, ControlAction, ControlPayload, TargetSelector } from '@shugu/protocol';
-import { targetClients, targetGroup } from '@shugu/protocol';
+import { targetClients } from '@shugu/protocol';
 
 import { parameterRegistry } from '../parameters/registry';
 import { registerDefaultControlParameters } from '../parameters/presets';
@@ -12,7 +12,9 @@ import {
     displayBridgeNodeMedia,
     displayBridgeState,
     sendControl as sendLocalDisplayControl,
+    sendPlugin as sendLocalDisplayPlugin,
 } from '$lib/display/display-bridge';
+import { createDisplayTransport } from '$lib/display/display-transport';
 
 const SEND_TO_DISPLAY_STORAGE_KEY = 'shugu-send-to-display';
 
@@ -33,6 +35,16 @@ export const state = writable<ManagerState>({
         lastSyncTime: 0,
     },
     error: null,
+});
+
+const displayTransport = createDisplayTransport({
+    managerState: state,
+    displayBridgeState,
+    getSDK,
+    local: {
+        sendControl: sendLocalDisplayControl,
+        sendPlugin: sendLocalDisplayPlugin,
+    },
 });
 
 // Sensor data store (latest data from each client)
@@ -120,26 +132,9 @@ if (typeof window !== 'undefined') {
     sendToDisplayEnabled.subscribe((enabled) => {
         // When disconnecting from Display mirroring, clear any long-lived effects so Display doesn't stay stuck.
         if (lastSendToDisplayEnabled === true && !enabled) {
-            const bridge = get(displayBridgeState);
-            const hasLocalSession = bridge.status === 'connected';
-            const hasLocalReady = hasLocalSession && bridge.ready === true;
-            const hasRemote = get(displayClients).length > 0;
-
-            if (hasLocalSession) {
-                sendLocalDisplayControl('stopMedia', {}, undefined);
-                sendLocalDisplayControl('hideImage', {}, undefined);
-                sendLocalDisplayControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
-            }
-            if (!hasLocalReady && hasRemote && sdk) {
-                sdk.sendControl(targetGroup('display'), 'stopMedia', {}, undefined);
-                sdk.sendControl(targetGroup('display'), 'hideImage', {}, undefined);
-                sdk.sendControl(
-                    targetGroup('display'),
-                    'screenColor',
-                    { color: '#000000', opacity: 0, mode: 'solid' } as any,
-                    undefined
-                );
-            }
+            displayTransport.sendControl('stopMedia', {}, undefined);
+            displayTransport.sendControl('hideImage', {}, undefined);
+            displayTransport.sendControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
         }
         lastSendToDisplayEnabled = enabled;
 
@@ -528,26 +523,7 @@ function shouldMirrorToDisplay(action: ControlAction): boolean {
 function maybeMirrorToDisplay(action: ControlAction, payload: ControlPayload, executeAt?: number): void {
     if (!get(sendToDisplayEnabled)) return;
     if (!shouldMirrorToDisplay(action)) return;
-
-    const bridge = get(displayBridgeState);
-    const hasLocalSession = bridge.status === 'connected';
-    const hasLocalReady = hasLocalSession && bridge.ready === true;
-    const hasRemote = get(displayClients).length > 0;
-    if (!hasLocalSession && !hasRemote) return;
-
-    if (hasLocalSession) {
-        const currentState = get(state);
-        const executeAtLocal =
-            typeof executeAt === 'number' && Number.isFinite(executeAt)
-                ? executeAt - currentState.timeSync.offset
-                : undefined;
-        sendLocalDisplayControl(action, payload, executeAtLocal);
-        if (hasLocalReady) return;
-    }
-
-    if (hasRemote) {
-        sdk?.sendControl(targetGroup('display'), action, payload, executeAt);
-    }
+    displayTransport.sendControl(action, payload, executeAt);
 }
 
 // Control actions
