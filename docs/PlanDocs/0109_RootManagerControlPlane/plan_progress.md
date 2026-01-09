@@ -22,3 +22,9 @@
 ### 2026-01-09
 
 - [ ] 初始化：设计冻结（待你确认关键决策点）
+- [x] Phase 0 启动：新增依赖护栏脚本 `scripts/guard-deps.mjs`（阻止 deep-import；约束 protocol/node-core 依赖）。
+- [x] Phase 0 验证：运行 `node scripts/guard-deps.mjs`（无违规）。
+- [x] Phase 0 文档产出：新增 `docs/PlanDocs/0109_RootManagerControlPlane/phase0_artifacts.md`（依赖规则 v0 / 删除清单 v1 / 回归清单 v1）。
+- [x] Phase 0 拆分：`packages/node-core/src/definitions.ts` 拆为 `packages/node-core/src/definitions/*` 模块，保留原有导出入口。
+- [x] Phase 0 验证：运行 `pnpm --filter @shugu/node-core run lint`（仅 warnings：no-explicit-any / unused-vars，历史问题未处理）。
+- [ ] Phase 0 进行中：拆巨石与 transport 抽象尚未开始（待你确认优先顺序与切分策略）。
