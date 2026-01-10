@@ -207,7 +207,12 @@
   }
 
   type NoteViewMode = 'edit' | 'preview' | 'split';
+  // Persist the note toolbar mode per node so imports restore the last view.
+  const noteViewModeKey = '__noteViewMode';
+  const resolveNoteViewMode = (value: unknown): NoteViewMode =>
+    value === 'edit' || value === 'preview' || value === 'split' ? value : 'edit';
   let noteViewMode: NoteViewMode = 'edit';
+  let noteNodeId = '';
   let noteHtml = '';
 
   $: if (data?.controlType === 'note') {
@@ -215,6 +220,30 @@
     noteHtml = renderMarkdownToHtml(raw);
   } else {
     noteHtml = '';
+  }
+
+  $: if (data?.controlType === 'note') {
+    const nextNodeId = typeof data?.nodeId === 'string' ? data.nodeId : '';
+    if (nextNodeId !== noteNodeId) {
+      noteNodeId = nextNodeId;
+      const stored = nextNodeId
+        ? (nodeEngine.getNode(nextNodeId)?.config as Record<string, unknown> | undefined)?.[
+            noteViewModeKey
+          ]
+        : undefined;
+      noteViewMode = resolveNoteViewMode(stored);
+    }
+  } else {
+    noteNodeId = '';
+    noteViewMode = 'edit';
+  }
+
+  function setNoteViewMode(next: NoteViewMode) {
+    if (noteViewMode === next) return;
+    noteViewMode = next;
+    const nodeId = typeof data?.nodeId === 'string' ? data.nodeId : '';
+    if (!nodeId) return;
+    nodeEngine.updateNodeConfig(nodeId, { [noteViewModeKey]: next });
   }
 
   function pickClient(clientId: string) {
@@ -1489,21 +1518,21 @@
       <button
         type="button"
         class="note-tab {noteViewMode === 'edit' ? 'active' : ''}"
-        on:click|stopPropagation={() => (noteViewMode = 'edit')}
+        on:click|stopPropagation={() => setNoteViewMode('edit')}
       >
         Edit
       </button>
       <button
         type="button"
         class="note-tab {noteViewMode === 'preview' ? 'active' : ''}"
-        on:click|stopPropagation={() => (noteViewMode = 'preview')}
+        on:click|stopPropagation={() => setNoteViewMode('preview')}
       >
         Preview
       </button>
       <button
         type="button"
         class="note-tab {noteViewMode === 'split' ? 'active' : ''}"
-        on:click|stopPropagation={() => (noteViewMode = 'split')}
+        on:click|stopPropagation={() => setNoteViewMode('split')}
       >
         Split
       </button>

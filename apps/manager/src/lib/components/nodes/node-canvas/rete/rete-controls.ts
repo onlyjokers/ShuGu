@@ -188,6 +188,7 @@ export class NoteControl extends ClassicPreset.Control {
   placeholder?: string;
   value: string;
   readonly: boolean;
+  nodeId?: string;
   private onChange?: (value: string) => void;
 
   constructor(opts: {

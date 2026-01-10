@@ -500,17 +500,16 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
         curveControl.nodeType = instance.type;
         node.addControl(key, curveControl);
       } else if (instance.type === 'note' && key === 'text') {
-        node.addControl(
-          key,
-          new NoteControl({
-            placeholder: 'Type a note…',
-            initial: typeof current === 'string' ? current : String(current ?? ''),
-            change: (value) => {
-              nodeEngine.updateNodeConfig(instance.id, { [key]: value });
-              sendNodeOverride(instance.id, 'config', key, value);
-            },
-          })
-        );
+        const noteControl = new NoteControl({
+          placeholder: 'Type a note…',
+          initial: typeof current === 'string' ? current : String(current ?? ''),
+          change: (value) => {
+            nodeEngine.updateNodeConfig(instance.id, { [key]: value });
+            sendNodeOverride(instance.id, 'config', key, value);
+          },
+        });
+        noteControl.nodeId = instance.id;
+        node.addControl(key, noteControl);
       } else {
         const control: any = new ClassicPreset.InputControl('text', {
           initial: String(current ?? ''),
