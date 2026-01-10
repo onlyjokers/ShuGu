@@ -13,7 +13,7 @@
     getSDK,
     connectionStatus,
   } from '$lib/stores/client';
-  import VideoPlayer from '$lib/components/VideoPlayer.svelte';
+  import { VideoPlayer } from '@shugu/ui-kit';
   import ImageDisplay from '$lib/components/ImageDisplay.svelte';
   import {
     BoxScene,

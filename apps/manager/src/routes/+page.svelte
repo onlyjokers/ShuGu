@@ -2,9 +2,8 @@
   import '@shugu/ui-kit/styles';
   import { onMount, tick } from 'svelte';
   import { spring } from 'svelte/motion';
-  import { connect, disconnect, connectionStatus, state, clientToneReadiness } from '$lib/stores/manager';
+  import { connect, disconnect, connectionStatus, state } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
-  import { streamEnabled } from '$lib/streaming/streaming';
   import { nodeEngine } from '$lib/nodes';
   import {
     loadLocalProject,
@@ -21,13 +20,6 @@
   import Card from '$lib/components/ui/Card.svelte';
   import Toggle from '$lib/components/ui/Toggle.svelte';
 
-  // Feature Controls
-  import FlashlightControl from '$lib/features/lighting/FlashlightControl.svelte';
-  import VibrationControl from '$lib/features/haptics/VibrationControl.svelte';
-  import SynthControl from '$lib/features/audio/SynthControl.svelte';
-  import ScreenColorControl from '$lib/features/lighting/ScreenColorControl.svelte';
-  import MediaControl from '$lib/features/audio/MediaControl.svelte';
-  import SceneControl from '$lib/features/visuals/SceneControl.svelte';
   import GeoControl from '$lib/features/location/GeoControl.svelte';
   import RegistryMidiPanel from '$lib/components/RegistryMidiPanel.svelte';
   import NodeCanvasRenderer from '$lib/components/nodes/NodeCanvasRenderer.svelte';
@@ -103,32 +95,10 @@
     event.preventDefault();
   }
 
-  // Console settings (persisted)
-  const SYNC_ENABLED_STORAGE_KEY = 'shugu-manager-sync-enabled';
-  const SYNC_DELAY_STORAGE_KEY = 'shugu-manager-sync-delay-ms';
+  // Settings (persisted)
   const PERFORMANCE_MODE_STORAGE_KEY = 'shugu-manager-performance-mode';
-  const REQUIRE_TONE_READY_STORAGE_KEY = 'shugu-manager-require-tone-ready';
 
-  // Global Sync State
-  let useSync = true;
-  let syncDelay = 500;
   let performanceMode = false;
-  let requireToneReady = false;
-
-  function clampSyncDelay(value: unknown): number {
-    const n = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(n)) return 500;
-    return Math.max(0, Math.min(10000, Math.round(n)));
-  }
-
-  $: {
-    const clamped = clampSyncDelay(syncDelay);
-    if (clamped !== syncDelay) syncDelay = clamped;
-  }
-
-  $: audienceIds = $state.clients.filter((c) => c.group !== 'display').map((c) => c.clientId);
-  $: audienceToneReadyCount = audienceIds.filter((id) => $clientToneReadiness.get(id)?.enabled === true).length;
-  $: audienceToneReportedCount = audienceIds.filter((id) => $clientToneReadiness.get(id)?.enabled !== null).length;
 
   function getActiveTabEl(): HTMLButtonElement | null {
     if (activePage === 'dashboard') return tabDashboardEl;
@@ -177,10 +147,7 @@
     assetWriteToken = savedAssetWrite ? savedAssetWrite : '';
 
     try {
-      useSync = localStorage.getItem(SYNC_ENABLED_STORAGE_KEY) !== '0';
-      syncDelay = clampSyncDelay(localStorage.getItem(SYNC_DELAY_STORAGE_KEY) ?? 500);
       performanceMode = localStorage.getItem(PERFORMANCE_MODE_STORAGE_KEY) === '1';
-      requireToneReady = localStorage.getItem(REQUIRE_TONE_READY_STORAGE_KEY) === '1';
     } catch {
       // ignore
     }
@@ -193,10 +160,7 @@
 
   $: if (typeof window !== 'undefined') {
     try {
-      localStorage.setItem(SYNC_ENABLED_STORAGE_KEY, useSync ? '1' : '0');
-      localStorage.setItem(SYNC_DELAY_STORAGE_KEY, String(clampSyncDelay(syncDelay)));
       localStorage.setItem(PERFORMANCE_MODE_STORAGE_KEY, performanceMode ? '1' : '0');
-      localStorage.setItem(REQUIRE_TONE_READY_STORAGE_KEY, requireToneReady ? '1' : '0');
     } catch {
       // ignore
     }
@@ -418,30 +382,6 @@
         </button>
       </div>
 
-      <div slot="headerActions" class="session-pill">
-        <div class="sync-config">
-          <label class="sync-toggle">
-            <input type="checkbox" bind:checked={useSync} />
-            <span>⚡ Global Sync</span>
-          </label>
-          <div class="sync-delay">
-            <input
-              type="number"
-              min="0"
-              max="10000"
-              step="50"
-              bind:value={syncDelay}
-              disabled={!useSync}
-              aria-label="Global Sync delay (ms)"
-            />
-            <span class="sync-delay-unit">ms</span>
-          </div>
-        </div>
-        <Button variant="ghost" size="sm" on:click={() => streamEnabled.update((v) => !v)}>
-          {#if $streamEnabled}⏸ Stream Off{:else}▶ Stream On{/if}
-        </Button>
-      </div>
-
       <div class:hide={activePage !== 'dashboard'}>
         <div class="dashboard-grid">
           <div class="grid-item">
@@ -464,46 +404,6 @@
                 Takes effect on next connect (recommended to disconnect/reconnect).
               </p>
             </Card>
-          </div>
-          <div class="grid-item">
-            <Card title="🎚️ Require Tone Ready">
-              <Toggle
-                label="Gate audio commands"
-                description="Prevents Play All/Selected when some clients haven’t enabled Tone."
-                bind:checked={requireToneReady}
-              />
-              <div class="setting-stats">
-                <span>
-                  Audience tone-ready: {audienceToneReadyCount}/{audienceIds.length}
-                </span>
-                {#if audienceToneReportedCount < audienceIds.length}
-                  <span class="setting-stats-muted">
-                    ({audienceToneReportedCount} reported)
-                  </span>
-                {/if}
-              </div>
-              <p class="setting-hint">
-                Helps keep audio in sync by avoiding the HTMLAudio fallback path.
-              </p>
-            </Card>
-          </div>
-          <div class="grid-item">
-            <FlashlightControl {useSync} {syncDelay} />
-          </div>
-          <div class="grid-item">
-            <ScreenColorControl {useSync} {syncDelay} />
-          </div>
-          <div class="grid-item">
-            <SynthControl {useSync} {syncDelay} {requireToneReady} />
-          </div>
-          <div class="grid-item">
-            <MediaControl {useSync} {syncDelay} {requireToneReady} />
-          </div>
-          <div class="grid-item">
-            <VibrationControl {useSync} {syncDelay} />
-          </div>
-          <div class="grid-item">
-            <SceneControl {useSync} {syncDelay} {serverUrl} />
           </div>
           <div class="grid-item">
             <GeoControl {serverUrl} />

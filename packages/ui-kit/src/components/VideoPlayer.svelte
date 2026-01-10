@@ -1,5 +1,5 @@
 <!--
-Purpose: Display video overlay (full-screen) for the Display app.
+Purpose: Shared video overlay player used by Client and Display apps.
 -->
 
 <script lang="ts">
@@ -451,17 +451,20 @@ Purpose: Display video overlay (full-screen) for the Display app.
   .video-overlay {
     position: fixed;
     inset: 0;
-    z-index: 0;
+    z-index: 0; /* Below effect output so post-processing can cover */
     display: flex;
     align-items: center;
     justify-content: center;
     background: transparent;
-    padding: 24px;
+    padding: 24px; /* Margin from screen edges */
     opacity: 0;
+    pointer-events: none;
+    transition: opacity 280ms ease;
   }
 
   .video-overlay.visible {
     opacity: 1;
+    pointer-events: auto;
   }
 
   .video-overlay.fit-cover,

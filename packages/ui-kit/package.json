@@ -25,6 +25,9 @@
         "dist-out",
         "src"
     ],
+    "dependencies": {
+        "@shugu/multimedia-core": "workspace:*"
+    },
     "peerDependencies": {
         "svelte": "^4.0.0"
     },

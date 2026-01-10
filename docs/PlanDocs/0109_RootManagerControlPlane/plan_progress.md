@@ -143,7 +143,7 @@
   - [x] 回归：按 `phase1_regression_playbook.md`（尤其关注移动端音频策略 / user gesture / AudioContext）。
     - 用户手动真机验证：Tone enable/ready 正常；Synth Play/Update/Stop ✅；`Stream On` 下参数更新稳定、不丢声。
 
-- [ ] Phase 2 Batch #3（Visual scenes：收敛 legacy single-scene vs multi-scene / `phase2_targets.md` section 4）：
+- [x] Phase 2 Batch #3（Visual scenes：收敛 legacy single-scene vs multi-scene / `phase2_targets.md` section 4；commit: `42315ec`）：
   - [x] 决策：采用 multi-scene（`visualScenes` 为唯一语义），移除单场景分支。
   - [x] 清理与收敛：
     - Protocol：移除 `visualSceneSwitch`/`visualSceneBox`/`visualSceneMel`/`visualSceneFrontCamera`/`visualSceneBackCamera`。
@@ -161,12 +161,21 @@
     - 稳定性：Start/Stop/Deploy/Scene switch loop ✅。
 
 - [ ] Phase 2 Batch #4（Media：VideoPlayer 去重复 / `phase2_targets.md` section 2）：
-  - [ ] 决策：选 A（抽到 `packages/ui-kit`）或 B（抽逻辑到 `packages/multimedia-core`，UI 仍在 apps）。
-  - [ ] 固定动作（batch after-delete gates）：
-    - `pnpm guard:deps` ✅/❌
-    - `pnpm lint` ✅/❌（0 errors）
-    - `pnpm build:all` ✅/❌（推荐）
-  - [ ] 回归：Phase 1 checklist 中媒体动作（playMedia/showImage/hideImage 等）必须全绿。
+  - [x] 决策：选 A（抽到 `packages/ui-kit`）。
+  - [x] 清理与收敛：
+    - `packages/ui-kit` 新增共享 `VideoPlayer` 组件（Client/Display 共用）。
+    - 删除 `apps/client`/`apps/display` 内重复的 `VideoPlayer.svelte`。
+    - 入口改为从 `@shugu/ui-kit` 引用；`ui-kit` 增加 `@shugu/multimedia-core` 依赖与 `svelte-shims.d.ts`。
+  - [x] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (555 files scanned)`）
+    - `pnpm lint` ✅（0 errors；57 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；vite/sass deprecation warnings 仍在）
+  - [x] Acceptance hook：
+    - `rg -n "\\$lib/components/VideoPlayer\\.svelte|\\$components/VideoPlayer\\.svelte" apps` 无命中。
+    - `rg -n "import \\{ VideoPlayer \\} from '@shugu/ui-kit'" apps` 仅命中 Client/Display 调用点。
+  - [x] 回归：Phase 1 checklist 中媒体动作（playMedia/showImage/hideImage 等）全绿（用户手动验证）。
+    - 结果（2026-01-10）：`playMedia` / `showImage` / `hideImage` / `screenColor` ✅。
+    - 备注：用户反馈 Screen Color 语义更贴近 Scene Layer Player，建议后续重分类。
 
 - [ ] Phase 2 Batch #5（Transitional glue：一次性迁移脚本/历史兼容胶水 / `phase2_targets.md` section 5）：
   - [ ] 目标：对“无 owner 的过渡脚本/迁移逻辑”做删/收口（删除或改成显式手动导入动作）。

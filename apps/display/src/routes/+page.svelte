@@ -5,7 +5,7 @@ Purpose: Full-screen Display player (Phase 2/3: UI + MultimediaCore + server tra
 <script lang="ts">
   import '@shugu/ui-kit/styles';
   import { onMount, onDestroy } from 'svelte';
-  import VideoPlayer from '$components/VideoPlayer.svelte';
+  import { VideoPlayer } from '@shugu/ui-kit';
   import ImageDisplay from '$components/ImageDisplay.svelte';
   import { toneAudioEngine } from '@shugu/multimedia-core';
   import {

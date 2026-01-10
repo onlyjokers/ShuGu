@@ -5,3 +5,5 @@
 
 // Export component-related utilities
 export * from './utils.js';
+
+export { default as VideoPlayer } from './components/VideoPlayer.svelte';
