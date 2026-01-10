@@ -671,7 +671,8 @@ Graph 侧只看到：
   - 明确“哪些输出是部署需要的、哪些只是本地缓存”，并写入 `docs/ARCHITECTURE.md` 或 `DEPLOY.md` 的补充说明。
 
 - **E) Phase 2 输入准备（让 Phase 2 变成“按清单删除”）**
-  - 补齐/更新 Phase 2 的“删除清单 v2”（聚焦**仍存在的双通路/重复实现/过渡胶水**），并写入计划文档（可新建 `phase2_targets.md` 或直接写入本计划 Phase 2 小节）。
+  - 补齐/更新 Phase 2 的“删除清单 v2”（聚焦**仍存在的双通路/重复实现/过渡胶水**）。
+    - 当前版本：`docs/PlanDocs/0109_RootManagerControlPlane/phase2_targets.md`
 
 验收：
 
@@ -687,7 +688,8 @@ Graph 侧只看到：
 范围：
 
 - **A) 删除旧实现 / 去双通路（只保留一套语义与一套实现）**
-  - 按“删除清单 v2”执行删除（该清单应聚焦当前仍存在的：双通路、重复组件、过渡胶水、旁路状态机）。
+  - 按“删除清单 v2”执行删除（聚焦仍存在的：双通路、重复组件、过渡胶水、旁路状态机）。
+    - `docs/PlanDocs/0109_RootManagerControlPlane/phase2_targets.md`
   - 明确每个能力的 **Single Source of Truth**：
     - Display：local MessagePort 与 server fallback 必须收敛到统一入口（例如 `display-transport`），旧的直连发送/旁路逻辑不再保留。
     - UI 复用：类似 `VideoPlayer` 这类跨 app 的重复实现，要么抽到 `packages/ui-kit` / `packages/multimedia-core`，要么明确“只保留一份并被复用”。

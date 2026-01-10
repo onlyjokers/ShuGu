@@ -6,7 +6,7 @@
 
 - [x] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
 - [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
-- [ ] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
+- [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [ ] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
@@ -94,9 +94,16 @@
   - [x] 修复：Display 在 server fallback 后无法 Reconnect 回到 local（MessagePort）+ local ready 上报只发一次 → `apps/display/src/lib/stores/display.ts`：允许 late-pair、ready 分通道上报、local 模式忽略 server control/plugin/media、dev 允许同 hostname 任意端口 origin。
   - [x] 修复：Manager 的 `Stream On` 更新路径不触发（reactive deps 缺失）→ `apps/manager/src/lib/features/*/*Control.svelte`：`queueUpdate(...)` 改为显式参数驱动（ScreenColor/Flashlight/Synth）。
 
-- [ ] Next: Phase 1.5（Pre-Phase2 Gate，开始删代码前必须完成）：
-  - [ ] `pnpm lint` 0 errors（至少先修掉阻断级错误；warnings 允许但要明确“新增禁止”）
-  - [ ] 新增 `docs/ARCHITECTURE.md`（repo map / 数据流 / 入口索引 / hotspots）
-  - [ ] 新增轻量清理命令（例如 `pnpm clean:artifacts`）用于清理本地生成物
-  - [ ] 打 tag/标记：`phase1-baseline-YYYYMMDD`（或等价基线标记）
-  - [ ] 更新 Phase 2 删除清单 v2（聚焦双通路/重复实现/过渡胶水）
+- [x] Phase 1.5.A 基线固化：
+  - `git status --porcelain` ✅（clean）
+  - Tag：`phase1-baseline-20260110` ✅（annotated tag；commit: `01934da3`）
+- [x] Phase 1.5.B 质量闸门：
+  - `pnpm guard:deps` ✅（`[deps-guard] ok (602 files scanned)`）
+  - `pnpm lint` ✅（0 errors；warnings 为历史债，当前共 63 warnings，以 `no-explicit-any`/unused-vars 为主）
+  - `pnpm build:all` ✅（通过；有 chunk size / vite-plugin-svelte warnings，作为 Phase 3 code-splitting 的证据锚点）
+- [x] Phase 1.5.C 架构地图：新增 `docs/ARCHITECTURE.md` ✅（repo map / 数据流 / 入口索引 / hotspots）。
+- [x] Phase 1.5.D 本地生成物治理：新增 `pnpm clean:artifacts` ✅（见 `scripts/clean-artifacts.mjs`）。
+  - 注：如果 clean 输出 `EACCES/EPERM`，说明历史生成物是 root-owned（曾用 sudo build）；需要一次性 `sudo chown -R $(whoami) <path>` 修复。
+- [x] Phase 1.5.E Phase 2 输入准备：新增“删除清单 v2”✅
+  - `docs/PlanDocs/0109_RootManagerControlPlane/phase2_targets.md`
+  - 并在 `docs/PlanDocs/0109_RootManagerControlPlane/plan.md` 链接该清单。

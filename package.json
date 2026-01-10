@@ -15,6 +15,7 @@
     "build:all": "pnpm -r run build",
     "lint": "ESLINT_USE_FLAT_CONFIG=true pnpm -r run lint",
     "format": "prettier --write \"**/*.{ts,svelte,js,json,css,md}\"",
+    "clean:artifacts": "node scripts/clean-artifacts.mjs",
     "clean": "pnpm -r run clean && rm -rf node_modules"
   },
   "keywords": [
