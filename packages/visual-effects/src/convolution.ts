@@ -1,8 +1,5 @@
 /**
- * Purpose: Client-side 3x3 convolution post-processing helpers.
- *
- * Used by `VisualCanvas.svelte` to apply a customizable convolution kernel to the currently
- * rendered frame (scene/video/image/ascii output).
+ * Purpose: Convolution post-processing helpers (kernels + apply).
  */
 
 export type ConvolutionPreset =
@@ -32,10 +29,22 @@ export type Convolution3x3Params = {
   normalize: boolean;
 };
 
+export type ConvolutionEffectRuntime = {
+  convWorkCanvas: HTMLCanvasElement;
+  convWorkCtx: CanvasRenderingContext2D | null;
+  convOutput: ImageData | null;
+  convWorkW: number;
+  convWorkH: number;
+};
+
 function clamp255(value: number): number {
   if (value <= 0) return 0;
   if (value >= 255) return 255;
   return value;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 export function resolveConvolutionKernel(preset: ConvolutionPreset, kernel: number[] | null): number[] {
@@ -164,3 +173,103 @@ export function applyConvolution3x3(
   }
 }
 
+export function applyConvolutionEffect(
+  runtime: ConvolutionEffectRuntime,
+  src: HTMLCanvasElement,
+  dstCtx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  dpr: number,
+  effect: {
+    preset?: unknown;
+    kernel?: unknown;
+    mix?: unknown;
+    bias?: unknown;
+    normalize?: unknown;
+    scale?: unknown;
+  }
+): boolean {
+  const { convWorkCanvas, convWorkCtx } = runtime;
+  if (!convWorkCanvas || !convWorkCtx) return false;
+
+  const scale = clamp(Number(effect.scale ?? 0.5), 0.1, 1);
+  let procW = Math.max(48, Math.floor(width * scale));
+  let procH = Math.max(48, Math.floor(height * scale));
+
+  const maxPixels = 260_000;
+  const pixels = procW * procH;
+  if (pixels > maxPixels) {
+    const ratio = Math.sqrt(maxPixels / pixels);
+    procW = Math.max(48, Math.floor(procW * ratio));
+    procH = Math.max(48, Math.floor(procH * ratio));
+  }
+
+  if (runtime.convWorkW !== procW || runtime.convWorkH !== procH) {
+    runtime.convWorkW = procW;
+    runtime.convWorkH = procH;
+    convWorkCanvas.width = procW;
+    convWorkCanvas.height = procH;
+    runtime.convOutput = convWorkCtx.createImageData(procW, procH);
+  }
+
+  try {
+    convWorkCtx.setTransform(1, 0, 0, 1, 0, 0);
+    convWorkCtx.drawImage(src, 0, 0, procW, procH);
+  } catch {
+    return false;
+  }
+
+  let input: ImageData;
+  try {
+    input = convWorkCtx.getImageData(0, 0, procW, procH);
+  } catch {
+    return false;
+  }
+
+  if (!runtime.convOutput) return false;
+
+  const presetRaw = typeof effect.preset === 'string' ? effect.preset : 'sharpen';
+  const preset = (() => {
+    const allowed = [
+      'blur',
+      'gaussianBlur',
+      'sharpen',
+      'edge',
+      'emboss',
+      'sobelX',
+      'sobelY',
+      'custom',
+    ];
+    return allowed.includes(presetRaw) ? presetRaw : 'sharpen';
+  })();
+  const kernel = (() => {
+    const raw = effect.kernel;
+    if (!Array.isArray(raw)) return null;
+    const parsed = raw
+      .map((n) => (typeof n === 'number' ? n : Number(n)))
+      .filter((n) => Number.isFinite(n))
+      .slice(0, 9);
+    return parsed.length === 9 ? parsed : null;
+  })();
+
+  const mix = clamp(Number(effect.mix ?? 1), 0, 1);
+  const bias = clamp(Number(effect.bias ?? 0), -1, 1);
+  const normalize = typeof effect.normalize === 'boolean' ? effect.normalize : true;
+
+  const resolvedKernel = resolveConvolutionKernel(preset as ConvolutionPreset, kernel);
+  applyConvolution3x3(input.data, procW, procH, runtime.convOutput.data, {
+    kernel: resolvedKernel,
+    mix,
+    bias,
+    normalize,
+  });
+
+  convWorkCtx.putImageData(runtime.convOutput, 0, 0);
+
+  dstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  dstCtx.imageSmoothingEnabled = true;
+  dstCtx.fillStyle = '#0a0a0f';
+  dstCtx.fillRect(0, 0, width, height);
+  dstCtx.drawImage(convWorkCanvas, 0, 0, width, height);
+  return true;
+}

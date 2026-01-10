@@ -14,6 +14,7 @@ dist-protocol-out
 dist-audio-plugins-out
 dist-sdk-manager-out
 dist-visual-plugins-out
+dist-visual-effects-out
 dist-node-core
 dist-dev*
 .svelte-kit*

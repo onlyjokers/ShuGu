@@ -1,0 +1,30 @@
+{
+  "name": "@shugu/visual-effects",
+  "version": "1.0.0",
+  "description": "Shared visual post-processing effects",
+  "main": "./dist-visual-effects-out/index.js",
+  "module": "./dist-visual-effects-out/index.js",
+  "types": "./dist-visual-effects-out/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-visual-effects-out/index.d.ts",
+      "import": "./dist-visual-effects-out/index.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm exec tsc",
+    "dev": "pnpm exec tsc --watch",
+    "clean": "rm -rf dist-visual-effects-out",
+    "lint": "ESLINT_USE_FLAT_CONFIG=true eslint \"src/**/*.ts\""
+  },
+  "files": [
+    "dist-visual-effects-out"
+  ],
+  "dependencies": {
+    "@shugu/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

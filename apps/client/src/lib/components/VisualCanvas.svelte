@@ -29,9 +29,12 @@
     type MelSpectrogramFeature,
   } from '@shugu/audio-plugins';
   import {
-    applyConvolution3x3,
-    resolveConvolutionKernel,
-  } from '$lib/features/convolution/convolution';
+    createVisualEffectPipeline,
+    drawAsciiBorder,
+    renderVisualEffects,
+    resetVisualEffectPipeline,
+    type VisualEffectPipeline,
+  } from '@shugu/visual-effects';
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
@@ -41,19 +44,7 @@
   let audioContext: AudioContext | null = null;
   let animationId: number;
   let effectCtx: CanvasRenderingContext2D | null = null;
-  let frameA: HTMLCanvasElement | null = null;
-  let frameACtx: CanvasRenderingContext2D | null = null;
-  let frameB: HTMLCanvasElement | null = null;
-  let frameBCtx: CanvasRenderingContext2D | null = null;
-  let tinyCanvas: HTMLCanvasElement | null = null;
-  let tinyCtx: CanvasRenderingContext2D | null = null;
-  let convWorkCanvas: HTMLCanvasElement | null = null;
-  let convWorkCtx: CanvasRenderingContext2D | null = null;
-  let convOutput: ImageData | null = null;
-  let convWorkW = 0;
-  let convWorkH = 0;
-  let lastEffectDraw = 0;
-  let lastEffectsSignature = '';
+  let effectPipeline: VisualEffectPipeline | null = null;
   let baseVisible = true;
   let lastTime = 0;
   let cameraVideoElement: HTMLVideoElement;
@@ -92,16 +83,9 @@
     sceneManager.register(new BoxScene());
     sceneManager.register(new MelSpectrogramScene());
 
-    // Effect pipeline setup
+    // Effect pipeline setup (shared visual-effects package)
     effectCtx = effectCanvas.getContext('2d');
-    frameA = document.createElement('canvas');
-    frameACtx = frameA.getContext('2d');
-    frameB = document.createElement('canvas');
-    frameBCtx = frameB.getContext('2d');
-    tinyCanvas = document.createElement('canvas');
-    tinyCtx = tinyCanvas.getContext('2d', { willReadFrequently: true });
-    convWorkCanvas = document.createElement('canvas');
-    convWorkCtx = convWorkCanvas.getContext('2d', { willReadFrequently: true });
+    effectPipeline = createVisualEffectPipeline();
     handleResize();
 
     // Set up device orientation listener
@@ -240,8 +224,17 @@
     sceneManager?.update(dt, context);
 
     const effects = Array.isArray($visualEffects) ? $visualEffects : [];
-    if (effects.length > 0) {
-      const ok = renderEffects(effects, now);
+    if (effects.length > 0 && effectPipeline) {
+      const ok = renderVisualEffects(effectPipeline, {
+        effects,
+        nowMs: now,
+        container,
+        outputCanvas: effectCanvas,
+        outputCtx: effectCtx,
+        drawBaseFrame,
+        melSceneEnabled: $melSceneEnabled,
+        asciiOverlay: renderAsciiBorder,
+      });
       setBaseLayerVisibility(!ok);
       if (effectCanvas) effectCanvas.style.visibility = ok ? 'visible' : 'hidden';
     } else {
@@ -354,129 +347,6 @@
     for (const el of overlays) {
       el.style.visibility = show ? 'visible' : 'hidden';
     }
-  }
-
-  function computeEffectTargetFps(effects: unknown[], width: number, height: number): number {
-    let fps = 30;
-
-    for (const effect of effects) {
-      if (!effect || typeof effect !== 'object') continue;
-      const type = typeof (effect as any).type === 'string' ? String((effect as any).type) : '';
-
-      if (type === 'convolution') {
-        const scale = clamp(Number((effect as any).scale ?? 0.5), 0.1, 1);
-        let procW = Math.max(48, Math.floor(width * scale));
-        let procH = Math.max(48, Math.floor(height * scale));
-
-        const maxPixels = 260_000;
-        const pixels = procW * procH;
-        if (pixels > maxPixels) {
-          const ratio = Math.sqrt(maxPixels / pixels);
-          procW = Math.max(48, Math.floor(procW * ratio));
-          procH = Math.max(48, Math.floor(procH * ratio));
-        }
-
-        const convFps = procW * procH > 180_000 ? 15 : 30;
-        fps = Math.min(fps, convFps);
-        continue;
-      }
-
-      if (type === 'ascii') {
-        const cellSize = Math.max(
-          1,
-          Math.min(100, Math.round(Number((effect as any).cellSize ?? 11)))
-        );
-        const cols = Math.max(24, Math.floor(width / cellSize));
-        const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
-
-        const cellCount = cols * rows;
-        const asciiFps = (() => {
-          if ($melSceneEnabled) return cellCount >= 12_000 ? 10 : 15;
-          return cellCount >= 18_000 ? 15 : 30;
-        })();
-        fps = Math.min(fps, asciiFps);
-      }
-    }
-
-    return Math.max(5, Math.min(60, fps));
-  }
-
-  function renderEffects(effects: unknown[], nowMs: number): boolean {
-    if (!effectCtx || !frameA || !frameACtx || !frameB || !frameBCtx) return false;
-    if (!tinyCanvas || !tinyCtx) return false;
-    if (!convWorkCanvas || !convWorkCtx) return false;
-
-    const width = container?.clientWidth ?? 0;
-    const height = container?.clientHeight ?? 0;
-    if (width === 0 || height === 0) return false;
-
-    const signature = (() => {
-      try {
-        return JSON.stringify(effects);
-      } catch {
-        return '';
-      }
-    })();
-    if (signature !== lastEffectsSignature) {
-      lastEffectsSignature = signature;
-      lastEffectDraw = 0;
-    }
-
-    const targetFps = computeEffectTargetFps(effects, width, height);
-    if (nowMs - lastEffectDraw < 1000 / targetFps) return true;
-    lastEffectDraw = nowMs;
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const targetW = Math.floor(width * dpr);
-    const targetH = Math.floor(height * dpr);
-    if (targetW === 0 || targetH === 0) return false;
-
-    if (effectCanvas.width !== targetW) effectCanvas.width = targetW;
-    if (effectCanvas.height !== targetH) effectCanvas.height = targetH;
-    if (effectCanvas.style.width !== `${width}px`) effectCanvas.style.width = `${width}px`;
-    if (effectCanvas.style.height !== `${height}px`) effectCanvas.style.height = `${height}px`;
-
-    if (frameA.width !== targetW) frameA.width = targetW;
-    if (frameA.height !== targetH) frameA.height = targetH;
-    if (frameB.width !== targetW) frameB.width = targetW;
-    if (frameB.height !== targetH) frameB.height = targetH;
-
-    drawBaseFrame(frameACtx, width, height, dpr);
-
-    let srcCanvas: HTMLCanvasElement = frameA;
-    let srcCtx: CanvasRenderingContext2D = frameACtx;
-    let dstCanvas: HTMLCanvasElement = frameB;
-    let dstCtx: CanvasRenderingContext2D = frameBCtx;
-
-    for (const effect of effects) {
-      if (!effect || typeof effect !== 'object') continue;
-      const type = typeof (effect as any).type === 'string' ? String((effect as any).type) : '';
-
-      const applied = (() => {
-        if (type === 'convolution')
-          return applyConvolutionEffect(srcCanvas, dstCtx, width, height, dpr, effect as any);
-        if (type === 'ascii')
-          return applyAsciiEffect(srcCanvas, dstCtx, width, height, dpr, effect as any);
-        return false;
-      })();
-
-      if (!applied) {
-        // Best-effort fallback: pass-through when the effect can't run (e.g. canvas tainted by CORS).
-        dstCtx.setTransform(1, 0, 0, 1, 0, 0);
-        dstCtx.clearRect(0, 0, targetW, targetH);
-        dstCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
-      }
-
-      // Swap buffers for the next pass.
-      [srcCanvas, dstCanvas] = [dstCanvas, srcCanvas];
-      [srcCtx, dstCtx] = [dstCtx, srcCtx];
-    }
-
-    effectCtx.setTransform(1, 0, 0, 1, 0, 0);
-    effectCtx.clearRect(0, 0, targetW, targetH);
-    effectCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
-
-    return true;
   }
 
   function drawBaseFrame(
@@ -618,192 +488,7 @@
     }
   }
 
-  function applyConvolutionEffect(
-    src: HTMLCanvasElement,
-    dstCtx: CanvasRenderingContext2D,
-    width: number,
-    height: number,
-    dpr: number,
-    effect: {
-      preset?: unknown;
-      kernel?: unknown;
-      mix?: unknown;
-      bias?: unknown;
-      normalize?: unknown;
-      scale?: unknown;
-    }
-  ): boolean {
-    if (!convWorkCanvas || !convWorkCtx) return false;
-
-    const scale = clamp(Number(effect.scale ?? 0.5), 0.1, 1);
-    let procW = Math.max(48, Math.floor(width * scale));
-    let procH = Math.max(48, Math.floor(height * scale));
-
-    const maxPixels = 260_000;
-    const pixels = procW * procH;
-    if (pixels > maxPixels) {
-      const ratio = Math.sqrt(maxPixels / pixels);
-      procW = Math.max(48, Math.floor(procW * ratio));
-      procH = Math.max(48, Math.floor(procH * ratio));
-    }
-
-    if (convWorkW !== procW || convWorkH !== procH) {
-      convWorkW = procW;
-      convWorkH = procH;
-      convWorkCanvas.width = procW;
-      convWorkCanvas.height = procH;
-      convOutput = convWorkCtx.createImageData(procW, procH);
-    }
-
-    try {
-      convWorkCtx.setTransform(1, 0, 0, 1, 0, 0);
-      convWorkCtx.drawImage(src, 0, 0, procW, procH);
-    } catch {
-      return false;
-    }
-
-    let input: ImageData;
-    try {
-      input = convWorkCtx.getImageData(0, 0, procW, procH);
-    } catch {
-      return false;
-    }
-
-    if (!convOutput) return false;
-
-    const presetRaw = typeof effect.preset === 'string' ? effect.preset : 'sharpen';
-    const preset = (() => {
-      const allowed = [
-        'blur',
-        'gaussianBlur',
-        'sharpen',
-        'edge',
-        'emboss',
-        'sobelX',
-        'sobelY',
-        'custom',
-      ];
-      return allowed.includes(presetRaw) ? presetRaw : 'sharpen';
-    })();
-    const kernel = (() => {
-      const raw = effect.kernel;
-      if (!Array.isArray(raw)) return null;
-      const parsed = raw
-        .map((n) => (typeof n === 'number' ? n : Number(n)))
-        .filter((n) => Number.isFinite(n))
-        .slice(0, 9);
-      return parsed.length === 9 ? parsed : null;
-    })();
-
-    const mix = clamp(Number(effect.mix ?? 1), 0, 1);
-    const bias = clamp(Number(effect.bias ?? 0), -1, 1);
-    const normalize = typeof effect.normalize === 'boolean' ? effect.normalize : true;
-
-    const resolvedKernel = resolveConvolutionKernel(preset as any, kernel);
-    applyConvolution3x3(input.data, procW, procH, convOutput.data, {
-      kernel: resolvedKernel,
-      mix,
-      bias,
-      normalize,
-    });
-
-    convWorkCtx.putImageData(convOutput, 0, 0);
-
-    dstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    dstCtx.imageSmoothingEnabled = true;
-    dstCtx.fillStyle = '#0a0a0f';
-    dstCtx.fillRect(0, 0, width, height);
-    dstCtx.drawImage(convWorkCanvas, 0, 0, width, height);
-    return true;
-  }
-
-  function applyAsciiEffect(
-    src: HTMLCanvasElement,
-    dstCtx: CanvasRenderingContext2D,
-    width: number,
-    height: number,
-    dpr: number,
-    effect: { cellSize?: unknown }
-  ): boolean {
-    if (!tinyCtx || !tinyCanvas) return false;
-
-    const cellSize = Math.max(1, Math.min(100, Math.round(Number(effect.cellSize ?? 11))));
-    const cols = Math.max(24, Math.floor(width / cellSize));
-    const rows = Math.max(18, Math.floor(height / (cellSize * 1.05)));
-
-    if (tinyCanvas.width !== cols) tinyCanvas.width = cols;
-    if (tinyCanvas.height !== rows) tinyCanvas.height = rows;
-
-    try {
-      tinyCtx.drawImage(src, 0, 0, cols, rows);
-    } catch {
-      // Cross-origin or invalid source; skip this frame
-      return false;
-    }
-
-    let data: Uint8ClampedArray;
-    try {
-      data = tinyCtx.getImageData(0, 0, cols, rows).data;
-    } catch {
-      // Canvas tainted (likely cross-origin media without CORS)
-      return false;
-    }
-
-    dstCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    dstCtx.fillStyle = '#0a0a0f';
-    dstCtx.fillRect(0, 0, width, height);
-    dstCtx.textAlign = 'center';
-    dstCtx.textBaseline = 'middle';
-    const fontSize = Math.max(9, Math.round(height / rows));
-    dstCtx.font = `${fontSize}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
-
-    const ramp = ['.', '`', ',', ':', ';', '-', '~', '+', '*', 'x', 'o', 'O', '%', '#', '@'];
-    const strokes = ['/', '\\', '|', '-', '='];
-
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const idx = (y * cols + x) * 4;
-        const r = data[idx];
-        const g = data[idx + 1];
-        const b = data[idx + 2];
-        const a = data[idx + 3] / 255;
-        if (a === 0) continue;
-
-        const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-        if (brightness < 0.08) continue; // deep black stays empty
-
-        const posX = (x + 0.5) * (width / cols);
-        const posY = (y + 0.5) * (height / rows);
-
-        // bright -> solid block
-        if (brightness >= 0.82) {
-          dstCtx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.94)`;
-          dstCtx.fillRect(
-            posX - width / cols / 2,
-            posY - height / rows / 2,
-            width / cols + 0.75,
-            height / rows + 0.75
-          );
-          continue;
-        }
-
-        const glyphIndex =
-          brightness > 0.62
-            ? Math.floor((x + y) % strokes.length)
-            : Math.min(ramp.length - 1, Math.floor(brightness * ramp.length));
-        const glyph = brightness > 0.62 ? strokes[glyphIndex] : ramp[glyphIndex];
-
-        const alpha = 0.35 + brightness * 0.55;
-        dstCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.min(1, alpha)})`;
-        dstCtx.fillText(glyph, posX, posY);
-      }
-    }
-
-    drawBorder(dstCtx, width, height, cols, rows);
-    return true;
-  }
-
-  function drawBorder(
+  function renderAsciiBorder(
     ctx: CanvasRenderingContext2D,
     width: number,
     height: number,
@@ -819,42 +504,11 @@
       edgeColor = `rgba(239, 68, 68, ${alpha})`;
     }
 
-    ctx.fillStyle = edgeColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const charW = width / cols;
-    const charH = height / rows;
-    ctx.font = `${Math.max(10, Math.round(charH * 0.95))}px "IBM Plex Mono", "SFMono-Regular", "Menlo", monospace`;
-
-    const topChars = ['=', '-', '='];
-    const sideChars = ['|', '!', '|'];
-
-    for (let c = 0; c < cols; c++) {
-      const ch = topChars[c % topChars.length];
-      const x = c * charW + charW / 2;
-      ctx.fillText(ch, x, charH * 0.55);
-      ctx.fillText(ch, x, height - charH * 0.45);
-    }
-
-    for (let r = 0; r < rows; r++) {
-      const ch = sideChars[r % sideChars.length];
-      const y = r * charH + charH / 2;
-      ctx.fillText(ch, charW * 0.45, y);
-      ctx.fillText(ch, width - charW * 0.45, y);
-    }
-
-    ctx.fillText('+', charW * 0.45, charH * 0.55);
-    ctx.fillText('+', width - charW * 0.45, charH * 0.55);
-    ctx.fillText('+', charW * 0.45, height - charH * 0.45);
-    ctx.fillText('+', width - charW * 0.45, height - charH * 0.45);
+    drawAsciiBorder(ctx, width, height, cols, rows, edgeColor);
   }
 
   function handleResize() {
-    lastEffectDraw = 0;
-    lastEffectsSignature = '';
-    convWorkW = 0;
-    convWorkH = 0;
-    convOutput = null;
+    if (effectPipeline) resetVisualEffectPipeline(effectPipeline);
   }
 </script>
 
