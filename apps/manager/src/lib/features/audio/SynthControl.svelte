@@ -90,24 +90,34 @@
     playingUntil = localStartAt + durMs + 200; // basic release buffer
   }
 
-  function queueUpdate() {
-    if (!$streamEnabled) return;
-    if (!hasSelection) return;
+  function queueUpdate(options: {
+    streamEnabled: boolean;
+    hasSelection: boolean;
+    playingUntil: number;
+    frequency: number;
+    volume: number;
+    waveform: SynthWaveform;
+    modDepth: number;
+    modLfo: number;
+    durationMs: number;
+  }) {
+    if (!options.streamEnabled) return;
+    if (!options.hasSelection) return;
     const now = Date.now();
-    if (now > playingUntil) return; // nothing currently playing
-    const depth = Math.max(0, Math.min(1, Number($modDepth) || 0));
-    const lfo = Number($modLfo) || 12;
+    if (now > options.playingUntil) return; // nothing currently playing
+    const depth = options.modDepth;
+    const lfo = options.modLfo;
 
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
       modulateSoundUpdate(
         {
-          frequency: Number($frequency) || 180,
-          volume: clamp01(Number($volume) || 0.7),
-          waveform: $waveform,
+          frequency: options.frequency,
+          volume: options.volume,
+          waveform: options.waveform,
           modFrequency: depth > 0 ? lfo : undefined,
           modDepth: depth > 0 ? depth : undefined,
-          durationMs: Number($duration) || 200,
+          durationMs: options.durationMs,
         },
         false,
         getExecuteAt()
@@ -116,7 +126,17 @@
   }
 
   // React to parameter changes while stream mode is on
-  $: queueUpdate();
+  $: queueUpdate({
+    streamEnabled: $streamEnabled,
+    hasSelection,
+    playingUntil,
+    frequency: Number($frequency) || 180,
+    volume: clamp01(Number($volume) || 0.7),
+    waveform: $waveform,
+    modDepth: Math.max(0, Math.min(1, Number($modDepth) || 0)),
+    modLfo: Number($modLfo) || 12,
+    durationMs: Number($duration) || 200,
+  });
 
   function clamp01(v: number) {
     return Math.max(0, Math.min(1, v));

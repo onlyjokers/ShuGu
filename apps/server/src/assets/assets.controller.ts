@@ -65,7 +65,22 @@ function buildPublicBaseUrl(req: HeaderRequest, configuredBaseUrl: string | null
 
 function toContentDispositionFilename(originalName: string): string {
   const base = path.basename(originalName || '').replace(/[\r\n"]/g, '_');
-  return base || 'asset';
+  // Ensure the quoted filename value is ASCII-only to satisfy Node's header validation.
+  const ascii = base.replace(/[^\x20-\x7E]/g, '_').trim();
+  return ascii || 'asset';
+}
+
+function toContentDispositionFilenameStar(originalName: string): string | null {
+  const base = path.basename(originalName || '').replace(/[\r\n"]/g, '_').trim();
+  if (!base) return null;
+  return `UTF-8''${encodeURIComponent(base)}`;
+}
+
+function buildContentDisposition(originalName: string): string {
+  const fallback = toContentDispositionFilename(originalName);
+  const star = toContentDispositionFilenameStar(originalName);
+  if (!star) return `inline; filename="${fallback}"`;
+  return `inline; filename="${fallback}"; filename*=${star}`;
 }
 
 @Controller('api/assets')
@@ -170,10 +185,7 @@ export class AssetsController {
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename="${toContentDispositionFilename(stored.originalName)}"`
-    );
+    res.setHeader('Content-Disposition', buildContentDisposition(stored.originalName));
     res.end();
   }
 
@@ -215,10 +227,7 @@ export class AssetsController {
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename="${toContentDispositionFilename(stored.originalName)}"`
-    );
+    res.setHeader('Content-Disposition', buildContentDisposition(stored.originalName));
 
     if (!range) {
       res.status(200);

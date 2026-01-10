@@ -4,8 +4,9 @@
 
 ## 总进度
 
-- [ ] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
-- [ ] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
+- [x] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
+- [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
+- [ ] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [ ] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
@@ -61,3 +62,41 @@
   - `packages/sdk-client/src/tone-adapter/utils.ts`（parsing helpers）
   - `packages/sdk-client/src/tone-adapter/types.ts`（shared types）
 - [x] Phase 0 验证：运行 `pnpm --filter @shugu/sdk-client run lint`（0 errors；warnings 为历史问题 + TS 版本提示）。
+
+### 2026-01-10
+
+- [x] Phase 1 固定验证命令：
+  - `pnpm guard:deps` ✅
+  - `pnpm --filter @shugu/node-core run test` ✅
+  - `pnpm --filter @shugu/sdk-client run build` ✅
+  - `pnpm --filter @shugu/manager run build` ✅（有 chunk size / svelte warnings，历史问题未处理）
+  - `pnpm --filter @shugu/client run build` ✅（有 svelte warnings，历史问题未处理）
+- [x] Phase 1 回归环境（为避开默认端口占用，统一用一套 dev 端口）：
+  - Server：`https://localhost:3002`（`PORT=3002`；`ASSET_WRITE_TOKEN=dev-write`）
+  - Manager：`https://127.0.0.1:5176/manager`
+  - Client：`https://127.0.0.1:5177/?server=https://localhost:3002&e2e=1`
+  - Display：`https://127.0.0.1:5175/display`
+- [x] Phase 1 回归 playbook：新增 `docs/PlanDocs/0109_RootManagerControlPlane/phase1_regression_playbook.md`（下次回归复用指南 + 常见坑排查）。
+- [x] Phase 1 回归清单 v1（`phase0_artifacts.md:66`）逐项验证：
+  - [x] Control chain：Manager -> Server -> Client 控制链路 OK（`screenColor` Play/Stop Selected 生效）。
+  - [x] Control chain：Manager -> Display local bridge OK（DisplayPanel `status=connected / ready=yes`；`Send To Display` 开启后 `screenColor` 可镜像到 Display）。
+  - [x] Node graph & runtime：编辑/loop/scene OK（构造 `client-object <-> proc-client-sensors` 环；`localLoops=1`；`exportGraphForLoop` OK）。
+  - [x] Node graph & runtime：deploy/export/import OK（`exportGraphForPatchFromRootNodeIds(scene-out)` OK；`exportGraph/loadGraph` round-trip OK）。
+  - [x] Node graph & runtime：功能集冒烟 OK（覆盖 `screenColor / flashlight / showImage/hideImage / visualSceneSwitch(mel-scene)` 等关键动作）。
+  - [x] Assets & media：manifest 扫描 + 下发 OK（上传 `测试.png` 后 manifest 更新，ClientSelector dot 进入 `ready`；Display 侧 `multimediaCore` preload ready）。
+  - [x] Assets & media：Client 多媒体层语义 OK（`showImage`/`hideImage`、`visualSceneSwitch` 行为正确）。
+  - [x] Assets & media：媒体动作 OK（`image upload`、`flashlight on/off`、`mel-scene` 切换、`screenColor`）。
+  - [x] Stability：Manager 在 Start/Stop/Deploy/Scene switch 冒烟流程中未崩（tab 仍可切换）。
+  - [x] Stability：高频控件 OK：开启 `▶ Stream On` 后，连续改动 ScreenColor 参数可产生多次 `screenColor` 下发（1s 内 `delta=5`）。
+- [x] Phase 1 回归中发现并修复的问题（为保证 checklist 全绿）：
+  - [x] 修复：Assets `HEAD /content` 500（非 ASCII filename 导致 Node header `ERR_INVALID_CHAR`）→ 改为 ASCII fallback `filename=\"...\"` + RFC 5987 `filename*=`。文件：`apps/server/src/assets/assets.controller.ts`。
+  - [x] 修复：Server dev 输出目录权限问题（历史 `dist-dev` 为 root-owned 导致 watch unlink 失败）→ `apps/server/tsconfig.dev.json`：`outDir` 改为 `./dist-dev-local`。
+  - [x] 修复：Display 在 server fallback 后无法 Reconnect 回到 local（MessagePort）+ local ready 上报只发一次 → `apps/display/src/lib/stores/display.ts`：允许 late-pair、ready 分通道上报、local 模式忽略 server control/plugin/media、dev 允许同 hostname 任意端口 origin。
+  - [x] 修复：Manager 的 `Stream On` 更新路径不触发（reactive deps 缺失）→ `apps/manager/src/lib/features/*/*Control.svelte`：`queueUpdate(...)` 改为显式参数驱动（ScreenColor/Flashlight/Synth）。
+
+- [ ] Next: Phase 1.5（Pre-Phase2 Gate，开始删代码前必须完成）：
+  - [ ] `pnpm lint` 0 errors（至少先修掉阻断级错误；warnings 允许但要明确“新增禁止”）
+  - [ ] 新增 `docs/ARCHITECTURE.md`（repo map / 数据流 / 入口索引 / hotspots）
+  - [ ] 新增轻量清理命令（例如 `pnpm clean:artifacts`）用于清理本地生成物
+  - [ ] 打 tag/标记：`phase1-baseline-YYYYMMDD`（或等价基线标记）
+  - [ ] 更新 Phase 2 删除清单 v2（聚焦双通路/重复实现/过渡胶水）

@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist-dev"
+    "outDir": "./dist-dev-local"
   }
 }

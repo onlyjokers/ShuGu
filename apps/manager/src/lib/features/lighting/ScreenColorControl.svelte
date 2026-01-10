@@ -53,21 +53,40 @@
     return Date.now() + $state.timeSync.offset + syncDelay;
   }
 
-  function buildPayload(): ScreenColorPayload {
+  function buildPayload(values: {
+    color: string;
+    secondaryColor: string;
+    waveform: string;
+    frequencyHz: number;
+    minOpacity: number;
+    maxOpacity: number;
+  }): ScreenColorPayload {
     return {
       mode: 'modulate',
-      color: $selectedColor,
-      secondaryColor: $screenSecondaryColor,
-      opacity: $screenMaxOpacity,
-      minOpacity: $screenMinOpacity,
-      maxOpacity: $screenMaxOpacity,
-      frequencyHz: $screenFrequency,
-      waveform: $screenWaveform as 'sine' | 'square' | 'triangle' | 'sawtooth',
+      color: values.color,
+      secondaryColor: values.secondaryColor,
+      opacity: values.maxOpacity,
+      minOpacity: values.minOpacity,
+      maxOpacity: values.maxOpacity,
+      frequencyHz: values.frequencyHz,
+      waveform: values.waveform as 'sine' | 'square' | 'triangle' | 'sawtooth',
     };
   }
 
   function handleScreenColor(toAll = false) {
-    screenColor(buildPayload(), undefined, toAll, getExecuteAt());
+    screenColor(
+      buildPayload({
+        color: $selectedColor,
+        secondaryColor: $screenSecondaryColor,
+        waveform: $screenWaveform,
+        frequencyHz: $screenFrequency,
+        minOpacity: $screenMinOpacity,
+        maxOpacity: $screenMaxOpacity,
+      }),
+      undefined,
+      toAll,
+      getExecuteAt()
+    );
     playing = true;
     if (stopTimer) clearTimeout(stopTimer);
     if ($durationMs > 0) {
@@ -92,17 +111,38 @@
     playingUntil = 0;
   }
 
-  function queueUpdate() {
-    if (!$streamEnabled) return;
-    if (!hasSelection || !playing) return;
-    if ($durationMs > 0 && Date.now() > playingUntil) return;
+  function queueUpdate(options: {
+    streamEnabled: boolean;
+    hasSelection: boolean;
+    playing: boolean;
+    durationMs: number;
+    playingUntil: number;
+    payload: ScreenColorPayload;
+  }) {
+    if (!options.streamEnabled) return;
+    if (!options.hasSelection || !options.playing) return;
+    if (options.durationMs > 0 && Date.now() > options.playingUntil) return;
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
-      screenColor(buildPayload(), undefined, false, getExecuteAt());
+      screenColor(options.payload, undefined, false, getExecuteAt());
     }, 30);
   }
 
-  $: queueUpdate();
+  $: queueUpdate({
+    streamEnabled: $streamEnabled,
+    hasSelection,
+    playing,
+    durationMs: $durationMs,
+    playingUntil,
+    payload: buildPayload({
+      color: $selectedColor,
+      secondaryColor: $screenSecondaryColor,
+      waveform: $screenWaveform,
+      frequencyHz: $screenFrequency,
+      minOpacity: $screenMinOpacity,
+      maxOpacity: $screenMaxOpacity,
+    }),
+  });
 
   onDestroy(() => {
     if (stopTimer) clearTimeout(stopTimer);

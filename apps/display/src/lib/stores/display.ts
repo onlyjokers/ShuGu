@@ -631,6 +631,22 @@ function isAllowedManagerOrigin(origin: string): boolean {
     // ignore
   }
 
+  // Dev convenience: allow Manager to pair from the same hostname (any port).
+  // This keeps local MessagePort pairing working in e2e/dev runs where Manager is started on a non-default port.
+  if (import.meta.env.DEV) {
+    try {
+      const sender = new URL(origin);
+      const display = new URL(window.location.origin);
+
+      if (sender.protocol === display.protocol && sender.hostname === display.hostname) return true;
+
+      const hostPair = new Set([sender.hostname, display.hostname]);
+      if (sender.protocol === display.protocol && hostPair.has('localhost') && hostPair.has('127.0.0.1')) return true;
+    } catch {
+      // ignore
+    }
+  }
+
   return allowed.has(origin);
 }
 
@@ -645,36 +661,43 @@ export function initializeDisplay(config: DisplayInitConfig): void {
   audioState.set(toneAudioEngine.getStatus());
 
   let readySent = false;
-  let readyReported = false;
+  let readyReportedToLocal = false;
+  let readyReportedToServer = false;
   let readyAt: number | null = null;
   let readyManifestId: string | null = null;
 
   const reportReadyIfPossible = () => {
-    if (readyReported) return;
     if (!readySent) return;
 
     if (transportDecision === 'local' && localPort) {
+      if (readyReportedToLocal) return;
       try {
         localPort.postMessage({
           type: 'shugu:display:ready',
           manifestId: readyManifestId,
           at: readyAt,
         });
-        readyReported = true;
+        if (import.meta.env.DEV) {
+          console.info('[Display] ready -> local', { manifestId: readyManifestId, at: readyAt });
+        }
+        readyReportedToLocal = true;
         readyOnce.set({
           ready: true,
           at: readyAt,
           manifestId: readyManifestId,
-          reportedToServer: false,
+          reportedToServer: readyReportedToServer,
           reportedToLocal: true,
         });
       } catch {
-        // ignore
+        if (import.meta.env.DEV) {
+          console.warn('[Display] ready -> local failed');
+        }
       }
       return;
     }
 
     if (transportDecision !== 'server' || !sdk) return;
+    if (readyReportedToServer) return;
 
     const state = sdk.getState();
     if (state.status !== 'connected' || !state.clientId) return;
@@ -690,13 +713,13 @@ export function initializeDisplay(config: DisplayInitConfig): void {
         },
         { trackLatest: false }
       );
-      readyReported = true;
+      readyReportedToServer = true;
       readyOnce.set({
         ready: true,
         at: readyAt,
         manifestId: readyManifestId,
         reportedToServer: true,
-        reportedToLocal: false,
+        reportedToLocal: readyReportedToLocal,
       });
     } catch {
       // ignore
@@ -718,6 +741,9 @@ export function initializeDisplay(config: DisplayInitConfig): void {
       readySent = true;
       readyAt = Date.now();
       readyManifestId = s.manifestId;
+      if (import.meta.env.DEV) {
+        console.info('[Display] multimediaCore ready', { manifestId: readyManifestId });
+      }
       readyOnce.set({
         ready: true,
         at: readyAt,
@@ -765,6 +791,8 @@ export function initializeDisplay(config: DisplayInitConfig): void {
   });
 
   controlUnsub = sdk.onControl((message: ControlMessage) => {
+    // If we later pair locally (MessagePort), keep the server connection but ignore server control messages.
+    if (transportDecision !== 'server') return;
     const offset = sdk?.getOffset?.() ?? 0;
     const executeAtLocal =
       typeof message.executeAt === 'number' && Number.isFinite(message.executeAt) ? message.executeAt - offset : undefined;
@@ -800,6 +828,8 @@ export function initializeDisplay(config: DisplayInitConfig): void {
   );
 
   pluginUnsub = sdk.onPluginControl((message: PluginControlMessage) => {
+    // If we later pair locally (MessagePort), keep the server connection but ignore server plugin messages.
+    if (transportDecision !== 'server') return;
     if (message.pluginId === 'node-executor') {
       nodeExecutor?.handlePluginControl(message);
       return;
@@ -814,6 +844,8 @@ export function initializeDisplay(config: DisplayInitConfig): void {
   });
 
   mediaMsgUnsub = sdk.onMedia((message: MediaMetaMessage) => {
+    // If we later pair locally (MessagePort), keep the server connection but ignore server media messages.
+    if (transportDecision !== 'server') return;
     const options = message.options ?? {};
     const payload: PlayMediaPayload = {
       url: message.url,
@@ -837,11 +869,10 @@ export function initializeDisplay(config: DisplayInitConfig): void {
       clearTimeout(pairTimeoutHandle);
       pairTimeoutHandle = null;
     }
-    if (typeof window !== 'undefined' && windowPairListener) {
-      window.removeEventListener('message', windowPairListener);
-      windowPairListener = null;
-    }
 
+    if (import.meta.env.DEV) {
+      console.info('[Display] transport -> server (pair timeout fallback)');
+    }
     sdk?.connect();
   };
 
@@ -897,6 +928,12 @@ export function initializeDisplay(config: DisplayInitConfig): void {
         console.info('[Display] local plugin noop:', pluginId, command);
         return;
       }
+      if (import.meta.env.DEV) {
+        const snapshot = (payload ?? undefined) as any;
+        const manifestId = typeof snapshot?.manifestId === 'string' ? snapshot.manifestId : null;
+        const assetsCount = Array.isArray(snapshot?.assets) ? snapshot.assets.length : null;
+        console.info('[Display] local manifest configure', { manifestId, assetsCount });
+      }
       handleAssetManifest((payload ?? undefined) as Record<string, unknown> | undefined);
       return;
     }
@@ -905,7 +942,7 @@ export function initializeDisplay(config: DisplayInitConfig): void {
   };
 
   const enterLocalMode = (port: MessagePort) => {
-    if (transportDecision !== 'pending') return;
+    if (transportDecision !== 'pending' && transportDecision !== 'server') return;
     transportDecision = 'local';
     mode.set('local');
 
@@ -926,12 +963,22 @@ export function initializeDisplay(config: DisplayInitConfig): void {
       // ignore
     }
 
+    if (import.meta.env.DEV) {
+      console.info('[Display] transport -> local (paired via MessagePort)');
+    }
     reportReadyIfPossible();
   };
 
   windowPairListener = (event: MessageEvent) => {
-    if (transportDecision !== 'pending') return;
-    if (!isAllowedManagerOrigin(event.origin)) return;
+    // Allow late local pairing even after server fallback so the Manager's "Reconnect" can recover.
+    if (transportDecision === 'local') return;
+    if (!isAllowedManagerOrigin(event.origin)) {
+      if (import.meta.env.DEV) {
+        const data = event.data as any;
+        if (data?.type === 'shugu:display:pair') console.warn('[Display] pair rejected (origin)', event.origin);
+      }
+      return;
+    }
 
     const data = event.data as unknown;
     if (!data || typeof data !== 'object') return;
@@ -940,10 +987,16 @@ export function initializeDisplay(config: DisplayInitConfig): void {
     if (type !== 'shugu:display:pair') return;
 
     const token = (data as { token?: unknown }).token;
-    if (typeof token !== 'string' || token !== pairToken) return;
+    if (typeof token !== 'string' || token !== pairToken) {
+      if (import.meta.env.DEV) console.warn('[Display] pair rejected (token mismatch)');
+      return;
+    }
 
     const port = event.ports?.[0];
-    if (!port) return;
+    if (!port) {
+      if (import.meta.env.DEV) console.warn('[Display] pair rejected (missing MessagePort)');
+      return;
+    }
 
     enterLocalMode(port);
   };

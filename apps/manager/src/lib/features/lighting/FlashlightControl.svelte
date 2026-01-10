@@ -43,20 +43,25 @@
     playingUntil = Date.now() + $durationMs;
   }
 
-  function buildPayload() {
-    if ($frequencyHz <= 1) {
+  function buildPayload(frequencyHz: number, dutyCycle: number) {
+    if (frequencyHz <= 1) {
       return { mode: 'on' as const };
     }
     return {
       mode: 'blink' as const,
-      frequency: $frequencyHz,
-      dutyCycle: $blinkDutyCycle,
+      frequency: frequencyHz,
+      dutyCycle,
     };
   }
 
   function handleFlashlight(toAll = false) {
-    const payload = buildPayload();
-    flashlight(payload.mode, payload.frequency ? { frequency: payload.frequency, dutyCycle: payload.dutyCycle } : undefined, toAll, getExecuteAt());
+    const payload = buildPayload($frequencyHz, $blinkDutyCycle);
+    flashlight(
+      payload.mode,
+      payload.frequency ? { frequency: payload.frequency, dutyCycle: payload.dutyCycle } : undefined,
+      toAll,
+      getExecuteAt()
+    );
     updateControlState({ flashlightOn: true });
     playing = true;
     if (playing) {
@@ -73,23 +78,38 @@
     flashlight('off', undefined, toAll, getExecuteAt());
   }
 
-  function queueUpdate() {
-    if (!$streamEnabled) return;
-    if (!hasSelection || !playing) return;
-    if ($durationMs > 0 && Date.now() > playingUntil) return;
+  function queueUpdate(options: {
+    streamEnabled: boolean;
+    hasSelection: boolean;
+    playing: boolean;
+    durationMs: number;
+    playingUntil: number;
+    payload: ReturnType<typeof buildPayload>;
+  }) {
+    if (!options.streamEnabled) return;
+    if (!options.hasSelection || !options.playing) return;
+    if (options.durationMs > 0 && Date.now() > options.playingUntil) return;
     if (updateTimer) clearTimeout(updateTimer);
     updateTimer = setTimeout(() => {
-      const payload = buildPayload();
       flashlight(
-        payload.mode,
-        payload.frequency ? { frequency: payload.frequency, dutyCycle: payload.dutyCycle } : undefined,
+        options.payload.mode,
+        options.payload.frequency
+          ? { frequency: options.payload.frequency, dutyCycle: options.payload.dutyCycle }
+          : undefined,
         false,
         getExecuteAt()
       );
     }, 30);
   }
 
-  $: queueUpdate();
+  $: queueUpdate({
+    streamEnabled: $streamEnabled,
+    hasSelection,
+    playing,
+    durationMs: $durationMs,
+    playingUntil,
+    payload: buildPayload($frequencyHz, $blinkDutyCycle),
+  });
 
   onDestroy(() => {
     if (stopTimer) clearTimeout(stopTimer);

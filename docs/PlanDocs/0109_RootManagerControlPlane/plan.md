@@ -14,9 +14,13 @@ Status: Draft
 # ✅ 进度记录（Checkbox）
 
 > 说明：这是“最终态重构”的总进度面板；每个 Phase 都有明确验收标准与决策点。
+>
+> - **执行日志与每日勾选状态以** `docs/PlanDocs/0109_RootManagerControlPlane/plan_progress.md` **为准**（真相源）。
+> - 本面板用于呈现“计划结构 + 当前阶段完成度”，建议与 `plan_progress.md` 保持一致。
 
-- [ ] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
-- [ ] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
+- [x] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
+- [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
+- [ ] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [ ] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
@@ -639,23 +643,77 @@ Graph 侧只看到：
 - `pnpm --filter @shugu/manager run build`
 - `pnpm --filter @shugu/client run build`
 
+## Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
+
+目标：在进入 Phase 2 的破坏性删除之前，把 Phase 1 的结果固化成**可回退、可复现、可度量**的基线版本；并补齐“仓库阅读地图”，降低后续重构沟通与维护成本。
+
+范围（不新增功能；只做工程化与可读性治理）：
+
+- **A) 基线固化（避免 Phase 2 删除不可回退）**
+  - 形成一个 clean 的基线提交（工作区 `git status --porcelain` 为空）。
+  - 打 tag/标记（例如 `phase1-baseline-YYYYMMDD`），便于回滚与对比。
+  - Phase 1 回归证据与复跑方式必须完整记录（继续维护 `plan_progress.md` + `phase1_regression_playbook.md`）。
+
+- **B) 质量闸门（必须“可执行”，不是口号）**
+  - `pnpm guard:deps` 必须通过（依赖边界不退化）。
+  - `pnpm lint` 必须 **0 errors**（warnings 可暂存，但本阶段要明确：哪些 warnings 是历史债，哪些是新增禁止）。
+  - （可选但推荐）`pnpm build:all` 通过，确保 Phase 2 删除前的生产构建基线存在。
+
+- **C) 架构地图（解决“我看不懂现在的系统”）**
+  - 新增 `docs/ARCHITECTURE.md`，至少包含：
+    - Repo Map：`apps/*` 与 `packages/*` 的职责边界 + 依赖方向（与 deps guard 一致）。
+    - 关键数据流：Control chain / Assets / Display transport（local+fallback）/ NodeGraph deploy。
+    - 入口索引：每个 app 的“入口文件/核心 store/核心网关”（方便快速定位）。
+    - Hotspots 清单：>1k 行文件、`@ts-nocheck` 位置、以及“拆分/收敛策略”（不要求本阶段完成拆分，但要写清楚怎么拆、拆到哪）。
+
+- **D) 本地生成物治理（降低目录噪音、提升可读性）**
+  - 新增轻量清理命令（例如 `pnpm clean:artifacts`）用于清理 `.svelte-kit*`/`build*`/`dist*`/`vite-cache*` 等本地生成物（不动源码、不删 node_modules）。
+  - 明确“哪些输出是部署需要的、哪些只是本地缓存”，并写入 `docs/ARCHITECTURE.md` 或 `DEPLOY.md` 的补充说明。
+
+- **E) Phase 2 输入准备（让 Phase 2 变成“按清单删除”）**
+  - 补齐/更新 Phase 2 的“删除清单 v2”（聚焦**仍存在的双通路/重复实现/过渡胶水**），并写入计划文档（可新建 `phase2_targets.md` 或直接写入本计划 Phase 2 小节）。
+
+验收：
+
+- 基线可回退：存在明确 tag/标记，且 `git status --porcelain` 为空。
+- 质量闸门：`pnpm guard:deps` ✅，`pnpm lint` ✅（0 errors）。
+- 可读性：`docs/ARCHITECTURE.md` ✅（包含 repo map / 数据流 / 入口索引 / hotspots）。
+- （可选）`pnpm build:all` ✅。
+
 ## Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 
 目标：你确认 Phase 1 OK 后，**删除旧代码**，避免双栈并存再次变屎山；同时落地最关键的工程护栏，让后续迭代保持“干净”。
 
 范围：
 
-- 删除 Phase 0 的“删除清单 v1”中标记的旧实现（不保留 fallback）。
-- 把“防屎山护栏”固化为自动化检查（你选择了轻量但关键）：
-  - 优先落地：依赖图检查（禁止循环依赖 + 禁止层级倒挂：apps → sdk → runtime/node-core → protocol）
-  - 其次落地：禁止 deep import（apps 只能从 `packages/*/src/index.ts` 引用）
-  - 文件体积/复杂度门禁仅做告警（避免“规则系统也变屎山”）
-  - 最小测试基线（你选择了“关键单测 + 关键 e2e”，范围聚焦）
+- **A) 删除旧实现 / 去双通路（只保留一套语义与一套实现）**
+  - 按“删除清单 v2”执行删除（该清单应聚焦当前仍存在的：双通路、重复组件、过渡胶水、旁路状态机）。
+  - 明确每个能力的 **Single Source of Truth**：
+    - Display：local MessagePort 与 server fallback 必须收敛到统一入口（例如 `display-transport`），旧的直连发送/旁路逻辑不再保留。
+    - UI 复用：类似 `VideoPlayer` 这类跨 app 的重复实现，要么抽到 `packages/ui-kit` / `packages/multimedia-core`，要么明确“只保留一份并被复用”。
+  - 删除后的行为验证必须立即回归（见验收）。
+
+- **B) 护栏固化（防止再变屎山）**
+  - 依赖护栏升级：在现有 `guard:deps` 基础上，逐步扩展到“关键层级倒挂/循环依赖”的自动检测（保持规则轻量、可维护）。
+  - Deep import 禁止：保持当前策略（只允许从 `package.json#exports` 暴露的入口导入）。
+  - Hotspot 闸门（建议从 warn 起步）：
+    - 对 `@ts-nocheck`、超大文件（例如 >1500 行）建立告警/预算，避免 Phase 3+ 继续发酵。
+    - 允许通过“白名单 + owner + 拆分计划”临时豁免，但必须可追踪。
+  - 最小测试基线（聚焦，不追求全面）：
+    - 继续维持 Phase 1 的手动 checklist 全绿。
+    - 能自动跑的部分尽量脚本化（smoke / e2e），避免每次都靠记忆。
+
+- **C) 目录与抽包（为 Phase 3/4 打底，减少未来大迁移风险）**
+  - 目标不是“目录更深”，而是把**概念边界变清楚**：
+    - 将可复用的 NodeGraph/UI/编辑器模块逐步抽到 `packages/*`（只抽纯模块，app 内保留集成层）。
+    - 对历史命名做一次“语义化对齐”（例如 `nodes`/`components/nodes` 的边界通过命名或入口文件变得直观）。
+  - 原则：每次迁移都要保证 Phase 1 回归清单仍可跑通（不新增功能、不改行为）。
 
 验收（你的删除门槛要求）：
 
 - 自动化 smoke tests + 手动 checklist 同时通过。
 - 代码库中“同类能力两套通路并存”的核心历史包袱被清除（以依赖图与目录结构为证）。
+- `pnpm guard:deps` ✅，`pnpm lint` ✅（0 errors）。
 
 ---
 
