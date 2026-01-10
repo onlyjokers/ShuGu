@@ -3,7 +3,14 @@
  */
 import { writable, derived, get } from 'svelte/store';
 import { ManagerSDK, type ManagerState, type ManagerSDKConfig } from '@shugu/sdk-manager';
-import type { SensorDataMessage, ScreenColorPayload, ControlAction, ControlPayload, TargetSelector } from '@shugu/protocol';
+import type {
+    SensorDataMessage,
+    ScreenColorPayload,
+    ControlAction,
+    ControlPayload,
+    TargetSelector,
+    VisualSceneLayerItem,
+} from '@shugu/protocol';
 import { targetClients } from '@shugu/protocol';
 
 import { parameterRegistry } from '../parameters/registry';
@@ -649,8 +656,8 @@ export function hideImage(toAll = false): void {
     maybeMirrorToDisplay('hideImage', {}, undefined);
 }
 
-export function switchScene(sceneId: string, toAll = false, executeAt?: number): void {
-    sdk?.switchScene(sceneId, toAll, executeAt);
+export function setVisualScenes(scenes: VisualSceneLayerItem[], toAll = false, executeAt?: number): void {
+    sdk?.setVisualScenes(scenes, toAll, executeAt);
 }
 
 export function asciiMode(enabled: boolean, toAll = false, executeAt?: number): void {

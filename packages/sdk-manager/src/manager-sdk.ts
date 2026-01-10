@@ -27,6 +27,7 @@ import {
     PluginId,
     PluginCommand,
     MediaType,
+    VisualSceneLayerItem,
     targetAll,
     targetClients,
 } from '@shugu/protocol';
@@ -615,38 +616,14 @@ export class ManagerSDK {
     }
 
     /**
-     * Switch visual scene (legacy - only one scene active at a time)
+     * Set the ordered visual scene layer list.
      */
-    switchScene(sceneId: string, toAll = false, executeAt?: number): void {
-        const payload = { sceneId };
+    setVisualScenes(scenes: VisualSceneLayerItem[], toAll = false, executeAt?: number): void {
+        const payload = { scenes };
         if (toAll) {
-            this.sendControlToAll('visualSceneSwitch', payload, executeAt);
+            this.sendControlToAll('visualScenes', payload, executeAt);
         } else {
-            this.sendControlToSelected('visualSceneSwitch', payload, executeAt);
-        }
-    }
-
-    /**
-     * Enable/disable box scene independently
-     */
-    boxScene(enabled: boolean, toAll = false, executeAt?: number): void {
-        const payload = { enabled };
-        if (toAll) {
-            this.sendControlToAll('visualSceneBox', payload, executeAt);
-        } else {
-            this.sendControlToSelected('visualSceneBox', payload, executeAt);
-        }
-    }
-
-    /**
-     * Enable/disable Mel Spectrogram scene independently
-     */
-    melScene(enabled: boolean, toAll = false, executeAt?: number): void {
-        const payload = { enabled };
-        if (toAll) {
-            this.sendControlToAll('visualSceneMel', payload, executeAt);
-        } else {
-            this.sendControlToSelected('visualSceneMel', payload, executeAt);
+            this.sendControlToSelected('visualScenes', payload, executeAt);
         }
     }
 

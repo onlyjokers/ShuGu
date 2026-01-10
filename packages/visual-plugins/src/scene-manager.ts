@@ -6,7 +6,6 @@ import type { VisualScene, VisualContext, SceneManager } from './types.js';
 
 export class DefaultSceneManager implements SceneManager {
     private scenes: Map<string, VisualScene> = new Map();
-    private currentScene: VisualScene | null = null;
     private activeScenes: Set<string> = new Set();
     private container: HTMLElement | null = null;
 
@@ -44,37 +43,6 @@ export class DefaultSceneManager implements SceneManager {
         }
     }
 
-    /**
-     * Switch to a single scene (legacy behavior - disables all other scenes).
-     * Kept for backward compatibility.
-     */
-    switchTo(sceneId: string): void {
-        if (!this.container) return;
-        if (this.currentScene && this.currentScene.id === sceneId) return;
-
-        // Unmount current scene
-        if (this.currentScene) {
-            this.currentScene.unmount();
-            this.activeScenes.delete(this.currentScene.id);
-        }
-
-        // Mount new scene
-        const scene = this.scenes.get(sceneId);
-        if (scene) {
-            scene.mount(this.container);
-            this.currentScene = scene;
-            this.activeScenes.add(sceneId);
-            console.log(`[SceneManager] Switched to scene: ${sceneId}`);
-        } else {
-            console.warn(`[SceneManager] Scene not found: ${sceneId}`);
-            this.currentScene = null;
-        }
-    }
-
-    getCurrentScene(): VisualScene | null {
-        return this.currentScene;
-    }
-
     getActiveScenes(): VisualScene[] {
         return Array.from(this.activeScenes)
             .map(id => this.scenes.get(id))
@@ -100,7 +68,6 @@ export class DefaultSceneManager implements SceneManager {
             }
         }
         this.activeScenes.clear();
-        this.currentScene = null;
         this.scenes.clear();
         this.container = null;
     }

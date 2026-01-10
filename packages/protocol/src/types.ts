@@ -47,11 +47,6 @@ export type ControlAction =
   | 'showImage'
   | 'hideImage'
   | 'shutdown'
-  | 'visualSceneSwitch'
-  | 'visualSceneBox'
-  | 'visualSceneMel'
-  | 'visualSceneFrontCamera'
-  | 'visualSceneBackCamera'
   | 'visualScenes'
   | 'visualEffects'
   | 'convolution'
@@ -277,43 +272,6 @@ export interface VisualEffectsPayload {
 }
 
 /**
- * Visual scene switch payload
- */
-export interface VisualSceneSwitchPayload {
-  sceneId: string;
-  transition?: 'immediate' | 'fade';
-  transitionDuration?: number;
-}
-
-/**
- * Visual Scene Box payload - controls box scene independently
- */
-export interface VisualSceneBoxPayload {
-  enabled: boolean;
-}
-
-/**
- * Visual Scene Mel Spectrogram payload - controls mel scene independently
- */
-export interface VisualSceneMelPayload {
-  enabled: boolean;
-}
-
-/**
- * Visual Scene Front Camera payload - controls front camera scene
- */
-export interface VisualSceneFrontCameraPayload {
-  enabled: boolean;
-}
-
-/**
- * Visual Scene Back Camera payload - controls back camera scene
- */
-export interface VisualSceneBackCameraPayload {
-  enabled: boolean;
-}
-
-/**
  * Data reporting rate configuration
  */
 export interface DataReportingRatePayload {
@@ -341,11 +299,6 @@ export type BaseControlPayload =
   | ConvolutionPayload
   | VisualScenesPayload
   | VisualEffectsPayload
-  | VisualSceneSwitchPayload
-  | VisualSceneBoxPayload
-  | VisualSceneMelPayload
-  | VisualSceneFrontCameraPayload
-  | VisualSceneBackCameraPayload
   | DataReportingRatePayload
   | Record<string, unknown>;
 

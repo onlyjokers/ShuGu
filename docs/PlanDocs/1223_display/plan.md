@@ -185,7 +185,7 @@ Display 作为独立 SvelteKit app，端口建议 5175（与 manager 5173 / clie
   - `screenColor`（作为背景层/覆盖层）
 - 可选（看你是否要和 client 一致）：
   - `playSound/stopSound`（如果 Display 完全不需要音频，可先实现为 noop）
-  - `asciiMode/asciiResolution/visualSceneSwitch`（未来扩展点；第一期可 noop）
+  - `asciiMode/asciiResolution/visualScenes`（未来扩展点；第一期可 noop）
 - 明确 noop（必须安全无副作用）：
   - `flashlight/vibrate/setSensorState/setDataReportingRate/shutdown/...`
 

@@ -6,7 +6,6 @@
 
 export { state, permissions, latency, connectionStatus, clientId } from './client/client-state';
 export {
-  currentScene,
   boxSceneEnabled,
   melSceneEnabled,
   frontCameraEnabled,
@@ -36,4 +35,3 @@ export {
   getSDK,
   measureLatency,
 } from './client/client-runtime';
-

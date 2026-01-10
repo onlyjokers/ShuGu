@@ -76,10 +76,6 @@ import {
   createSynthUpdateProcessorNode,
 } from './nodes/processors.js';
 import {
-  createBackCameraSceneProcessorNode,
-  createBoxSceneProcessorNode,
-  createFrontCameraSceneProcessorNode,
-  createMelSceneProcessorNode,
   createSceneBackCameraNode,
   createSceneBoxNode,
   createSceneFrontCameraNode,
@@ -164,8 +160,4 @@ export function registerDefaultNodeDefinitions(
   registry.register(createEffectAsciiNode());
   registry.register(createAsciiEffectProcessorNode());
   registry.register(createConvolutionEffectProcessorNode());
-  registry.register(createBoxSceneProcessorNode());
-  registry.register(createMelSceneProcessorNode());
-  registry.register(createFrontCameraSceneProcessorNode());
-  registry.register(createBackCameraSceneProcessorNode());
 }

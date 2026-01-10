@@ -82,9 +82,9 @@
   - [x] Control chain：Manager -> Display local bridge OK（DisplayPanel `status=connected / ready=yes`；`Send To Display` 开启后 `screenColor` 可镜像到 Display）。
   - [x] Node graph & runtime：编辑/loop/scene OK（构造 `client-object <-> proc-client-sensors` 环；`localLoops=1`；`exportGraphForLoop` OK）。
   - [x] Node graph & runtime：deploy/export/import OK（`exportGraphForPatchFromRootNodeIds(scene-out)` OK；`exportGraph/loadGraph` round-trip OK）。
-  - [x] Node graph & runtime：功能集冒烟 OK（覆盖 `screenColor / flashlight / showImage/hideImage / visualSceneSwitch(mel-scene)` 等关键动作）。
+- [x] Node graph & runtime：功能集冒烟 OK（覆盖 `screenColor / flashlight / showImage/hideImage / visualScenes(mel-scene)` 等关键动作）。
   - [x] Assets & media：manifest 扫描 + 下发 OK（上传 `测试.png` 后 manifest 更新，ClientSelector dot 进入 `ready`；Display 侧 `multimediaCore` preload ready）。
-  - [x] Assets & media：Client 多媒体层语义 OK（`showImage`/`hideImage`、`visualSceneSwitch` 行为正确）。
+- [x] Assets & media：Client 多媒体层语义 OK（`showImage`/`hideImage`、`visualScenes` 行为正确）。
   - [x] Assets & media：媒体动作 OK（`image upload`、`flashlight on/off`、`mel-scene` 切换、`screenColor`）。
   - [x] Stability：Manager 在 Start/Stop/Deploy/Scene switch 冒烟流程中未崩（tab 仍可切换）。
   - [x] Stability：高频控件 OK：开启 `▶ Stream On` 后，连续改动 ScreenColor 参数可产生多次 `screenColor` 下发（1s 内 `delta=5`）。
@@ -144,12 +144,21 @@
     - 用户手动真机验证：Tone enable/ready 正常；Synth Play/Update/Stop ✅；`Stream On` 下参数更新稳定、不丢声。
 
 - [ ] Phase 2 Batch #3（Visual scenes：收敛 legacy single-scene vs multi-scene / `phase2_targets.md` section 4）：
-  - [ ] 决策：确认唯一支持语义（single scene / multi scene）并删除另一分支。
-  - [ ] 固定动作（batch after-delete gates）：
-    - `pnpm guard:deps` ✅/❌
-    - `pnpm lint` ✅/❌（0 errors）
-    - `pnpm build:all` ✅/❌（推荐）
-  - [ ] 回归：Phase 1 checklist 中 `visualSceneSwitch` / mel-scene / VisualCanvas 相关项必须全绿。
+  - [x] 决策：采用 multi-scene（`visualScenes` 为唯一语义），移除单场景分支。
+  - [x] 清理与收敛：
+    - Protocol：移除 `visualSceneSwitch`/`visualSceneBox`/`visualSceneMel`/`visualSceneFrontCamera`/`visualSceneBackCamera`。
+    - Manager：SceneControl 改为多场景 toggle → 发送 `visualScenes`；bootstrap 改为 `scenes[]`。
+    - Client：以 `visualScenes` 为唯一输入，移除 `currentScene`/legacy handlers；启动配置改为应用 `scenes[]`。
+    - Visual plugins：SceneManager 移除 `switchTo/getCurrentScene`（只保留 multi-scene）。
+    - Node/Core：删除 legacy scene processor nodes + Manager specs（proc-visual-scene-*）。
+  - [x] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (554 files scanned)`）
+    - `pnpm lint` ✅（0 errors；63 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；vite/sass deprecation warnings 仍在）
+  - [x] 回归：Phase 1 checklist 中 `visualScenes` / mel-scene / VisualCanvas 相关项全绿（用户手动验证）。
+    - 结果（2026-01-10）：Scene Layer（Box/Mel toggle）✅；mel-scene ✅；VisualCanvas ✅。
+    - 媒体动作：`showImage` / `hideImage` / `screenColor` ✅。
+    - 稳定性：Start/Stop/Deploy/Scene switch loop ✅。
 
 - [ ] Phase 2 Batch #4（Media：VideoPlayer 去重复 / `phase2_targets.md` section 2）：
   - [ ] 决策：选 A（抽到 `packages/ui-kit`）或 B（抽逻辑到 `packages/multimedia-core`，UI 仍在 apps）。

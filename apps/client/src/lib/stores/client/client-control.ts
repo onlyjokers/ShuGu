@@ -5,7 +5,6 @@
  * the store entrypoint can own lifecycle concerns (init/disconnect).
  */
 
-import { get } from 'svelte/store';
 import type {
   ClientSDK,
   FlashlightController,
@@ -32,30 +31,17 @@ import type {
   ShowImagePayload,
   VibratePayload,
   VisualEffectsPayload,
-  VisualSceneBackCameraPayload,
-  VisualSceneBoxPayload,
-  VisualSceneFrontCameraPayload,
-  VisualSceneMelPayload,
   VisualScenesPayload,
-  VisualSceneSwitchPayload,
 } from '@shugu/protocol';
 import { parseMediaClipParams } from './client-media';
 import { handlePushImageUpload, type PushImageUploadPayload } from './client-screenshot';
 import {
   asciiEnabled,
   asciiResolution,
-  backCameraEnabled,
-  boxSceneEnabled,
   convolution,
-  currentScene,
-  frontCameraEnabled,
-  melSceneEnabled,
   normalizeVisualEffectsPayload,
   normalizeVisualScenesPayload,
-  startCameraStream,
-  stopCameraStream,
   syncLegacyVisualEffects,
-  syncLegacyVisualScenes,
   syncVisualEffectsToLegacyStores,
   syncVisualScenesToLegacyStores,
   visualEffects,
@@ -264,74 +250,6 @@ export function createClientControlHandlers(deps: ClientControlDeps): {
 
         case 'hideImage':
           deps.getMultimediaCore()?.media.hideImage();
-          break;
-
-        case 'visualSceneSwitch':
-          {
-            const scenePayload = payload as VisualSceneSwitchPayload;
-            currentScene.set(scenePayload.sceneId);
-            // Also update individual scene states for backward compatibility
-            if (scenePayload.sceneId === 'box-scene') {
-              boxSceneEnabled.set(true);
-              melSceneEnabled.set(false);
-            } else if (scenePayload.sceneId === 'mel-scene') {
-              boxSceneEnabled.set(false);
-              melSceneEnabled.set(true);
-            }
-            syncLegacyVisualScenes();
-          }
-          break;
-
-        case 'visualSceneBox':
-          {
-            const boxPayload = payload as VisualSceneBoxPayload;
-            boxSceneEnabled.set(boxPayload.enabled);
-            syncLegacyVisualScenes();
-          }
-          break;
-
-        case 'visualSceneMel':
-          {
-            const melPayload = payload as VisualSceneMelPayload;
-            melSceneEnabled.set(melPayload.enabled);
-            syncLegacyVisualScenes();
-          }
-          break;
-
-        case 'visualSceneFrontCamera':
-          {
-            const camPayload = payload as VisualSceneFrontCameraPayload;
-            frontCameraEnabled.set(camPayload.enabled);
-            if (camPayload.enabled) {
-              // Stop back camera if it's running
-              backCameraEnabled.set(false);
-              void startCameraStream('user');
-            } else {
-              // Only stop if no other camera is enabled
-              if (!get(backCameraEnabled)) {
-                stopCameraStream();
-              }
-            }
-            syncLegacyVisualScenes();
-          }
-          break;
-
-        case 'visualSceneBackCamera':
-          {
-            const camPayload = payload as VisualSceneBackCameraPayload;
-            backCameraEnabled.set(camPayload.enabled);
-            if (camPayload.enabled) {
-              // Stop front camera if it's running
-              frontCameraEnabled.set(false);
-              void startCameraStream('environment');
-            } else {
-              // Only stop if no other camera is enabled
-              if (!get(frontCameraEnabled)) {
-                stopCameraStream();
-              }
-            }
-            syncLegacyVisualScenes();
-          }
           break;
 
         case 'visualScenes':

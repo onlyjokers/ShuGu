@@ -8,38 +8,15 @@ import { writable, get } from 'svelte/store';
 import type { VisualEffect, VisualSceneLayerItem } from '@shugu/protocol';
 import { clampNumber } from './client-utils';
 
-// Current visual scene (legacy, kept for backward compatibility)
-export const currentScene = writable<string>('box-scene');
-
-// Independent scene enabled states (for multi-scene support)
-export const boxSceneEnabled = writable<boolean>(true);
+// Independent scene enabled states (derived from visualScenes)
+export const boxSceneEnabled = writable<boolean>(false);
 export const melSceneEnabled = writable<boolean>(false);
 export const frontCameraEnabled = writable<boolean>(false);
 export const backCameraEnabled = writable<boolean>(false);
 
 // Visual scene layer applied on top of the visual layer (first -> last).
-// Default keeps the legacy behavior (Box scene enabled by default).
-export const visualScenes = writable<VisualSceneLayerItem[]>([{ type: 'box' }]);
-
-function buildLegacyVisualScenes(): VisualSceneLayerItem[] {
-  const scenes: VisualSceneLayerItem[] = [];
-
-  if (get(boxSceneEnabled)) scenes.push({ type: 'box' });
-  if (get(melSceneEnabled)) scenes.push({ type: 'mel' });
-
-  // Camera is mutually exclusive; prefer the currently enabled one.
-  if (get(frontCameraEnabled)) {
-    scenes.push({ type: 'frontCamera' });
-  } else if (get(backCameraEnabled)) {
-    scenes.push({ type: 'backCamera' });
-  }
-
-  return scenes;
-}
-
-export function syncLegacyVisualScenes(): void {
-  visualScenes.set(buildLegacyVisualScenes());
-}
+// Default keeps the client visually idle until a Manager explicitly enables scenes.
+export const visualScenes = writable<VisualSceneLayerItem[]>([]);
 
 export function normalizeVisualScenesPayload(payload: unknown): VisualSceneLayerItem[] {
   const raw = payload && typeof payload === 'object' ? (payload as any).scenes : null;
@@ -167,8 +144,8 @@ export function stopCameraStream(): void {
   }
 }
 
-// ASCII post-processing toggle (default on)
-export const asciiEnabled = writable<boolean>(true);
+// ASCII post-processing toggle (default off)
+export const asciiEnabled = writable<boolean>(false);
 
 // ASCII resolution (cell size in pixels)
 export const asciiResolution = writable<number>(11);
@@ -205,8 +182,8 @@ export const convolution = writable<ConvolutionState>({
 });
 
 // Visual post-processing chain applied on top of the visual layer (first -> last).
-// Default keeps the legacy behavior (ASCII on by default).
-export const visualEffects = writable<VisualEffect[]>([{ type: 'ascii', cellSize: 11 }]);
+// Default keeps the client visually idle until a Manager explicitly enables effects.
+export const visualEffects = writable<VisualEffect[]>([]);
 
 function buildLegacyVisualEffects(): VisualEffect[] {
   const effects: VisualEffect[] = [];

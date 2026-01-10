@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
 import { GeoService, type GeoFenceConfig } from '../geo/geo.service.js';
+import type { VisualSceneLayerItem } from '@shugu/protocol';
 import { BootstrapService, type VisualBootstrapConfig } from './bootstrap.service.js';
 
 type BootstrapConfigResponse = {
@@ -33,12 +34,12 @@ export class BootstrapController {
       throw new BadRequestException('Invalid body');
     }
 
-    const sceneId = (body as any).sceneId;
+    const scenesRaw = (body as any).scenes;
     const asciiEnabled = (body as any).asciiEnabled;
     const asciiResolution = (body as any).asciiResolution;
 
-    if (typeof sceneId !== 'string' || sceneId.trim().length === 0 || sceneId.length > 64) {
-      throw new BadRequestException('Invalid body.sceneId');
+    if (!Array.isArray(scenesRaw)) {
+      throw new BadRequestException('Invalid body.scenes');
     }
     if (typeof asciiEnabled !== 'boolean') {
       throw new BadRequestException('Invalid body.asciiEnabled');
@@ -52,13 +53,22 @@ export class BootstrapController {
       throw new BadRequestException('Invalid body.asciiResolution');
     }
 
+    const allowedSceneTypes = new Set(['box', 'mel', 'frontCamera', 'backCamera']);
+    const scenes = scenesRaw.slice(0, 12).map((raw: unknown) => {
+      if (!raw || typeof raw !== 'object') throw new BadRequestException('Invalid body.scenes item');
+      const type = typeof (raw as any).type === 'string' ? String((raw as any).type) : '';
+      if (!allowedSceneTypes.has(type)) {
+        throw new BadRequestException(`Invalid body.scenes type: ${type}`);
+      }
+      return { type } as VisualSceneLayerItem;
+    });
+
     return {
       visual: this.bootstrapService.setVisual({
-        sceneId: sceneId.trim(),
+        scenes,
         asciiEnabled,
         asciiResolution,
       }),
     };
   }
 }
-

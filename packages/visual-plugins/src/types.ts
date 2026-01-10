@@ -68,20 +68,10 @@ export interface SceneManager {
      */
     setSceneEnabled(sceneId: string, enabled: boolean): void;
 
-    /**
-     * Switch to a scene by ID (legacy - disables all other scenes)
-     */
-    switchTo(sceneId: string): void;
-
-    /**
-     * Get current scene (legacy)
-     */
-    getCurrentScene(): VisualScene | null;
-
-    /**
-     * Get all active scenes
-     */
-    getActiveScenes(): VisualScene[];
+  /**
+   * Get all active scenes
+   */
+  getActiveScenes(): VisualScene[];
 
     /**
      * Update all active scenes

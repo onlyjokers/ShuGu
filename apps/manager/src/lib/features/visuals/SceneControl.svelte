@@ -1,26 +1,22 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { state, switchScene, asciiMode, asciiResolution } from '$lib/stores/manager';
+  import { state, setVisualScenes, asciiMode, asciiResolution } from '$lib/stores/manager';
   import { controlState, updateControlState } from '$lib/stores/controlState';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Select from '$lib/components/ui/Select.svelte';
   import Slider from '$lib/components/ui/Slider.svelte';
   import Toggle from '$lib/components/ui/Toggle.svelte';
+  import type { VisualSceneLayerItem } from '@shugu/protocol';
 
   export let useSync = true;
   export let syncDelay = 500;
   export let serverUrl: string;
 
-  // selectedScene, asciiOn, asciiRes managed by controlState
-
-  const scenes = [
-    { value: 'box-scene', label: '3D Box' },
-    { value: 'mel-scene', label: 'Mel Spectrogram' },
-  ];
+  let sceneLayer: VisualSceneLayerItem[] = [];
 
   $: hasSelection = $state.selectedClientIds.length > 0;
-  $: scheduleBootstrapSync(serverUrl, $controlState.selectedScene, $controlState.asciiOn, $controlState.asciiResolution);
+  $: sceneLayer = buildSceneLayer($controlState.sceneBoxEnabled, $controlState.sceneMelEnabled);
+  $: scheduleBootstrapSync(serverUrl, sceneLayer, $controlState.asciiOn, $controlState.asciiResolution);
 
   let isSyncingBootstrap = false;
   let bootstrapSyncError: string | null = null;
@@ -30,26 +26,27 @@
 
   function scheduleBootstrapSync(
     nextServerUrl: string,
-    sceneId: string,
+    scenes: VisualSceneLayerItem[],
     asciiEnabled: boolean,
     asciiRes: number
   ): void {
     bootstrapSyncError = null;
     if (!nextServerUrl) return;
-    if (!sceneId) return;
+    if (!Array.isArray(scenes)) return;
 
-    const key = `${nextServerUrl}|${sceneId}|${asciiEnabled ? '1' : '0'}|${Math.round(asciiRes)}`;
+    const sceneKey = scenes.map((s) => s.type).join(',');
+    const key = `${nextServerUrl}|${sceneKey}|${asciiEnabled ? '1' : '0'}|${Math.round(asciiRes)}`;
     if (key === lastBootstrapKey) return;
 
     if (bootstrapSyncTimer) clearTimeout(bootstrapSyncTimer);
     bootstrapSyncTimer = setTimeout(() => {
-      void syncBootstrapToServer(nextServerUrl, { sceneId, asciiEnabled, asciiResolution: asciiRes }, key);
+      void syncBootstrapToServer(nextServerUrl, { scenes, asciiEnabled, asciiResolution: asciiRes }, key);
     }, 300);
   }
 
   async function syncBootstrapToServer(
     nextServerUrl: string,
-    visual: { sceneId: string; asciiEnabled: boolean; asciiResolution: number },
+    visual: { scenes: VisualSceneLayerItem[]; asciiEnabled: boolean; asciiResolution: number },
     key: string
   ): Promise<void> {
     bootstrapAbort?.abort();
@@ -94,11 +91,20 @@
     updateControlState({ asciiResolution: Number(target.value) });
   }
 
-  function handleSceneChange(e: CustomEvent<Event>) {
-    const raw = e.detail;
-    const next = (raw.target as HTMLSelectElement | null)?.value;
-    if (!next) return;
-    updateControlState({ selectedScene: next });
+  function buildSceneLayer(boxEnabled: boolean, melEnabled: boolean): VisualSceneLayerItem[] {
+    const next: VisualSceneLayerItem[] = [];
+    if (boxEnabled) next.push({ type: 'box' });
+    if (melEnabled) next.push({ type: 'mel' });
+    return next;
+  }
+
+  function handleSceneToggle(key: 'sceneBoxEnabled' | 'sceneMelEnabled', e: Event) {
+    const target = e.target as HTMLInputElement;
+    if (key === 'sceneBoxEnabled') {
+      updateControlState({ sceneBoxEnabled: target.checked });
+    } else {
+      updateControlState({ sceneMelEnabled: target.checked });
+    }
   }
 
   function getExecuteAt() {
@@ -106,9 +112,8 @@
     return Date.now() + $state.timeSync.offset + syncDelay;
   }
 
-  function handleSwitchScene(toAll = false) {
-    switchScene($controlState.selectedScene, toAll, getExecuteAt());
-    // updateControlState({ selectedScene }); // No need to update store as it's already source of truth
+  function handleApplyScenes(toAll = false) {
+    setVisualScenes(sceneLayer, toAll, getExecuteAt());
   }
 
   function handleAsciiToggle(toAll = false) {
@@ -123,21 +128,27 @@
 <Card title="🎬 Scene & Effects">
   <div class="control-group">
     <div class="section">
-      <Select
-        label="Visual Scene"
-        options={scenes}
-        value={$controlState.selectedScene}
-        on:change={handleSceneChange}
+      <Toggle
+        label="Box Scene"
+        checked={$controlState.sceneBoxEnabled}
+        description="Base 3D scene"
+        on:change={(e) => handleSceneToggle('sceneBoxEnabled', e)}
+      />
+      <Toggle
+        label="Mel Spectrogram"
+        checked={$controlState.sceneMelEnabled}
+        description="Audio-reactive overlay"
+        on:change={(e) => handleSceneToggle('sceneMelEnabled', e)}
       />
       <div class="button-group">
         <Button
           variant="primary"
           disabled={!hasSelection}
-          on:click={() => handleSwitchScene(false)}
-          fullWidth>Switch Selected</Button
+          on:click={() => handleApplyScenes(false)}
+          fullWidth>Apply Selected</Button
         >
-        <Button variant="secondary" on:click={() => handleSwitchScene(true)} fullWidth
-          >Switch All</Button
+        <Button variant="secondary" on:click={() => handleApplyScenes(true)} fullWidth
+          >Apply All</Button
         >
       </div>
     </div>

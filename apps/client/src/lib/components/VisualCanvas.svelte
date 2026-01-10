@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import {
-    currentScene,
     melSceneEnabled,
     cameraStream,
     frontCameraEnabled,
@@ -126,13 +125,7 @@
     audioContext = null;
   });
 
-  // React to legacy scene switch (for backward compatibility)
-  $: if (sceneManager && $currentScene) {
-    // Only use legacy switchTo if we're not using the new multi-scene mode
-    // The new mode is controlled by boxSceneEnabled and melSceneEnabled stores
-  }
-
-  // React to box scene enabled state changes
+  // React to visual scene layer changes
   $: if (sceneManager) {
     applySceneLayer($visualScenes);
   }

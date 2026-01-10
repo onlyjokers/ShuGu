@@ -12,12 +12,13 @@ export type ControlSharedState = {
   asciiResolution: number;
   screenOpacity: number;
   soundVolume: number;
-  selectedScene: string;
+  sceneBoxEnabled: boolean;
+  sceneMelEnabled: boolean;
 };
 
 const initialState: ControlSharedState = {
   flashlightOn: false,
-  asciiOn: true,
+  asciiOn: false,
   modFrequency: 180,
   modDuration: 200,
   modVolume: 0.7,
@@ -27,7 +28,8 @@ const initialState: ControlSharedState = {
   asciiResolution: 11,
   screenOpacity: 1,
   soundVolume: 1,
-  selectedScene: 'box-scene',
+  sceneBoxEnabled: false,
+  sceneMelEnabled: false,
 };
 
 export const controlState = writable<ControlSharedState>(initialState);

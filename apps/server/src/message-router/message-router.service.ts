@@ -33,7 +33,6 @@ const RELIABLE_ACTIONS = new Set([
     'stopSound',
     'showImage',
     'hideImage',
-    'visualSceneSwitch',
     'visualScenes',
     'visualEffects',
     'modulateSound', // initial play should be reliable

@@ -92,7 +92,7 @@ Recommended test mode:
 2. Upload an image with a non-ASCII filename (e.g. `测试.png`) to catch header/URL edge cases.
 3. Confirm:
    - Manifest updates and clients transition to “ready” (asset-ready).
-   - `showImage`/`hideImage`, `visualSceneSwitch`, and `screenColor` behave correctly.
+   - `showImage`/`hideImage`, `visualScenes` (Scene Layer), and `screenColor` behave correctly.
 
 ### E) Stability & high-frequency controls
 
@@ -145,4 +145,3 @@ Copy template for a new regression run:
 - [ ] Issues found:
   - Symptom -> root cause -> fix -> file path
 ```
-

@@ -9,17 +9,23 @@
     disconnectFromServer,
     getSDK,
     permissions,
-    currentScene,
+    visualScenes,
     asciiEnabled,
     asciiResolution,
     enableAudio,
     startEarlyPreload,
   } from '$lib/stores/client';
+  import {
+    normalizeVisualScenesPayload,
+    syncVisualScenesToLegacyStores,
+    syncLegacyVisualEffects,
+  } from '$lib/stores/client/client-visual';
   import StartScreen from '$lib/components/StartScreen.svelte';
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
   import PermissionWarning from '$lib/components/PermissionWarning.svelte';
   import GeoGateOverlay from '$lib/components/GeoGateOverlay.svelte';
   import { toneAudioEngine } from '@shugu/multimedia-core';
+  import type { VisualSceneLayerItem } from '@shugu/protocol';
 
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
@@ -33,7 +39,7 @@
   };
 
   type VisualBootstrapConfig = {
-    sceneId: string;
+    scenes: VisualSceneLayerItem[];
     asciiEnabled: boolean;
     asciiResolution: number;
     updatedAt: number;
@@ -402,9 +408,12 @@
 
   function applyVisualBootstrap(visual: VisualBootstrapConfig | null): void {
     if (!visual) return;
-    currentScene.set(visual.sceneId);
+    const scenes = normalizeVisualScenesPayload({ scenes: visual.scenes });
+    visualScenes.set(scenes);
+    syncVisualScenesToLegacyStores(scenes);
     asciiEnabled.set(visual.asciiEnabled);
     asciiResolution.set(visual.asciiResolution);
+    syncLegacyVisualEffects();
   }
 
   async function runGeoGate(): Promise<void> {

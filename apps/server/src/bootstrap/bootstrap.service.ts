@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import type { VisualSceneLayerItem } from '@shugu/protocol';
 
 export type VisualBootstrapConfig = {
-  sceneId: string;
+  scenes: VisualSceneLayerItem[];
   asciiEnabled: boolean;
   asciiResolution: number;
   updatedAt: number;
@@ -28,4 +29,3 @@ export class BootstrapService {
     this.visual = null;
   }
 }
-

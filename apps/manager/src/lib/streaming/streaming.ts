@@ -6,16 +6,12 @@ export type StreamableAction =
   | 'screenColor'
   | 'asciiMode'
   | 'asciiResolution'
-  | 'visualSceneBox'
-  | 'visualSceneMel'
   | 'flashlight';
 
 export type StreamPayloads = {
   screenColor: ScreenColorPayload;
   asciiMode: { enabled: boolean };
   asciiResolution: { cellSize: number };
-  visualSceneBox: { enabled: boolean };
-  visualSceneMel: { enabled: boolean };
   flashlight: { mode: 'off' | 'on' | 'blink'; frequency?: number; dutyCycle?: number };
 };
 
