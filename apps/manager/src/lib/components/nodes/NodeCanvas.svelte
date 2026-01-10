@@ -24,12 +24,8 @@
 
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { parameterRegistry } from '$lib/parameters/registry';
-  import { getSDK, sensorData, state as managerState } from '$lib/stores/manager';
-  import {
-    displayBridgeState,
-    ensureDisplayLocalFilesRegisteredFromValue,
-    sendPlugin as sendLocalDisplayPlugin,
-  } from '$lib/display/display-bridge';
+  import { displayTransport, getSDK, sensorData, state as managerState } from '$lib/stores/manager';
+  import { displayBridgeState, ensureDisplayLocalFilesRegisteredFromValue } from '$lib/display/display-bridge';
   import type { NodeInstance, Connection as EngineConnection, GraphState } from '$lib/nodes/types';
   import type { LocalLoop } from '$lib/nodes';
   import { midiService } from '$lib/features/midi/midi-service';
@@ -277,9 +273,8 @@
     logsClientId,
     loopController,
     managerState,
-    displayBridgeState,
+    displayTransport,
     getSDK,
-    sendLocalDisplayPlugin,
     ensureDisplayLocalFilesRegisteredFromValue,
   });
 

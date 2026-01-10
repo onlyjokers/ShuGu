@@ -143,6 +143,7 @@ export class MessageRouterService {
                 'multimedia-core',      // Asset preload status
                 'tone',                 // Tone.js readiness
                 'node-media',           // Media playback events
+                'node-executor',        // NodeExecutor status (deploy/stop/errors)
                 'display',              // Display readiness
             ];
             
@@ -299,4 +300,3 @@ export class MessageRouterService {
         this.server.volatile.to(socketIds).emit('msg', message);
     }
 }
-

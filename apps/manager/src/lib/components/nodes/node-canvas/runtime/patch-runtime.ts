@@ -23,7 +23,24 @@ type NodeEngineLike = {
 
 type ManagerStateLike = { clients?: any[]; selectedClientIds?: unknown[] };
 
-type DisplayBridgeStateLike = { status: string; ready?: boolean };
+type DisplayTransportAvailabilityLike = {
+  route: string;
+  hasLocalSession: boolean;
+  hasLocalReady: boolean;
+  hasRemoteDisplay: boolean;
+};
+
+type DisplayTransportSendOptionsLike = { forceServer?: boolean; localOnly?: boolean };
+
+type DisplayTransportLike = {
+  getAvailability: () => DisplayTransportAvailabilityLike;
+  sendPlugin: (
+    pluginId: string,
+    command: string,
+    payload?: Record<string, unknown>,
+    options?: DisplayTransportSendOptionsLike
+  ) => DisplayTransportAvailabilityLike;
+};
 
 type SdkLike = {
   sendPluginControl: (
@@ -103,9 +120,8 @@ export interface CreatePatchRuntimeOptions {
   logsClientId: { set(value: string): void; subscribe: (run: (v: string) => void) => () => void };
   loopController: LoopControllerLike | null;
   managerState: Readable<ManagerStateLike>;
-  displayBridgeState: Readable<DisplayBridgeStateLike>;
+  displayTransport: DisplayTransportLike;
   getSDK: () => SdkLike | null;
-  sendLocalDisplayPlugin: (pluginId: string, command: string, payload: Record<string, unknown>) => void;
   ensureDisplayLocalFilesRegisteredFromValue: (value: unknown) => void;
 }
 
@@ -122,9 +138,8 @@ export function createPatchRuntime(opts: CreatePatchRuntimeOptions): PatchRuntim
     logsClientId,
     loopController,
     managerState,
-    displayBridgeState,
+    displayTransport,
     getSDK,
-    sendLocalDisplayPlugin,
     ensureDisplayLocalFilesRegisteredFromValue,
   } = opts;
 
@@ -175,9 +190,7 @@ export function createPatchRuntime(opts: CreatePatchRuntimeOptions): PatchRuntim
     }
 
     if (isLocalDisplayTarget(id)) {
-      const bridge = get(displayBridgeState);
-      if (bridge.status !== 'connected') return;
-      sendLocalDisplayPlugin('node-executor', command, payload);
+      displayTransport.sendPlugin('node-executor', command, payload, { localOnly: true });
       return;
     }
 
@@ -856,8 +869,8 @@ export function createPatchRuntime(opts: CreatePatchRuntimeOptions): PatchRuntim
       }
 
       if (hasDisplayTarget) {
-        const bridge = get(displayBridgeState);
-        if (bridge.status === 'connected' && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
+        const availability = displayTransport.getAvailability();
+        if (availability.hasLocalSession && !seen.has(LOCAL_DISPLAY_TARGET_ID)) {
           seen.add(LOCAL_DISPLAY_TARGET_ID);
           out.push(LOCAL_DISPLAY_TARGET_ID);
         }

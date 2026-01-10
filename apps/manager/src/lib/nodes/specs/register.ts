@@ -20,9 +20,7 @@ import { NodeRegistry as CoreNodeRegistry, registerDefaultNodeDefinitions } from
 import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
-import { displayBridgeState, sendControl as sendLocalDisplayControl } from '$lib/display/display-bridge';
-import { createDisplayTransport } from '$lib/display/display-transport';
-import { clientScreenshotUploads, getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
+import { clientScreenshotUploads, displayTransport, getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
 
@@ -215,15 +213,6 @@ const midiBooleanState = new Map<string, MidiBooleanState>();
 const clientSelectionState = new Map<string, ClientSelectionState>();
 // Throttle noisy per-frame logs (e.g. showImage streaming).
 const displayObjectLogLastAt = new Map<string, number>();
-
-const displayTransport = createDisplayTransport({
-  managerState: state,
-  displayBridgeState,
-  getSDK,
-  local: {
-    sendControl: sendLocalDisplayControl,
-  },
-});
 
 function midiSourceKey(source: MidiSource | null | undefined): string | null {
   if (!source) return null;

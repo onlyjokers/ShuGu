@@ -37,7 +37,7 @@ export const state = writable<ManagerState>({
     error: null,
 });
 
-const displayTransport = createDisplayTransport({
+export const displayTransport = createDisplayTransport({
     managerState: state,
     displayBridgeState,
     getSDK,

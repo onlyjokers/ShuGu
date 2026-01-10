@@ -30,6 +30,11 @@ export type DisplayTransportSendOptions = {
    * Useful for "emergency" actions like kill/stop-all in future phases.
    */
   forceServer?: boolean;
+  /**
+   * Only send via local bridge. Never send via server fallback.
+   * Useful when a call site wants "paired Display only" semantics.
+   */
+  localOnly?: boolean;
 };
 
 export type DisplayTransportSdk = {
@@ -119,6 +124,16 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
       return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
     }
 
+    if (options?.localOnly) {
+      if (!hasLocalSession) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+
+      const offset = typeof manager.timeSync?.offset === 'number' ? manager.timeSync.offset : 0;
+      const executeAtLocal =
+        typeof executeAtServer === 'number' && Number.isFinite(executeAtServer) ? executeAtServer - offset : undefined;
+      deps.local.sendControl(action, payload, executeAtLocal);
+      return { route: 'local', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+    }
+
     const offset = typeof manager.timeSync?.offset === 'number' ? manager.timeSync.offset : 0;
 
     if (hasLocalSession) {
@@ -157,6 +172,13 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
 
     if (!hasLocalSession && !hasRemoteDisplay) {
       return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+    }
+
+    if (options?.localOnly) {
+      if (!hasLocalSession) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+      if (!deps.local.sendPlugin) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+      deps.local.sendPlugin(pluginId, command, payload);
+      return { route: 'local', hasLocalSession, hasLocalReady, hasRemoteDisplay };
     }
 
     if (hasLocalSession && deps.local.sendPlugin) {

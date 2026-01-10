@@ -107,3 +107,24 @@
 - [x] Phase 1.5.E Phase 2 输入准备：新增“删除清单 v2”✅
   - `docs/PlanDocs/0109_RootManagerControlPlane/phase2_targets.md`
   - 并在 `docs/PlanDocs/0109_RootManagerControlPlane/plan.md` 链接该清单。
+
+- [ ] Phase 2 Batch #1（Display routing 去旁路 / section 1）：
+  - [x] 收敛：Manager 内 Display 发送统一经 `apps/manager/src/lib/display/display-transport.ts`（移除 NodeCanvas/patch-runtime 的 local bridge 旁路）。
+    - `apps/manager/src/lib/stores/manager.ts`：导出 `displayTransport` 供复用。
+    - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`：不再直调 `sendLocalDisplayPlugin`。
+    - `apps/manager/src/lib/components/nodes/node-canvas/runtime/patch-runtime.ts`：Display 目标发送改为 `displayTransport.sendPlugin(..., { localOnly: true })`。
+    - `apps/manager/src/lib/nodes/specs/register.ts`：改为复用 store 的 `displayTransport`（不再自行组装 local sender）。
+    - `apps/manager/src/lib/display/display-transport.ts`：新增 `localOnly` 选项，用于需要“仅 paired Display”的 callsite。
+  - [x] Acceptance hook：`rg "sendLocalDisplay|targetGroup\\('display'\\)" apps/manager/src` 仅命中 `display-transport.ts` 与 store wiring。
+  - [x] Phase 2 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (493 files scanned)`）
+    - `pnpm lint` ✅（0 errors；63 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；仍有 vite/svelte warnings，留作 Phase 3 证据锚点）
+  - [x] 回归（Playbook+自动化）：
+    - `pnpm --filter @shugu/node-core run test` ✅（24/24）
+    - `pnpm e2e:node-executor:offline` ✅
+    - `pnpm e2e:node-executor` ✅（补齐 e2e 环境/脚本与 server allowlist，使 loop deploy 状态可回传）
+      - 修复：`apps/manager/src/lib/components/nodes/node-canvas/controllers/loop-controller.ts` 绑定 nodeEngine 方法，避免 `this` 丢失导致 deploy 报错。
+      - 修复：`apps/server/src/message-router/message-router.service.ts` 允许转发 `custom.kind=node-executor`，否则 Manager 收不到 deployed/rejected 事件（Loop deploy 会 timeout）。
+      - 改进：`scripts/e2e/node-executor.mjs` 在未安装 Playwright Chromium 时 fallback 到系统 Chrome，并补齐 Start/Select All 等前置步骤。
+  - [ ] 手动回归（Display local bridge / Assets / Media / 稳定性）：待你按 `phase1_regression_playbook.md` 复查（本批影响 Display routing，建议优先重跑 DisplayPanel pairing + Send To Display）。

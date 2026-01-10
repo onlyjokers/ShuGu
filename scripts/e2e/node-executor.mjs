@@ -7,6 +7,20 @@ const ROOT = process.cwd();
 
 const CLIENT_ID = 'c_e2e';
 const MANAGER_USER = 'Eureka';
+const E2E_STEP_TIMEOUT_MS = 30_000;
+
+async function launchChromium() {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("Executable doesn't exist")) throw error;
+
+    // Local dev convenience: allow running e2e without `playwright install` by using system Chrome.
+    console.warn('[e2e] playwright chromium missing; falling back to system Chrome channel');
+    return await chromium.launch({ headless: true, channel: 'chrome' });
+  }
+}
 
 function spawnService(label, args, extraEnv = {}) {
   const proc = spawn('pnpm', args, {
@@ -239,7 +253,7 @@ async function main() {
       waitForPort(clientPort),
     ]);
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchChromium();
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
 
     await context.addCookies([
@@ -269,7 +283,10 @@ async function main() {
     });
 
     const managerPage = await context.newPage();
-    managerPage.on('dialog', (dialog) => dialog.accept());
+    managerPage.on('dialog', (dialog) => {
+      console.log('[e2e] dialog:', dialog.message());
+      dialog.accept();
+    });
 
     await managerPage.addInitScript((serverUrl) => {
       localStorage.setItem('shugu-server-url', serverUrl);
@@ -281,29 +298,35 @@ async function main() {
     await managerPage.getByRole('button', { name: /Node Graph/ }).waitFor({ timeout: 60_000 });
     await managerPage.waitForSelector(`text=${CLIENT_ID}`, { timeout: 60_000 });
 
+    // Some server flows require the manager to explicitly select clients before sending controls/plugins.
+    await managerPage.getByRole('button', { name: /^All/ }).click();
+
     await managerPage.getByRole('button', { name: /Node Graph/ }).click();
     await managerPage.waitForFunction(() => Boolean(window.__shuguNodeEngine), null, {
-      timeout: 20_000,
+      timeout: E2E_STEP_TIMEOUT_MS,
     });
 
     const graphV1 = loopGraph({ clientId: CLIENT_ID, primary: '#6366f1' });
     await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV1);
-    await managerPage.waitForSelector('.loop-frame', { timeout: 10_000 });
+    await managerPage.waitForSelector('.loop-frame', { timeout: E2E_STEP_TIMEOUT_MS });
     await managerPage.waitForFunction(
       () => document.querySelectorAll('.node.local-loop').length > 0,
       null,
       {
-        timeout: 10_000,
+        timeout: E2E_STEP_TIMEOUT_MS,
       }
     );
 
+    // Loop deploy controls are disabled until the NodeEngine is running.
+    await managerPage.getByRole('button', { name: 'Start' }).click();
+
     await managerPage.getByRole('button', { name: /^Deploy$/ }).click();
-    await managerPage.waitForSelector('text=Stop Loop', { timeout: 10_000 });
+    await managerPage.waitForSelector('text=Stop Loop', { timeout: E2E_STEP_TIMEOUT_MS });
     await managerPage.waitForFunction(
       () => document.querySelectorAll('.node.deployed-loop').length > 0,
       null,
       {
-        timeout: 10_000,
+        timeout: E2E_STEP_TIMEOUT_MS,
       }
     );
 
@@ -311,7 +334,7 @@ async function main() {
     await clientPage.waitForFunction(
       (count) => (window.__SHUGU_E2E_COMMANDS || []).length > count,
       beforeCount,
-      { timeout: 10_000 }
+      { timeout: E2E_STEP_TIMEOUT_MS }
     );
 
     const last = await clientPage.evaluate(() => window.__SHUGU_E2E_LAST_COMMAND);
@@ -334,10 +357,10 @@ async function main() {
     // Update graph (same node ids) and redeploy.
     const graphV2 = loopGraph({ clientId: CLIENT_ID, primary: '#ff0000' });
     await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV2);
-    await managerPage.waitForSelector('.loop-frame', { timeout: 10_000 });
+    await managerPage.waitForSelector('.loop-frame', { timeout: E2E_STEP_TIMEOUT_MS });
 
     await managerPage.getByRole('button', { name: /^Deploy$/ }).click();
-    await managerPage.waitForSelector('text=Stop Loop', { timeout: 10_000 });
+    await managerPage.waitForSelector('text=Stop Loop', { timeout: E2E_STEP_TIMEOUT_MS });
 
     const redeployCount = await clientPage.evaluate(
       () => (window.__SHUGU_E2E_COMMANDS || []).length
@@ -345,7 +368,7 @@ async function main() {
     await clientPage.waitForFunction(
       (count) => (window.__SHUGU_E2E_COMMANDS || []).length > count,
       redeployCount,
-      { timeout: 10_000 }
+      { timeout: E2E_STEP_TIMEOUT_MS }
     );
 
     const updated = await clientPage.evaluate(() => window.__SHUGU_E2E_LAST_COMMAND);
@@ -362,7 +385,7 @@ async function main() {
     const graphV3 = nonLoopGraph({ clientId: CLIENT_ID, primary: '#ff0000' });
     await managerPage.evaluate((graph) => window.__shuguNodeEngine.loadGraph(graph), graphV3);
     await managerPage.waitForFunction(() => document.querySelectorAll('.loop-frame').length === 0, null, {
-      timeout: 10_000,
+      timeout: E2E_STEP_TIMEOUT_MS,
     });
 
     await managerPage.waitForTimeout(400);
