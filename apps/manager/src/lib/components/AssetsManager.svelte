@@ -4,8 +4,6 @@
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import { assetsStore, type AssetRecord, type AssetKind } from '$lib/stores/assets';
-  import { migrateCurrentGraphDataUrls, type MigrateProgress } from '$lib/assets/migrate-dataurls';
-  import { saveLocalProject } from '$lib/project/projectManager';
 
   export let serverUrl: string;
 
@@ -19,10 +17,6 @@
   let uploadInput: HTMLInputElement | null = null;
   let uploading = false;
   let uploadError = '';
-
-  let migrating = false;
-  let migrateLog: string[] = [];
-  let migrateError: string | null = null;
 
   const storageKeyWriteToken = 'shugu-asset-write-token';
 
@@ -57,45 +51,6 @@
     await assetsStore.refresh();
   }
 
-  function appendMigrateLog(line: string): void {
-    migrateLog = [...migrateLog.slice(-80), line];
-  }
-
-  function onMigrateProgress(p: MigrateProgress): void {
-    if (p.kind === 'scan') appendMigrateLog(`[scan] found=${p.totalFound}`);
-    if (p.kind === 'upload')
-      appendMigrateLog(`[upload] ${p.index}/${p.total} mime=${p.mimeType} ~${Math.round(p.bytesApprox / 1024)}KB`);
-    if (p.kind === 'replace') appendMigrateLog(`[replace] replaced=${p.replaced}`);
-    if (p.kind === 'done')
-      appendMigrateLog(`[done] replaced=${p.replaced} uploaded=${p.uploaded} skipped=${p.skipped}`);
-    if (p.kind === 'error') appendMigrateLog(`[error] ${p.message}`);
-  }
-
-  async function migrateDataUrlsInCurrentGraph(): Promise<void> {
-    if (migrating) return;
-    migrating = true;
-    migrateError = null;
-    migrateLog = [];
-
-    try {
-      const token = getWriteToken();
-      if (!token) throw new Error('Missing Asset Write Token (set it on the connect screen).');
-
-      const result = await migrateCurrentGraphDataUrls({
-        serverUrl,
-        writeToken: token,
-        onProgress: onMigrateProgress,
-      });
-
-      saveLocalProject('dataurl-migration');
-      appendMigrateLog(`[save] local project updated (${result.replaced} refs)`);
-      await assetsStore.refresh();
-    } catch (err) {
-      migrateError = err instanceof Error ? err.message : String(err);
-    } finally {
-      migrating = false;
-    }
-  }
 
   function formatBytes(bytes: number): string {
     const n = Number(bytes);
@@ -213,9 +168,6 @@
       <Button variant="secondary" size="sm" on:click={refresh} disabled={status === 'loading'}>
         {status === 'loading' ? 'Refreshing…' : 'Refresh'}
       </Button>
-      <Button variant="secondary" size="sm" on:click={migrateDataUrlsInCurrentGraph} disabled={migrating}>
-        {migrating ? 'Migrating…' : 'Migrate DataURLs'}
-      </Button>
       <Button variant="primary" size="sm" on:click={openUpload} disabled={uploading}>
         {uploading ? 'Uploading…' : 'Upload'}
       </Button>
@@ -234,20 +186,6 @@
 
   {#if status === 'error'}
     <div class="banner error">{errorMessage ?? 'Unknown error'}</div>
-  {/if}
-
-  {#if migrateError}
-    <div class="banner error">{migrateError}</div>
-  {/if}
-
-  {#if migrateLog.length > 0}
-    <Card>
-      <div class="migrate-log">
-        {#each migrateLog as line (line)}
-          <div class="mono">{line}</div>
-        {/each}
-      </div>
-    </Card>
   {/if}
 
   <div class="filters">
@@ -428,15 +366,6 @@
     display: flex;
     flex-direction: column;
     min-width: 760px;
-  }
-
-  .migrate-log {
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 200px;
-    overflow: auto;
   }
 
   .row {

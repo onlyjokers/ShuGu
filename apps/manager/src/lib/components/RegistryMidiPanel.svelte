@@ -10,7 +10,6 @@
     detectMidiBindings,
     exportMidiTemplateFile,
     instantiateMidiBindings,
-    migrateLegacyMidiParamBindings,
     parseMidiTemplateFile,
     removeMidiBinding,
     templateForNodeInput,
@@ -319,8 +318,6 @@
       bindings = detectMidiBindings(state);
     });
 
-    // One-time migration from legacy Registry MIDI bindings.
-    migrateLegacyMidiParamBindings();
   });
 
   onDestroy(() => {

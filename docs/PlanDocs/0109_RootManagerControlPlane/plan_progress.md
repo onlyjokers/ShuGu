@@ -160,7 +160,7 @@
     - 媒体动作：`showImage` / `hideImage` / `screenColor` ✅。
     - 稳定性：Start/Stop/Deploy/Scene switch loop ✅。
 
-- [ ] Phase 2 Batch #4（Media：VideoPlayer 去重复 / `phase2_targets.md` section 2）：
+- [x] Phase 2 Batch #4（Media：VideoPlayer 去重复 / `phase2_targets.md` section 2；commit: `98d076a`）：
   - [x] 决策：选 A（抽到 `packages/ui-kit`）。
   - [x] 清理与收敛：
     - `packages/ui-kit` 新增共享 `VideoPlayer` 组件（Client/Display 共用）。
