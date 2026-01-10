@@ -179,8 +179,31 @@
 
 - [ ] Phase 2 Batch #5（Transitional glue：一次性迁移脚本/历史兼容胶水 / `phase2_targets.md` section 5）：
   - [ ] 目标：对“无 owner 的过渡脚本/迁移逻辑”做删/收口（删除或改成显式手动导入动作）。
-  - [ ] 固定动作（batch after-delete gates）：
-    - `pnpm guard:deps` ✅/❌
-    - `pnpm lint` ✅/❌（0 errors）
-    - `pnpm build:all` ✅/❌（推荐）
-  - [ ] 回归：Phase 1 checklist 全绿。
+  - [x] 5A DataURL migration：移除 `migrate-dataurls` 与 Assets Manager 入口。
+  - [x] 5A 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (543 files scanned)`）
+    - `pnpm lint` ✅（0 errors；warnings 为历史债 + ui-kit any）
+    - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
+  - [x] 5A 回归：Phase 1 checklist 全绿（用户手动验证）。
+    - 结果（2026-01-10）：Assets Manager 正常加载；Refresh/Upload ✅（DataURL 迁移入口已移除）。
+  - [x] 5B MIDI legacy migrations：移除 legacy MIDI 绑定迁移路径。
+    - 删除 `midi-param-bridge`（旧 localStorage 绑定系统）。
+    - 删除 `migrateLegacyMidiParamBindings` 与 Registry MIDI Panel 启动迁移。
+  - [x] 5B 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (542 files scanned)`）
+    - `pnpm lint` ✅（0 errors；57 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
+  - [x] 5B 回归：Phase 1 checklist 全绿（用户手动验证）。
+    - 结果（2026-01-10）：Registry MIDI 模板导入/导出 ✅；Node Graph 基本操作/Deploy ✅；控制链路 ✅。
+  - [x] 5C Console 功能拔除：移除 Console 卡片与相关状态（仅保留 Node Graph）。
+    - 删除 `apps/manager/src/lib/features/**` 下 Console 卡片（Synth/Media/Flashlight/ScreenColor/Vibration/Scene）。
+    - 删除 `apps/manager/src/lib/stores/controlState.ts`、`apps/manager/src/lib/streaming/streaming.ts`。
+    - 移除 `Global Sync`/`Stream On`/`Require Tone Ready` 的死 UI（原仅用于 Console 控件的 executeAt/节流路径）。
+  - [x] 5C Bootstrap 拔除：删除 Server `bootstrap` module 与 Client 侧 bootstrap 拉取/应用。
+    - Server：移除 `/bootstrap/*`（controller/service/module）并从 `apps/server/src/app.module.ts` 删除引用。
+    - Client：启动只从 `/geo/fence` 获取围栏（不再拉取 `/bootstrap/config`）。
+  - [x] 5C 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (542 files scanned)`）
+    - `pnpm lint` ✅（0 errors；57 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
+  - [ ] 5C 回归：Phase 1 checklist 全绿（重点：Assets/Display/NodeGraph/媒体动作；Console 已移除则不再作为回归入口）。

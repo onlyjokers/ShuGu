@@ -2,7 +2,7 @@
   import '@shugu/ui-kit/styles';
   import { onMount, tick } from 'svelte';
   import { spring } from 'svelte/motion';
-  import { connect, disconnect, connectionStatus, state } from '$lib/stores/manager';
+  import { connect, disconnect, connectionStatus } from '$lib/stores/manager';
   import { ALLOWED_USERNAMES, auth, type AuthUser } from '$lib/stores/auth';
   import { nodeEngine } from '$lib/nodes';
   import {
@@ -585,63 +585,6 @@
     display: none;
   }
 
-  .session-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-sm);
-    min-height: 38px;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(14px);
-    white-space: nowrap;
-  }
-
-  .sync-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    font-size: var(--text-sm);
-    color: var(--color-warning);
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .sync-config {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-sm);
-  }
-
-  .sync-delay {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-  }
-
-  .sync-delay input {
-    width: 86px;
-    height: 28px;
-    padding: 0 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(15, 23, 42, 0.35);
-    color: var(--text-primary);
-    outline: none;
-  }
-
-  .sync-delay input:disabled {
-    opacity: 0.5;
-  }
-
-  .sync-delay-unit {
-    color: var(--text-muted);
-  }
-
   .setting-hint {
     margin: var(--space-sm) 0 0 0;
     font-size: var(--text-xs);
@@ -649,16 +592,4 @@
     line-height: 1.35;
   }
 
-  .setting-stats {
-    margin-top: var(--space-sm);
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-    display: flex;
-    gap: var(--space-sm);
-    flex-wrap: wrap;
-  }
-
-  .setting-stats-muted {
-    color: var(--text-muted);
-  }
 </style>

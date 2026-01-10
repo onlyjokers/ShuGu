@@ -9,23 +9,14 @@
     disconnectFromServer,
     getSDK,
     permissions,
-    visualScenes,
-    asciiEnabled,
-    asciiResolution,
     enableAudio,
     startEarlyPreload,
   } from '$lib/stores/client';
-  import {
-    normalizeVisualScenesPayload,
-    syncVisualScenesToLegacyStores,
-    syncLegacyVisualEffects,
-  } from '$lib/stores/client/client-visual';
   import StartScreen from '$lib/components/StartScreen.svelte';
   import VisualCanvas from '$lib/components/VisualCanvas.svelte';
   import PermissionWarning from '$lib/components/PermissionWarning.svelte';
   import GeoGateOverlay from '$lib/components/GeoGateOverlay.svelte';
   import { toneAudioEngine } from '@shugu/multimedia-core';
-  import type { VisualSceneLayerItem } from '@shugu/protocol';
 
   let hasStarted = false;
   let serverUrl = 'https://localhost:3001';
@@ -38,16 +29,7 @@
     updatedAt: number;
   };
 
-  type VisualBootstrapConfig = {
-    scenes: VisualSceneLayerItem[];
-    asciiEnabled: boolean;
-    asciiResolution: number;
-    updatedAt: number;
-  };
-
-  let fenceConfig: GeoFenceConfig | null = null;
-  let visualConfig: VisualBootstrapConfig | null = null;
-  let bootstrapConfigError: string | null = null;
+  let startupConfigError: string | null = null;
 
   let gateState: 'idle' | 'checking' | 'blocked' | 'error' = 'idle';
   let gateTitle = '';
@@ -197,8 +179,8 @@
     // Start asset preloading immediately (before Enter is clicked).
     startEarlyPreload(serverUrl);
 
-    // Preload bootstrap config early (HTTP only; no websocket connection).
-    void refreshBootstrapConfig();
+    // Preload geo-fence config early (HTTP only; no websocket connection).
+    void refreshGeoFenceConfig();
 
     if (e2e) {
       (window as any).__SHUGU_E2E = true;
@@ -290,21 +272,16 @@
     }
   }
 
-  async function refreshBootstrapConfig(): Promise<{
-    fence: GeoFenceConfig | null;
-    visual: VisualBootstrapConfig | null;
-  } | null> {
-    bootstrapConfigError = null;
+  async function refreshGeoFenceConfig(): Promise<{ fence: GeoFenceConfig | null } | null> {
+    startupConfigError = null;
     const origin = getServerOrigin(serverUrl);
     if (!origin) {
-      fenceConfig = null;
-      visualConfig = null;
-      bootstrapConfigError = 'Invalid serverUrl';
+      startupConfigError = 'Invalid serverUrl';
       return null;
     }
 
     try {
-      const url = new URL('/bootstrap/config', origin);
+      const url = new URL('/geo/fence', origin);
       const response = await fetch(url.toString(), {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -314,17 +291,10 @@
         throw new Error(body || response.statusText);
       }
 
-      const json = (await response.json()) as {
-        fence?: GeoFenceConfig | null;
-        visual?: VisualBootstrapConfig | null;
-      };
-      fenceConfig = json?.fence ?? null;
-      visualConfig = json?.visual ?? null;
-      return { fence: fenceConfig, visual: visualConfig };
+      const json = (await response.json()) as { fence?: GeoFenceConfig | null };
+      return { fence: json?.fence ?? null };
     } catch (error) {
-      fenceConfig = null;
-      visualConfig = null;
-      bootstrapConfigError = (error as any)?.message ?? String(error);
+      startupConfigError = (error as any)?.message ?? String(error);
       return null;
     }
   }
@@ -406,16 +376,6 @@
     return `${(m / 1000).toFixed(2)}km`;
   }
 
-  function applyVisualBootstrap(visual: VisualBootstrapConfig | null): void {
-    if (!visual) return;
-    const scenes = normalizeVisualScenesPayload({ scenes: visual.scenes });
-    visualScenes.set(scenes);
-    syncVisualScenesToLegacyStores(scenes);
-    asciiEnabled.set(visual.asciiEnabled);
-    asciiResolution.set(visual.asciiResolution);
-    syncLegacyVisualEffects();
-  }
-
   async function runGeoGate(): Promise<void> {
     gateState = 'checking';
     gateTitle = '正在检查位置…';
@@ -441,17 +401,16 @@
       return;
     }
 
-    const bootstrap = await refreshBootstrapConfig();
-    if (!bootstrap && bootstrapConfigError) {
+    const fenceResponse = await refreshGeoFenceConfig();
+    if (!fenceResponse && startupConfigError) {
       disconnect();
       gateState = 'error';
       gateTitle = '无法启动';
-      gateMessage = `无法获取启动配置：${bootstrapConfigError}`;
+      gateMessage = `无法获取启动配置：${startupConfigError}`;
       return;
     }
 
-    const fence = bootstrap?.fence ?? null;
-    applyVisualBootstrap(bootstrap?.visual ?? null);
+    const fence = fenceResponse?.fence ?? null;
 
     if (BYPASS_GEO_GATE) {
       permissions.update((p) => ({ ...p, geolocation: 'granted' }));
