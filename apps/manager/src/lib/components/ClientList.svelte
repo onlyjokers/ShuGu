@@ -2,17 +2,8 @@
   import {
     audienceClients,
     clientReadiness,
-    state,
-    toggleClientSelection,
-    selectAllClientsEnabled,
-    toggleSelectAllClients,
-    clearSelection,
   } from '$lib/stores/manager';
   import { formatClientId } from '@shugu/ui-kit';
-  import Button from '$lib/components/ui/Button.svelte';
-
-  $: selectedIds = $state.selectedClientIds;
-  $: isSelectAllEnabled = $selectAllClientsEnabled;
 
   function readinessStatus(clientId: string): 'connected' | 'loading' | 'ready' | 'error' {
     const info = $clientReadiness.get(clientId);
@@ -41,26 +32,7 @@
 <div class="client-list-container">
   <div class="header">
     <h3 class="title">Clients ({$audienceClients.length})</h3>
-    <div class="actions">
-      <Button
-        variant={isSelectAllEnabled ? 'primary' : 'ghost'}
-        size="sm"
-        on:click={toggleSelectAllClients}
-        title={isSelectAllEnabled
-          ? 'Select-all mode enabled (new clients will be auto-selected). Click to disable.'
-          : 'Select all clients (auto-select new ones)'}
-      >
-        {#if isSelectAllEnabled}All (Auto){:else}All{/if}
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        on:click={clearSelection}
-        disabled={selectedIds.length === 0 && !isSelectAllEnabled}
-      >
-        Clear
-      </Button>
-    </div>
+    <div class="subtitle">View only</div>
   </div>
 
   <div class="list-content">
@@ -70,11 +42,7 @@
       </div>
     {:else}
       {#each $audienceClients as client (client.clientId)}
-        <button
-          class="client-item"
-          class:selected={selectedIds.includes(client.clientId)}
-          on:click={() => toggleClientSelection(client.clientId)}
-        >
+        <div class="client-item">
           <div
             class="status-dot {readinessStatus(client.clientId)}"
             title={readinessTitle(client.clientId)}
@@ -85,10 +53,7 @@
               {new Date(client.connectedAt).toLocaleTimeString()}
             </span>
           </div>
-          {#if selectedIds.includes(client.clientId)}
-            <div class="check-icon">✓</div>
-          {/if}
-        </button>
+        </div>
       {/each}
     {/if}
   </div>
@@ -117,9 +82,11 @@
     color: var(--text-primary);
   }
 
-  .actions {
-    display: flex;
-    gap: var(--space-xs);
+  .subtitle {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .list-content {
@@ -145,18 +112,9 @@
     background: transparent;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
-    cursor: pointer;
+    cursor: default;
     text-align: left;
     transition: all var(--transition-fast);
-  }
-
-  .client-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .client-item.selected {
-    background: rgba(99, 102, 241, 0.1);
-    border-color: var(--color-primary);
   }
 
   .status-dot {
@@ -192,10 +150,5 @@
   .client-time {
     font-size: var(--text-xs);
     color: var(--text-muted);
-  }
-
-  .check-icon {
-    color: var(--color-primary);
-    font-weight: bold;
   }
 </style>

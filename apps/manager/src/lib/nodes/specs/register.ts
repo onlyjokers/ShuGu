@@ -1064,7 +1064,9 @@ registerDefaultNodeDefinitions(nodeRegistry, {
       .filter((c: any) => String(c?.group ?? '') !== 'display')
       .map((c: any) => String(c?.clientId ?? ''))
       .filter(Boolean),
-  getSelectedClientIds: () => (get(state).selectedClientIds ?? []).map(String).filter(Boolean),
+  // Decouple Node Graph client targeting from Manager UI "selected clients".
+  // Client targeting must be driven by the graph itself (client-object inputs/config).
+  getSelectedClientIds: () => [],
   getSensorForClientId: (clientId: string) => {
     if (!clientId) return null;
     return (get(sensorData).get(clientId) as any) ?? null;

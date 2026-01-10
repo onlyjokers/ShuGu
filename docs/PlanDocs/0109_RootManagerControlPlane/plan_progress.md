@@ -7,7 +7,7 @@
 - [x] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
 - [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
 - [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
-- [ ] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
+- [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -177,12 +177,12 @@
     - 结果（2026-01-10）：`playMedia` / `showImage` / `hideImage` / `screenColor` ✅。
     - 备注：用户反馈 Screen Color 语义更贴近 Scene Layer Player，建议后续重分类。
 
-- [ ] Phase 2 Batch #5（Transitional glue：一次性迁移脚本/历史兼容胶水 / `phase2_targets.md` section 5）：
+- [x] Phase 2 Batch #5（Transitional glue：一次性迁移脚本/历史兼容胶水 / `phase2_targets.md` section 5；commits: `347c48a`, `31358d7`）：
   - [ ] 目标：对“无 owner 的过渡脚本/迁移逻辑”做删/收口（删除或改成显式手动导入动作）。
   - [x] 5A DataURL migration：移除 `migrate-dataurls` 与 Assets Manager 入口。
   - [x] 5A 固定动作（batch after-delete gates）：
     - `pnpm guard:deps` ✅（`[deps-guard] ok (543 files scanned)`）
-    - `pnpm lint` ✅（0 errors；warnings 为历史债 + ui-kit any）
+    - `pnpm lint` ✅（0 errors；57 warnings 为历史债）
     - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
   - [x] 5A 回归：Phase 1 checklist 全绿（用户手动验证）。
     - 结果（2026-01-10）：Assets Manager 正常加载；Refresh/Upload ✅（DataURL 迁移入口已移除）。
@@ -206,4 +206,5 @@
     - `pnpm guard:deps` ✅（`[deps-guard] ok (542 files scanned)`）
     - `pnpm lint` ✅（0 errors；57 warnings 为历史债）
     - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
-  - [ ] 5C 回归：Phase 1 checklist 全绿（重点：Assets/Display/NodeGraph/媒体动作；Console 已移除则不再作为回归入口）。
+  - [x] 5C 回归：Phase 1 checklist 全绿（重点：Assets/Display/NodeGraph/媒体动作；Console 已移除则不再作为回归入口）。
+    - 结果（2026-01-10）：Assets/Display/NodeGraph/媒体动作 ✅；Console 已移除。
