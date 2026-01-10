@@ -91,8 +91,24 @@
     }, 0);
   };
 
-  $: cmdAggregatorCurrentInputs = inputs.filter(([key]) => /^in\d+$/.test(String(key))).length;
+  $: cmdAggregatorCurrentInputs = (Array.isArray(inputs) ? inputs : []).filter(([key]) =>
+    /^in\d+$/.test(String(key))
+  ).length;
   $: cmdAggregatorMax = cmdAggregatorMaxInputs();
+
+  // Cmd Aggregator dynamic inputs: manage `inCount` and clean up connections when shrinking.
+  const cmdAggregatorCurrentMaxIndex = (entries: [string, unknown][]): number => {
+    const list = Array.isArray(entries) ? entries : [];
+    return list.reduce((best, [key]) => {
+      const match = /^in(\d+)$/.exec(String(key));
+      if (!match) return best;
+      const idx = Number(match[1]);
+      if (!Number.isFinite(idx) || idx <= 0) return best;
+      return Math.max(best, idx);
+    }, 0);
+  };
+
+  $: cmdAggregatorMaxIndex = cmdAggregatorCurrentMaxIndex(inputs);
 
   const addCmdAggregatorInput = (event: Event) => {
     event.stopPropagation();
@@ -102,6 +118,30 @@
 
     const next = Math.min(cmdAggregatorMax, Math.max(1, cmdAggregatorCurrentInputs) + 1);
     if (next === cmdAggregatorCurrentInputs) return;
+    nodeEngine.updateNodeConfig(nodeId, { inCount: next });
+  };
+
+  const removeCmdAggregatorInput = (event: Event) => {
+    event.stopPropagation();
+    if (!nodeId) return;
+    if (!isCmdAggregator) return;
+    if (cmdAggregatorMaxIndex <= 1) return;
+
+    const next = Math.max(1, cmdAggregatorMaxIndex - 1);
+    const removedPorts = new Set<string>();
+    for (let i = next + 1; i <= cmdAggregatorMaxIndex; i += 1) {
+      removedPorts.add(`in${i}`);
+    }
+
+    for (const c of $graphStateStore.connections ?? []) {
+      if (String(c.targetNodeId) !== nodeId) continue;
+      const targetPortId = String((c as any).targetPortId ?? '');
+      if (!removedPorts.has(targetPortId)) continue;
+      const id = String((c as any).id ?? '');
+      if (!id) continue;
+      nodeEngine.removeConnection(id);
+    }
+
     nodeEngine.updateNodeConfig(nodeId, { inCount: next });
   };
 
@@ -455,6 +495,14 @@
         >
           Add In
         </button>
+        <button
+          class="cmd-aggregator-remove"
+          disabled={cmdAggregatorMaxIndex <= 1}
+          on:pointerdown|stopPropagation
+          on:click={removeCmdAggregatorInput}
+        >
+          Remove In
+        </button>
       </div>
     {/if}
 
@@ -781,10 +829,12 @@
     z-index: 1;
     display: flex;
     justify-content: flex-start;
+    gap: 8px;
     padding: 8px 10px 2px;
   }
 
-  .cmd-aggregator-add {
+  .cmd-aggregator-add,
+  .cmd-aggregator-remove {
     font: inherit;
     font-weight: 600;
     padding: 6px 10px;
@@ -798,7 +848,12 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .cmd-aggregator-add:disabled {
+  .cmd-aggregator-remove:hover:enabled {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .cmd-aggregator-add:disabled,
+  .cmd-aggregator-remove:disabled {
     opacity: 0.45;
   }
 

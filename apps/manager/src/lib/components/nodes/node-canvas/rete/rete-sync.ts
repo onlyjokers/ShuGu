@@ -88,6 +88,16 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
       updated = true;
     }
 
+    for (const key of Object.keys(reteNode?.inputs ?? {})) {
+      const match = /^in(\d+)$/.exec(String(key));
+      if (!match) continue;
+      const idx = Number(match[1]);
+      if (!Number.isFinite(idx) || idx <= 0) continue;
+      if (idx <= desiredCount) continue;
+      reteNode.removeInput(key);
+      updated = true;
+    }
+
     if (updated) await opts.areaPlugin.update('node', reteNode.id);
   };
 
