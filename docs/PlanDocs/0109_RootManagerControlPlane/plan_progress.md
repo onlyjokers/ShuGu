@@ -108,7 +108,7 @@
   - `docs/PlanDocs/0109_RootManagerControlPlane/phase2_targets.md`
   - 并在 `docs/PlanDocs/0109_RootManagerControlPlane/plan.md` 链接该清单。
 
-- [ ] Phase 2 Batch #1（Display routing 去旁路 / section 1）：
+- [x] Phase 2 Batch #1（Display routing 去旁路 / section 1；commit: `dbfb1e1`）：
   - [x] 收敛：Manager 内 Display 发送统一经 `apps/manager/src/lib/display/display-transport.ts`（移除 NodeCanvas/patch-runtime 的 local bridge 旁路）。
     - `apps/manager/src/lib/stores/manager.ts`：导出 `displayTransport` 供复用。
     - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`：不再直调 `sendLocalDisplayPlugin`。
@@ -127,4 +127,42 @@
       - 修复：`apps/manager/src/lib/components/nodes/node-canvas/controllers/loop-controller.ts` 绑定 nodeEngine 方法，避免 `this` 丢失导致 deploy 报错。
       - 修复：`apps/server/src/message-router/message-router.service.ts` 允许转发 `custom.kind=node-executor`，否则 Manager 收不到 deployed/rejected 事件（Loop deploy 会 timeout）。
       - 改进：`scripts/e2e/node-executor.mjs` 在未安装 Playwright Chromium 时 fallback 到系统 Chrome，并补齐 Start/Select All 等前置步骤。
-  - [ ] 手动回归（Display local bridge / Assets / Media / 稳定性）：待你按 `phase1_regression_playbook.md` 复查（本批影响 Display routing，建议优先重跑 DisplayPanel pairing + Send To Display）。
+      - 关联计划：PlanB（Client Recursive NodeGroup / NodeExecutor），详见 `docs/PlanDocs/1217_ClientRecursiveNodeGroup/Plan_porgress.md`。
+  - [x] 手动回归（Display local bridge）：按 `phase1_regression_playbook.md` 复查 DisplayPanel pairing + Send To Display ✅
+    - 过程：Manager 登录/Connect → 打开 Display → 点击 Reconnect 确保 local pairing → 状态 `status=connected` + `ready=yes`。
+    - 结果：开启 `Send To Display` 后执行 `Screen Color / Play All`，Display 出现 `.screen-overlay`（opacity=1）。
+    - 备注：Assets / Media / 稳定性未在本批复跑（沿用 Phase 1 结论）。
+
+- [x] Phase 2 Batch #2（Audio execution：移除 legacy players / `phase2_targets.md` section 3）：
+  - [x] 目标：在 `packages/sdk-client/src/action-executors.ts` 删除 deprecated/legacy player（优先 `ModulatedSoundPlayer`），并确保 Tone 路径覆盖 Phase 1 所需动作。
+    - 删除 `ModulatedSoundPlayer`（仅保留 `ToneModulatedSoundPlayer`）。
+  - [x] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (508 files scanned)`）
+    - `pnpm lint` ✅（0 errors；63 warnings 为历史债）
+    - `pnpm build:all` ✅（通过；vite/sass deprecation warnings 仍在）
+  - [x] 回归：按 `phase1_regression_playbook.md`（尤其关注移动端音频策略 / user gesture / AudioContext）。
+    - 用户手动真机验证：Tone enable/ready 正常；Synth Play/Update/Stop ✅；`Stream On` 下参数更新稳定、不丢声。
+
+- [ ] Phase 2 Batch #3（Visual scenes：收敛 legacy single-scene vs multi-scene / `phase2_targets.md` section 4）：
+  - [ ] 决策：确认唯一支持语义（single scene / multi scene）并删除另一分支。
+  - [ ] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅/❌
+    - `pnpm lint` ✅/❌（0 errors）
+    - `pnpm build:all` ✅/❌（推荐）
+  - [ ] 回归：Phase 1 checklist 中 `visualSceneSwitch` / mel-scene / VisualCanvas 相关项必须全绿。
+
+- [ ] Phase 2 Batch #4（Media：VideoPlayer 去重复 / `phase2_targets.md` section 2）：
+  - [ ] 决策：选 A（抽到 `packages/ui-kit`）或 B（抽逻辑到 `packages/multimedia-core`，UI 仍在 apps）。
+  - [ ] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅/❌
+    - `pnpm lint` ✅/❌（0 errors）
+    - `pnpm build:all` ✅/❌（推荐）
+  - [ ] 回归：Phase 1 checklist 中媒体动作（playMedia/showImage/hideImage 等）必须全绿。
+
+- [ ] Phase 2 Batch #5（Transitional glue：一次性迁移脚本/历史兼容胶水 / `phase2_targets.md` section 5）：
+  - [ ] 目标：对“无 owner 的过渡脚本/迁移逻辑”做删/收口（删除或改成显式手动导入动作）。
+  - [ ] 固定动作（batch after-delete gates）：
+    - `pnpm guard:deps` ✅/❌
+    - `pnpm lint` ✅/❌（0 errors）
+    - `pnpm build:all` ✅/❌（推荐）
+  - [ ] 回归：Phase 1 checklist 全绿。
