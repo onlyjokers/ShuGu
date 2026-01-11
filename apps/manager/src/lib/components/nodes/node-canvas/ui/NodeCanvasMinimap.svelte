@@ -163,6 +163,7 @@
   }
 
   .minimap-bar-drag {
+    height: 28px;
     cursor: grab;
   }
 

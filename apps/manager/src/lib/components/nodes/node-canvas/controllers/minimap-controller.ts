@@ -328,6 +328,12 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
   const handlePointerMove = (event: PointerEvent) => {
     if (!isMinimapViewportDragging) return;
     if (event.pointerId !== minimapViewportPointerId) return;
+    if (event.pointerType === 'mouse' && event.buttons === 0) {
+      isMinimapViewportDragging = false;
+      minimapViewportPointerId = -1;
+      requestUpdate();
+      return;
+    }
     const container = opts.getContainer();
     const adapter = opts.getAdapter();
     if (!container || !adapter) return;
@@ -367,6 +373,7 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
   const handleMovePointerDown = (event: PointerEvent) => {
     const container = opts.getContainer();
     if (!container) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     const ui = get(minimapUi);
@@ -389,6 +396,12 @@ export function createMinimapController(opts: MinimapControllerOptions): Minimap
   const handleMovePointerMove = (event: PointerEvent) => {
     if (!isMinimapDragging) return;
     if (event.pointerId !== minimapDragPointerId) return;
+    if (event.pointerType === 'mouse' && event.buttons === 0) {
+      isMinimapDragging = false;
+      minimapDragPointerId = -1;
+      commitPrefs();
+      return;
+    }
     const dx = event.clientX - minimapDragStart.x;
     const dy = event.clientY - minimapDragStart.y;
     const ui = get(minimapUi);
