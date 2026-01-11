@@ -13,8 +13,9 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { createClient, type RedisClientType } from 'redis';
 import { ClientRegistryService } from '../client-registry/client-registry.service.js';
 import { MessageRouterService } from '../message-router/message-router.service.js';
-import type { Message, ConnectionRole, TimePingData } from '@shugu/protocol';
-import { createTimePong, isValidMessage } from '@shugu/protocol';
+import type { ConnectionRole, TimePingData } from '@shugu/protocol';
+import { createTimePong, isValidMessage, targetClients } from '@shugu/protocol';
+import { sendServerControl } from '../protocol/server-messages.js';
 
 function sanitizeGroup(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -46,7 +47,11 @@ export class EventsGateway
     constructor(
         private readonly clientRegistry: ClientRegistryService,
         private readonly messageRouter: MessageRouterService,
-    ) { }
+    ) {
+        this.clientRegistry.onClientExpired((clientId) => {
+            this.messageRouter.notifyClientLeft(clientId);
+        });
+    }
 
     async afterInit(server: Server) {
         console.log('[Gateway] WebSocket server initialized');
@@ -92,16 +97,38 @@ export class EventsGateway
     }
 
     handleConnection(client: Socket) {
-        // Get role from query params
-        const role = (client.handshake.query.role as ConnectionRole) || 'client';
+        // Requested role from query params (treated as a request, not authority).
+        const requestedRole = (client.handshake.query.role as ConnectionRole) || 'client';
         const group = sanitizeGroup(client.handshake.query.group);
         const userAgent = client.handshake.headers['user-agent'];
         const auth = client.handshake.auth as Record<string, unknown> | undefined;
 
-        console.log(`[Gateway] Connection: ${client.id} as ${role}`);
+        const expectedManagerKey = (process.env.SHUGU_MANAGER_KEY ?? '').trim();
+        const requestedManagerKey =
+            typeof auth?.managerKey === 'string' ? auth.managerKey.trim() : '';
+
+        const role: ConnectionRole =
+            requestedRole === 'manager'
+                ? expectedManagerKey
+                    ? requestedManagerKey === expectedManagerKey
+                        ? 'manager'
+                        : 'client'
+                    : 'manager'
+                : 'client';
+
+        if (requestedRole === 'manager' && expectedManagerKey && role !== 'manager') {
+            const ip = client.handshake.address;
+            console.warn(
+                `[Gateway] Manager key rejected for ${client.id} (ip=${ip ?? 'unknown'})`
+            );
+        }
+
+        console.log(
+            `[Gateway] Connection: ${client.id} requested=${requestedRole} granted=${role}`
+        );
 
         // Register the connection
-        const { clientId, replacedSocketId } = this.clientRegistry.registerConnection(
+        const { clientId, replacedSocketId, isNewClient } = this.clientRegistry.registerConnection(
             client.id,
             role,
             userAgent,
@@ -126,18 +153,20 @@ export class EventsGateway
 
         // Notify managers if a client joined
         if (role === 'client') {
-            this.messageRouter.notifyClientJoined(clientId);
-            
-            // Default to inactive sensors
-            client.emit('msg', {
-                type: 'control',
-                id: `ctrl_${Date.now()}`,
-                timestamp: Date.now(),
-                source: 'server',
-                target: { mode: 'clientIds', ids: [clientId] },
-                action: 'setSensorState',
-                payload: { active: false }
-            });
+            if (isNewClient) {
+                this.messageRouter.notifyClientJoined(clientId);
+            } else {
+                this.messageRouter.broadcastClientListUpdate();
+            }
+
+            const clientInfo = this.clientRegistry.getClient(clientId);
+            const active = clientInfo?.selected ?? false;
+            sendServerControl(
+                this.messageRouter,
+                targetClients([clientId]),
+                'setSensorState',
+                { active }
+            );
         } else if (role === 'manager') {
             // Send current client list to new manager
             this.messageRouter.broadcastClientListUpdate();
@@ -150,7 +179,8 @@ export class EventsGateway
         const connectionInfo = this.clientRegistry.unregisterBySocketId(client.id);
 
         if (connectionInfo && connectionInfo.role === 'client') {
-            this.messageRouter.notifyClientLeft(connectionInfo.clientId);
+            // Keep presence during grace window; only notify left on expiry.
+            this.messageRouter.broadcastClientListUpdate();
         }
     }
 
@@ -159,7 +189,7 @@ export class EventsGateway
      */
     @SubscribeMessage('msg')
     handleMessage(
-        @MessageBody() message: Message,
+        @MessageBody() message: unknown,
         @ConnectedSocket() client: Socket,
     ): void {
         // Validate message structure
@@ -225,34 +255,22 @@ export class EventsGateway
 
         // Notify newly selected clients to START streaming
         if (newlySelected.length > 0) {
-            const socketIds = this.clientRegistry.getSocketIds(newlySelected);
-            socketIds.forEach(socketId => {
-                this.server.to(socketId).emit('msg', {
-                    type: 'control',
-                    id: `ctrl_${Date.now()}`,
-                    timestamp: Date.now(),
-                    source: 'server',
-                    target: { mode: 'clientIds', ids: [this.clientRegistry.getClientIdBySocketId(socketId)!] },
-                    action: 'setSensorState',
-                    payload: { active: true }
-                });
-            });
+            sendServerControl(
+                this.messageRouter,
+                targetClients(newlySelected),
+                'setSensorState',
+                { active: true }
+            );
         }
 
         // Notify newly deselected clients to STOP streaming
         if (newlyDeselected.length > 0) {
-            const socketIds = this.clientRegistry.getSocketIds(newlyDeselected);
-            socketIds.forEach(socketId => {
-                this.server.to(socketId).emit('msg', {
-                    type: 'control',
-                    id: `ctrl_${Date.now()}`,
-                    timestamp: Date.now(),
-                    source: 'server',
-                    target: { mode: 'clientIds', ids: [this.clientRegistry.getClientIdBySocketId(socketId)!] },
-                    action: 'setSensorState',
-                    payload: { active: false }
-                });
-            });
+            sendServerControl(
+                this.messageRouter,
+                targetClients(newlyDeselected),
+                'setSensorState',
+                { active: false }
+            );
         }
 
         // Broadcast updated client list

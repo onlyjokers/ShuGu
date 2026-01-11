@@ -6,6 +6,7 @@ import {
     PluginControlMessage,
     SystemMessage,
     Message,
+    MessageWithoutServerTimestamp,
     PROTOCOL_VERSION,
     TargetSelector,
     ControlAction,
@@ -39,6 +40,27 @@ export function createControlMessage(
         type: 'control' as const,
         version: PROTOCOL_VERSION,
         from: 'manager',
+        target,
+        action,
+        payload,
+        executeAt,
+        clientTimestamp: now(),
+    };
+}
+
+/**
+ * Create a control message sent by the server (internal control/gating).
+ */
+export function createServerControlMessage(
+    target: TargetSelector,
+    action: ControlAction,
+    payload: ControlPayload,
+    executeAt?: number
+): Omit<ControlMessage, 'serverTimestamp'> {
+    return {
+        type: 'control' as const,
+        version: PROTOCOL_VERSION,
+        from: 'server',
         target,
         action,
         payload,
@@ -236,9 +258,9 @@ export function addServerTimestamp<T extends Partial<BaseMessage>>(
 /**
  * Validate message structure
  */
-export function isValidMessage(msg: unknown): msg is Message {
+export function isValidMessage(msg: unknown): msg is MessageWithoutServerTimestamp {
     if (typeof msg !== 'object' || msg === null) return false;
-    const m = msg as Partial<Message>;
+    const m = msg as Partial<MessageWithoutServerTimestamp>;
     return (
         typeof m.type === 'string' &&
         ['control', 'data', 'media', 'system', 'plugin'].includes(m.type) &&

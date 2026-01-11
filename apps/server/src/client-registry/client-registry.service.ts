@@ -6,9 +6,12 @@ interface ConnectionInfo {
     clientId: string;
     role: ConnectionRole;
     connectedAt: number;
+    lastSeenAt: number;
+    disconnectedAt?: number;
     userAgent?: string;
     group?: string;
     selected: boolean;
+    connected: boolean;
     deviceId?: string;
     instanceId?: string;
 }
@@ -25,6 +28,17 @@ export class ClientRegistryService {
     private managers: Map<string, ConnectionInfo> = new Map();
     private socketToClientId: Map<string, string> = new Map();
     private clientIdCounter = 0;
+    private graceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+    private readonly gracePeriodMs = (() => {
+        const raw = Number(process.env.SHUGU_CLIENT_GRACE_MS);
+        return Number.isFinite(raw) ? Math.max(0, raw) : 5000;
+    })();
+    private clientExpiredHandlers: Set<(clientId: string) => void> = new Set();
+
+    onClientExpired(handler: (clientId: string) => void): () => void {
+        this.clientExpiredHandlers.add(handler);
+        return () => this.clientExpiredHandlers.delete(handler);
+    }
 
     /**
      * Generate unique client ID
@@ -44,6 +58,43 @@ export class ClientRegistryService {
         return `m_${timestamp}`;
     }
 
+    private clearGraceTimer(clientId: string): void {
+        const timer = this.graceTimers.get(clientId);
+        if (timer) {
+            clearTimeout(timer);
+            this.graceTimers.delete(clientId);
+        }
+    }
+
+    private scheduleGracePurge(clientId: string): void {
+        if (this.gracePeriodMs <= 0) {
+            this.purgeClient(clientId);
+            return;
+        }
+
+        this.clearGraceTimer(clientId);
+        const timer = setTimeout(() => {
+            const info = this.clients.get(clientId);
+            if (!info || info.connected) return;
+            this.purgeClient(clientId);
+        }, this.gracePeriodMs);
+        this.graceTimers.set(clientId, timer);
+    }
+
+    private purgeClient(clientId: string): void {
+        if (!this.clients.has(clientId)) return;
+        this.clients.delete(clientId);
+        this.graceTimers.delete(clientId);
+        this.clientExpiredHandlers.forEach((handler) => {
+            try {
+                handler(clientId);
+            } catch (err) {
+                console.error('[Registry] clientExpired handler failed:', err);
+            }
+        });
+        console.log(`[Registry] client expired: ${clientId}`);
+    }
+
     /**
      * Register a new connection
      */
@@ -52,7 +103,7 @@ export class ClientRegistryService {
         role: ConnectionRole,
         userAgent?: string,
         identity?: ClientIdentity,
-    ): { clientId: string; replacedSocketId?: string } {
+    ): { clientId: string; replacedSocketId?: string; isNewClient?: boolean } {
         const now = Date.now();
         let replacedSocketId: string | undefined;
 
@@ -75,14 +126,18 @@ export class ClientRegistryService {
 
                         existing.socketId = socketId;
                         existing.connectedAt = now;
+                        existing.lastSeenAt = now;
+                        existing.disconnectedAt = undefined;
                         existing.userAgent = userAgent;
                         existing.deviceId = deviceId;
                         existing.instanceId = instanceId;
+                        existing.connected = true;
+                        this.clearGraceTimer(desiredClientId);
 
                         this.socketToClientId.set(socketId, desiredClientId);
 
                         console.log(`[Registry] client reconnected: ${desiredClientId} (socket: ${socketId})`);
-                        return { clientId: desiredClientId, replacedSocketId };
+                        return { clientId: desiredClientId, replacedSocketId, isNewClient: false };
                     }
 
                     // Another tab/device tries to use the same desired id: allocate a new suffix.
@@ -92,15 +147,17 @@ export class ClientRegistryService {
                         clientId: allocated,
                         role,
                         connectedAt: now,
+                        lastSeenAt: now,
                         userAgent,
                         selected: false,
+                        connected: true,
                         deviceId,
                         instanceId: instanceId ?? undefined,
                     };
                     this.clients.set(allocated, info);
                     this.socketToClientId.set(socketId, allocated);
                     console.log(`[Registry] client registered: ${allocated} (socket: ${socketId})`);
-                    return { clientId: allocated };
+                    return { clientId: allocated, isNewClient: true };
                 }
 
                 // Desired id is free, use it as-is.
@@ -109,15 +166,17 @@ export class ClientRegistryService {
                     clientId: desiredClientId,
                     role,
                     connectedAt: now,
+                    lastSeenAt: now,
                     userAgent,
                     selected: false,
+                    connected: true,
                     deviceId,
                     instanceId: instanceId ?? undefined,
                 };
                 this.clients.set(desiredClientId, info);
                 this.socketToClientId.set(socketId, desiredClientId);
                 console.log(`[Registry] client registered: ${desiredClientId} (socket: ${socketId})`);
-                return { clientId: desiredClientId };
+                return { clientId: desiredClientId, isNewClient: true };
             }
 
             // No usable identity provided; fall back to generated id.
@@ -127,13 +186,15 @@ export class ClientRegistryService {
                 clientId,
                 role,
                 connectedAt: now,
+                lastSeenAt: now,
                 userAgent,
                 selected: false,
+                connected: true,
             };
             this.clients.set(clientId, info);
             this.socketToClientId.set(socketId, clientId);
             console.log(`[Registry] client registered: ${clientId} (socket: ${socketId})`);
-            return { clientId };
+            return { clientId, isNewClient: true };
         }
 
         // Managers: keep existing behavior (server-generated ids).
@@ -143,14 +204,16 @@ export class ClientRegistryService {
             clientId: managerId,
             role,
             connectedAt: now,
+            lastSeenAt: now,
             userAgent,
             selected: false,
+            connected: true,
         };
         this.managers.set(managerId, managerInfo);
         this.socketToClientId.set(socketId, managerId);
 
         console.log(`[Registry] ${role} registered: ${managerId} (socket: ${socketId})`);
-        return { clientId: managerId };
+        return { clientId: managerId, isNewClient: true };
     }
 
     private sanitizeId(value: unknown): string | null {
@@ -187,8 +250,13 @@ export class ClientRegistryService {
 
         const clientInfo = this.clients.get(clientId);
         if (clientInfo) {
-            this.clients.delete(clientId);
-            console.log(`[Registry] client disconnected: ${clientId}`);
+            clientInfo.connected = false;
+            clientInfo.disconnectedAt = Date.now();
+            clientInfo.lastSeenAt = clientInfo.disconnectedAt;
+            this.scheduleGracePurge(clientId);
+            console.log(
+                `[Registry] client disconnected: ${clientId} (grace ${this.gracePeriodMs}ms)`
+            );
             return clientInfo;
         }
 
@@ -213,7 +281,11 @@ export class ClientRegistryService {
      * Get socket ID by client ID
      */
     getSocketId(clientId: string): string | undefined {
-        return this.clients.get(clientId)?.socketId || this.managers.get(clientId)?.socketId;
+        const client = this.clients.get(clientId);
+        if (client && client.connected) return client.socketId;
+        const manager = this.managers.get(clientId);
+        if (manager && manager.connected) return manager.socketId;
+        return undefined;
     }
 
     /**
@@ -245,14 +317,18 @@ export class ClientRegistryService {
      * Get all client socket IDs
      */
     getAllClientSocketIds(): string[] {
-        return Array.from(this.clients.values()).map(c => c.socketId);
+        return Array.from(this.clients.values())
+            .filter(c => c.connected)
+            .map(c => c.socketId);
     }
 
     /**
      * Get all manager socket IDs
      */
     getAllManagerSocketIds(): string[] {
-        return Array.from(this.managers.values()).map(m => m.socketId);
+        return Array.from(this.managers.values())
+            .filter(m => m.connected)
+            .map(m => m.socketId);
     }
 
     /**
@@ -262,9 +338,11 @@ export class ClientRegistryService {
         return Array.from(this.clients.values()).map(c => ({
             clientId: c.clientId,
             connectedAt: c.connectedAt,
+            lastSeenAt: c.lastSeenAt,
             userAgent: c.userAgent,
             group: c.group,
             selected: c.selected,
+            connected: c.connected,
         }));
     }
 
@@ -316,7 +394,7 @@ export class ClientRegistryService {
      * Get clients by group
      */
     getClientsByGroup(groupId: string): ConnectionInfo[] {
-        return Array.from(this.clients.values()).filter(c => c.group === groupId);
+        return Array.from(this.clients.values()).filter(c => c.group === groupId && c.connected);
     }
 
     /**

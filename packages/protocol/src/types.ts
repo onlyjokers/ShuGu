@@ -287,11 +287,11 @@ export interface ControlBatchPayload {
 export type ControlPayload = BaseControlPayload | ControlBatchPayload;
 
 /**
- * Control message sent from manager to control client behavior
+ * Control message sent from manager or server to control client behavior
  */
 export interface ControlMessage extends BaseMessage {
   type: 'control';
-  from: 'manager';
+  from: 'manager' | 'server';
   target: TargetSelector;
   action: ControlAction;
   /** Server timestamp when the action should be executed (for sync) */
@@ -447,6 +447,8 @@ export interface ClientInfo {
   userAgent?: string;
   group?: string;
   selected?: boolean;
+  connected?: boolean;
+  lastSeenAt?: number;
 }
 
 /**
@@ -473,6 +475,18 @@ export type Message =
   | MediaMetaMessage
   | PluginControlMessage
   | SystemMessage;
+
+/**
+ * Message type sent to the server before server timestamp is attached.
+ *
+ * Note: the server is responsible for attaching `serverTimestamp` before routing/broadcasting.
+ */
+export type MessageWithoutServerTimestamp =
+  | Omit<ControlMessage, 'serverTimestamp'>
+  | Omit<SensorDataMessage, 'serverTimestamp'>
+  | Omit<MediaMetaMessage, 'serverTimestamp'>
+  | Omit<PluginControlMessage, 'serverTimestamp'>
+  | Omit<SystemMessage, 'serverTimestamp'>;
 
 /**
  * Socket.io event names

@@ -50,7 +50,7 @@ Status: Draft (actionable checklist)
 - `pnpm --filter @shugu/server run lint` ✅（0 errors）。
 - Phase 1 回归中与 sensor gating 相关流程仍正常（client connect 默认 inactive；manager select 后 active；deselect 后 stop）。
 
-状态：未开始
+状态：完成
 
 ---
 
@@ -80,7 +80,7 @@ Status: Draft (actionable checklist)
 - manager UI 在提供 key 时仍可正常控制（Phase 1 回归全绿）。
 - client 连接不受影响（deviceId/instanceId 逻辑保持）。
 
-状态：未开始
+状态：完成
 
 ---
 
@@ -117,7 +117,7 @@ Status: Draft (actionable checklist)
 - 断线 > 5s：触发 `clientLeft`；列表移除；选择状态一致。
 - `pnpm lint` ✅，`pnpm guard:deps` ✅；Phase 1 回归全绿。
 
-状态：未开始
+状态：完成
 
 ---
 
@@ -126,4 +126,3 @@ Status: Draft (actionable checklist)
 1. 2.3-1 协议形态收敛（先清掉未来 schema 校验的硬雷）  
 2. 2.3-2 最小认证收口（先止血公网伪造 manager）  
 3. 2.3-3 Presence/grace 语义对齐（为 Phase 4/5 准备信号源）
-

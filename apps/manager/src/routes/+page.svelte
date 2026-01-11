@@ -27,6 +27,7 @@
 
   let serverUrl = 'https://localhost:3001';
   let assetWriteToken = '';
+  let managerKey = '';
   let isConnecting = false;
   let username: AuthUser | '' = '';
   let password = '';
@@ -97,6 +98,7 @@
 
   // Settings (persisted)
   const PERFORMANCE_MODE_STORAGE_KEY = 'shugu-manager-performance-mode';
+  const MANAGER_KEY_STORAGE_KEY = 'shugu-manager-key';
 
   let performanceMode = false;
 
@@ -145,6 +147,8 @@
 
     const savedAssetWrite = localStorage.getItem('shugu-asset-write-token');
     assetWriteToken = savedAssetWrite ? savedAssetWrite : '';
+    const savedManagerKey = localStorage.getItem(MANAGER_KEY_STORAGE_KEY);
+    managerKey = savedManagerKey ? savedManagerKey : '';
 
     try {
       performanceMode = localStorage.getItem(PERFORMANCE_MODE_STORAGE_KEY) === '1';
@@ -208,8 +212,13 @@
     if (!$auth.user) return;
     localStorage.setItem('shugu-server-url', serverUrl);
     localStorage.setItem('shugu-asset-write-token', assetWriteToken);
+    localStorage.setItem(MANAGER_KEY_STORAGE_KEY, managerKey);
     isConnecting = true;
-    connect({ serverUrl, transports: performanceMode ? ['websocket'] : ['polling', 'websocket'] });
+    connect({
+      serverUrl,
+      managerKey,
+      transports: performanceMode ? ['websocket'] : ['polling', 'websocket'],
+    });
     isConnecting = false;
   }
 
@@ -318,6 +327,16 @@
             class="input"
             bind:value={assetWriteToken}
             placeholder="ASSET_WRITE_TOKEN"
+            autocomplete="off"
+          />
+
+          <label class="form-label" for="manager-key">Manager Key</label>
+          <input
+            id="manager-key"
+            type="password"
+            class="input"
+            bind:value={managerKey}
+            placeholder="SHUGU_MANAGER_KEY"
             autocomplete="off"
           />
 

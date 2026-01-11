@@ -9,7 +9,8 @@
 - [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [x] Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）
-- [ ] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
+- [x] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
+- [ ] Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -243,3 +244,27 @@
   - Acceptance hooks：
     - `rg "asciiMode|asciiResolution" apps/client apps/manager packages/node-core packages/sdk-manager` ✅（无命中）
     - `rg "action: 'convolution'|action: \\\"convolution\\\"\" apps/client apps/manager packages/node-core` ✅（无命中）
+
+### 2026-01-11
+
+- [x] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
+  - [x] 2.3-1 协议形态收敛：Server 端控制消息改为 `createServerControlMessage` + `MessageRouter` 统一下发；新增 `apps/server/src/protocol/server-messages.ts`；移除 `events.gateway.ts` 中 ad-hoc `emit('msg', { type: 'control' ... })`。
+    - [x] 类型对齐：新增 `MessageWithoutServerTimestamp`，让 server-side message routing 在 type-level 上与“server 负责打 timestamp”的语义一致（避免 build 被 TS 卡住）。
+  - [x] 2.3-1 护栏：新增 `scripts/guard-server-messages.mjs`，并纳入 `pnpm guard:deps`（禁止 server 直接 emit control 字面量）。
+  - [x] 2.3-2 最小认证：`SHUGU_MANAGER_KEY` 校验 `handshake.auth.managerKey`；Manager SDK/Manager UI 增加 `managerKey` 传入与保存。
+  - [x] 2.3-3 Presence/grace：Registry 引入 `connected/lastSeenAt/disconnectedAt` + 5s grace；断线先标记再延迟移除；`clientList` 携带 connected 状态；manager UI / client picker 显示离线灰态；路由仅向 connected socket 下发。
+  - [x] 2.3 固定动作（after-delete gates）：
+    - `pnpm guard:deps` ✅（`[deps-guard] ok (523 files scanned)`；`[server-msg-guard] ok (31 files scanned)`）
+    - `pnpm lint` ✅（0 errors；warnings 为历史债）
+    - `pnpm --filter @shugu/server run build` ✅
+    - `pnpm --filter @shugu/protocol run build` ✅
+    - `pnpm --filter @shugu/sdk-manager run build` ✅
+  - [ ] 2.3 回归：按 `phase1_regression_playbook.md` 全绿（重点：sensor gating、managerKey、有/无 key 下的行为、5s grace 重连/过期）。
+
+- [ ] Phase 2.5 启动：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
+  - [ ] Gate：移除 `group-activate` 节点 UI；Gate 输入端口下沉到 Group header（boolean-only，未连线默认 true，禁止来自 subtree）。
+  - [ ] Proxy：跨边界连线自动代理；支持手动 pin（拖线到边缘创建点；输出代理点 1 点仅 1 条外连线）。
+  - [ ] Minimize：frame ⇄ node；最小化隐藏 subtree 内部节点/连线，仅保留边界代理端口与对外连线。
+  - [ ] Migration：旧项目自动迁移（多 Activate 合并 AND；any/number 来源自动插入 Number-to-Boolean）。
+  - [ ] 新节点：`Number to Boolean`（>= threshold）。
+  - [ ] 验证：`pnpm --filter @shugu/node-core run test` + `pnpm lint`（0 errors）。

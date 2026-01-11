@@ -526,7 +526,8 @@
     return String((c as any).clientId ?? '');
   }
 
-  function readinessClass(clientId: string): string {
+  function readinessClass(clientId: string, connected?: boolean): string {
+    if (connected === false) return 'disconnected';
     const info = $clientReadiness.get(clientId);
     if (!info) return 'connected';
     if (info.status === 'assets-ready') return 'ready';
@@ -1738,7 +1739,7 @@
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(item.client.clientId)}
           >
-            <span class="client-dot {readinessClass(item.client.clientId)}"></span>
+            <span class="client-dot {readinessClass(item.client.clientId, item.client.connected)}"></span>
           </button>
         {/each}
       </div>
@@ -2571,6 +2572,11 @@
     background: rgba(250, 204, 21, 0.92);
     box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.18);
     flex: 0 0 auto;
+  }
+
+  .client-dot.disconnected {
+    background: rgba(148, 163, 184, 0.9);
+    box-shadow: none;
   }
 
   .client-dot.error {

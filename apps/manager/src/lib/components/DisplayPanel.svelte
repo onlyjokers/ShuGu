@@ -10,6 +10,7 @@ Purpose: Display panel (Phase 5) - show Local/Remote Display status and controls
     openDisplay,
     pairDisplay,
   } from '$lib/display/display-bridge';
+  import type { ClientInfo } from '@shugu/protocol';
   import { formatClientId } from '@shugu/ui-kit';
   import Card from '$lib/components/ui/Card.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -21,9 +22,12 @@ Purpose: Display panel (Phase 5) - show Local/Remote Display status and controls
   $: hasAnyDisplay = hasLocal || hasRemote;
 
   function readinessFor(
-    clientId: string
+    client: ClientInfo
   ): { label: string; color: 'muted' | 'ready'; readyAt: number | null; manifestId: string | null } {
-    const info = $clientReadiness.get(clientId);
+    if (client.connected === false) {
+      return { label: 'offline', color: 'muted', readyAt: null, manifestId: null };
+    }
+    const info = $clientReadiness.get(client.clientId);
     if (!info) return { label: 'connected', color: 'muted', readyAt: null, manifestId: null };
     if (info.status === 'assets-ready') {
       return {
@@ -79,7 +83,7 @@ Purpose: Display panel (Phase 5) - show Local/Remote Display status and controls
       {:else}
         <div class="remote-list">
           {#each $displayClients as client (client.clientId)}
-            {@const r = readinessFor(client.clientId)}
+            {@const r = readinessFor(client)}
             <div class="remote-item">
               <div class="remote-main">
                 <div class="remote-id">{formatClientId(client.clientId)}</div>

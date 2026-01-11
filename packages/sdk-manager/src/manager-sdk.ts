@@ -57,6 +57,10 @@ export interface ManagerSDKConfig {
     reconnectionDelay?: number;
     timeSyncInterval?: number;
     /**
+     * Optional manager key used for server-side role verification.
+     */
+    managerKey?: string;
+    /**
      * Socket.io transports preference.
      * - Default: `['polling', 'websocket']` (best compatibility)
      * - Performance mode: `['websocket']` (less jitter, but may fail on restrictive networks)
@@ -118,6 +122,7 @@ export class ManagerSDK {
             transports,
             // Throttle high-frequency updates to ~30fps by default to prevent backpressure
             highFreqThrottleMs: config.highFreqThrottleMs ?? 33,
+            managerKey: typeof config.managerKey === 'string' ? config.managerKey.trim() : '',
         };
 
         this.state = {
@@ -145,6 +150,7 @@ export class ManagerSDK {
 
         this.socket = io(this.config.serverUrl, {
             query: { role: 'manager' },
+            auth: this.config.managerKey ? { managerKey: this.config.managerKey } : undefined,
             transports: this.config.transports,
             // Increase timeouts
             timeout: 20000,

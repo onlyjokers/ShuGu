@@ -2,14 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { ClientRegistryService } from '../client-registry/client-registry.service.js';
 import type {
-    Message,
     ControlMessage,
     SensorDataMessage,
     MediaMetaMessage,
     PluginControlMessage,
     SystemMessage,
+    Message,
+    MessageWithoutServerTimestamp,
     TargetSelector,
-    SOCKET_EVENTS,
 } from '@shugu/protocol';
 import { addServerTimestamp } from '@shugu/protocol';
 
@@ -58,14 +58,14 @@ export class MessageRouterService {
     /**
      * Route a message based on its type and target
      */
-    routeMessage(message: Message, fromSocketId: string): void {
+    routeMessage(message: MessageWithoutServerTimestamp, _fromSocketId: string): void {
         if (!this.server) {
             console.error('[Router] Server not initialized');
             return;
         }
 
         // Add server timestamp to all messages
-        const timestampedMessage = addServerTimestamp(message, Date.now());
+        const timestampedMessage = addServerTimestamp(message, Date.now()) as Message;
 
         switch (message.type) {
             case 'control':
@@ -81,7 +81,7 @@ export class MessageRouterService {
                 this.routePluginMessage(timestampedMessage as PluginControlMessage);
                 break;
             case 'system':
-                this.routeSystemMessage(timestampedMessage as SystemMessage, fromSocketId);
+                this.routeSystemMessage(timestampedMessage as SystemMessage, _fromSocketId);
                 break;
         }
     }
@@ -178,7 +178,7 @@ export class MessageRouterService {
     /**
      * Route system message
      */
-    private routeSystemMessage(message: SystemMessage, fromSocketId: string): void {
+    private routeSystemMessage(_message: SystemMessage, _fromSocketId: string): void {
         // System messages are typically handled by the gateway directly
         // console.log(`[Router] System message: ${message.action}`);
     }
