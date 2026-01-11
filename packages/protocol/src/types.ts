@@ -49,11 +49,8 @@ export type ControlAction =
   | 'shutdown'
   | 'visualScenes'
   | 'visualEffects'
-  | 'convolution'
   | 'setDataReportingRate'
   | 'setSensorState'
-  | 'asciiMode'
-  | 'asciiResolution'
   | 'custom';
 
 /**
@@ -165,54 +162,6 @@ export interface ShowImagePayload {
 }
 
 /**
- * ASCII post-processing toggle payload
- */
-export interface AsciiModePayload {
-  enabled: boolean;
-}
-
-/**
- * ASCII resolution payload
- */
-export interface AsciiResolutionPayload {
-  /** Cell size in pixels (lower = finer) */
-  cellSize: number;
-}
-
-/**
- * Convolution post-processing payload.
- *
- * Applies a 3x3 convolution kernel on the client-rendered output.
- */
-export interface ConvolutionPayload {
-  enabled: boolean;
-  /**
-   * Optional preset kernel id. Ignored if `kernel` is provided.
-   */
-  preset?: 'blur' | 'gaussianBlur' | 'sharpen' | 'edge' | 'emboss' | 'sobelX' | 'sobelY' | 'custom';
-  /**
-   * Optional 3x3 kernel values (row-major, length 9).
-   */
-  kernel?: number[];
-  /**
-   * Blend factor 0..1 (0 = original, 1 = fully convolved).
-   */
-  mix?: number;
-  /**
-   * Bias added after convolution in normalized units (-1..1).
-   */
-  bias?: number;
-  /**
-   * When true, normalizes by the kernel sum when non-zero.
-   */
-  normalize?: boolean;
-  /**
-   * Processing scale 0.1..1 (lower = faster).
-   */
-  scale?: number;
-}
-
-/**
  * Visual scene layer item.
  *
  * Used by `visualScenes` to describe an ordered enabled scene list on the client.
@@ -234,6 +183,16 @@ export interface VisualScenesPayload {
   scenes: VisualSceneLayerItem[];
 }
 
+export type ConvolutionPreset =
+  | 'blur'
+  | 'gaussianBlur'
+  | 'sharpen'
+  | 'edge'
+  | 'emboss'
+  | 'sobelX'
+  | 'sobelY'
+  | 'custom';
+
 /**
  * Visual effect description.
  *
@@ -248,7 +207,7 @@ export type VisualEffect =
     }
   | {
       type: 'convolution';
-      preset?: ConvolutionPayload['preset'];
+      preset?: ConvolutionPreset;
       /** Optional 3x3 kernel values (row-major, length 9). */
       kernel?: number[];
       /** Blend factor 0..1 (0 = original, 1 = fully convolved). */
@@ -294,9 +253,6 @@ export type BaseControlPayload =
   | PlaySoundPayload
   | PlayMediaPayload
   | ShowImagePayload
-  | AsciiModePayload
-  | AsciiResolutionPayload
-  | ConvolutionPayload
   | VisualScenesPayload
   | VisualEffectsPayload
   | DataReportingRatePayload
@@ -441,7 +397,7 @@ export interface MediaMetaMessage extends BaseMessage {
  * Plugin IDs
  */
 export type AudioPluginId = 'mel-spectrogram' | 'audio-splitter' | string;
-export type VisualPluginId = 'box-scene' | 'mel-scene' | 'ascii-scene' | string;
+export type VisualPluginId = 'box-scene' | 'mel-scene' | 'mel-ascii-scene' | string;
 export type SystemPluginId = 'node-executor';
 export type PluginId = AudioPluginId | VisualPluginId | SystemPluginId;
 

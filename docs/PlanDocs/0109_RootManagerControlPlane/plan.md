@@ -20,8 +20,10 @@ Status: Draft
 
 - [x] Phase 0：大清洗与新骨架（先解耦/删冗余/拆巨石；不引入新功能）
 - [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
-- [ ] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
-- [ ] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
+- [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
+- [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
+- [x] Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）
+- [ ] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -694,6 +696,14 @@ Graph 侧只看到：
     - Display：local MessagePort 与 server fallback 必须收敛到统一入口（例如 `display-transport`），旧的直连发送/旁路逻辑不再保留。
     - UI 复用：类似 `VideoPlayer` 这类跨 app 的重复实现，要么抽到 `packages/ui-kit` / `packages/multimedia-core`，要么明确“只保留一份并被复用”。
   - 删除后的行为验证必须立即回归（见验收）。
+
+- **A2) Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）**
+  - 对齐清单：`docs/PlanDocs/0109_RootManagerControlPlane/phase2_2_alignment.md`
+  - 目标：消除“同一层级能力却组织/命名/入口分裂”的技术债，为 Phase 3/4 打底。
+
+- **A3) Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）**
+  - 对齐清单：`docs/PlanDocs/0109_RootManagerControlPlane/phase2_3_server_hygiene.md`
+  - 目标：在不新增演出能力的前提下，清理 server 的协议形态/角色入口/presence 语义混乱，避免 Phase 4/5 被历史债拖死。
 
 - **B) 护栏固化（防止再变屎山）**
   - 依赖护栏升级：在现有 `guard:deps` 基础上，逐步扩展到“关键层级倒挂/循环依赖”的自动检测（保持规则轻量、可维护）。

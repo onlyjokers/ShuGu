@@ -21,7 +21,6 @@ import type {
   ControlBatchPayload,
   ControlMessage,
   ControlPayload,
-  ConvolutionPayload,
   FlashlightPayload,
   ModulateSoundPayload,
   PlayMediaPayload,
@@ -36,18 +35,11 @@ import type {
 import { parseMediaClipParams } from './client-media';
 import { handlePushImageUpload, type PushImageUploadPayload } from './client-screenshot';
 import {
-  asciiEnabled,
-  asciiResolution,
-  convolution,
   normalizeVisualEffectsPayload,
   normalizeVisualScenesPayload,
-  syncLegacyVisualEffects,
-  syncVisualEffectsToLegacyStores,
   syncVisualScenesToLegacyStores,
   visualEffects,
   visualScenes,
-  type ConvolutionPreset,
-  type ConvolutionState,
 } from './client-visual';
 
 export type ClientControlDeps = {
@@ -282,86 +274,10 @@ export function createClientControlHandlers(deps: ClientControlDeps): {
           }
           break;
 
-        case 'asciiMode':
-          asciiEnabled.set((payload as { enabled: boolean }).enabled);
-          syncLegacyVisualEffects();
-          break;
-
-        case 'asciiResolution':
-          asciiResolution.set((payload as { cellSize: number }).cellSize);
-          syncLegacyVisualEffects();
-          break;
-
         case 'visualEffects':
           {
             const effects = normalizeVisualEffectsPayload(payload as VisualEffectsPayload);
             visualEffects.set(effects);
-            syncVisualEffectsToLegacyStores(effects);
-          }
-          break;
-
-        case 'convolution':
-          {
-            const convPayload = payload as ConvolutionPayload;
-            const allowed: ConvolutionPreset[] = [
-              'blur',
-              'gaussianBlur',
-              'sharpen',
-              'edge',
-              'emboss',
-              'sobelX',
-              'sobelY',
-              'custom',
-            ];
-
-            convolution.update((prev) => {
-              const next: ConvolutionState = { ...prev };
-
-              if (typeof convPayload.enabled === 'boolean') {
-                next.enabled = convPayload.enabled;
-              }
-
-              const presetCandidate =
-                typeof convPayload.preset === 'string' &&
-                allowed.includes(convPayload.preset as ConvolutionPreset)
-                  ? (convPayload.preset as ConvolutionPreset)
-                  : null;
-
-              if (presetCandidate) {
-                next.preset = presetCandidate;
-              }
-
-              if (Array.isArray(convPayload.kernel)) {
-                const kernel = convPayload.kernel
-                  .map((n) => (typeof n === 'number' ? n : Number(n)))
-                  .filter((n) => Number.isFinite(n))
-                  .slice(0, 9);
-                next.kernel = kernel.length === 9 ? kernel : null;
-              } else if (presetCandidate) {
-                // Avoid stale kernel overriding preset kernels when the preset changes.
-                next.kernel = null;
-              }
-
-              if (typeof convPayload.mix === 'number' && Number.isFinite(convPayload.mix)) {
-                next.mix = Math.max(0, Math.min(1, convPayload.mix));
-              }
-
-              if (typeof convPayload.bias === 'number' && Number.isFinite(convPayload.bias)) {
-                next.bias = Math.max(-1, Math.min(1, convPayload.bias));
-              }
-
-              if (typeof convPayload.normalize === 'boolean') {
-                next.normalize = convPayload.normalize;
-              }
-
-              if (typeof convPayload.scale === 'number' && Number.isFinite(convPayload.scale)) {
-                next.scale = Math.max(0.1, Math.min(1, convPayload.scale));
-              }
-
-              return next;
-            });
-
-            syncLegacyVisualEffects();
           }
           break;
 

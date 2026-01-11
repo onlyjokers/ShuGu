@@ -13,13 +13,8 @@ export {
   visualScenes,
   cameraStream,
   cameraFacing,
-  asciiEnabled,
-  asciiResolution,
-  convolution,
   visualEffects,
   type CameraFacing,
-  type ConvolutionPreset,
-  type ConvolutionState,
 } from './client/client-visual';
 export { audioStream, videoState, imageState } from './client/client-media';
 export { audioEnabled } from './client/client-tone';

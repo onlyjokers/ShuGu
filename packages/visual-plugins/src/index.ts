@@ -6,5 +6,6 @@
 export * from './types.js';
 export * from './box-scene.js';
 export * from './mel-scene.js';
-export * from './ascii-scene.js';
+export * from './mel-ascii-scene.js';
 export * from './scene-manager.js';
+export * from './scene-registry.js';

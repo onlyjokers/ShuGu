@@ -144,77 +144,9 @@ export function stopCameraStream(): void {
   }
 }
 
-// ASCII post-processing toggle (default off)
-export const asciiEnabled = writable<boolean>(false);
-
-// ASCII resolution (cell size in pixels)
-export const asciiResolution = writable<number>(11);
-
-export type ConvolutionPreset =
-  | 'blur'
-  | 'gaussianBlur'
-  | 'sharpen'
-  | 'edge'
-  | 'emboss'
-  | 'sobelX'
-  | 'sobelY'
-  | 'custom';
-
-export type ConvolutionState = {
-  enabled: boolean;
-  preset: ConvolutionPreset;
-  kernel: number[] | null;
-  mix: number;
-  bias: number;
-  normalize: boolean;
-  scale: number;
-};
-
-// Convolution post-processing config
-export const convolution = writable<ConvolutionState>({
-  enabled: false,
-  preset: 'sharpen',
-  kernel: null,
-  mix: 1,
-  bias: 0,
-  normalize: true,
-  scale: 0.5,
-});
-
 // Visual post-processing chain applied on top of the visual layer (first -> last).
 // Default keeps the client visually idle until a Manager explicitly enables effects.
 export const visualEffects = writable<VisualEffect[]>([]);
-
-function buildLegacyVisualEffects(): VisualEffect[] {
-  const effects: VisualEffect[] = [];
-
-  const conv = get(convolution);
-  if (conv?.enabled) {
-    effects.push({
-      type: 'convolution',
-      preset: conv.preset,
-      ...(Array.isArray(conv.kernel) && conv.kernel.length === 9 ? { kernel: conv.kernel } : {}),
-      mix: conv.mix,
-      bias: conv.bias,
-      normalize: conv.normalize,
-      scale: conv.scale,
-    });
-  }
-
-  const asciiOn = Boolean(get(asciiEnabled));
-  if (asciiOn) {
-    effects.push({
-      type: 'ascii',
-      cellSize: clampNumber(get(asciiResolution), 11, 1, 100),
-    });
-  }
-
-  return effects;
-}
-
-export function syncLegacyVisualEffects(): void {
-  visualEffects.set(buildLegacyVisualEffects());
-}
 
 export function normalizeVisualEffectsPayload(payload: unknown): VisualEffect[] {
   const raw = payload && typeof payload === 'object' ? (payload as any).effects : null;
@@ -253,42 +185,4 @@ export function normalizeVisualEffectsPayload(payload: unknown): VisualEffect[] 
   }
 
   return out;
-}
-
-export function syncVisualEffectsToLegacyStores(effects: VisualEffect[]): void {
-  const list = Array.isArray(effects) ? effects : [];
-  const firstAscii = list.find((e) => e.type === 'ascii') as
-    | Extract<VisualEffect, { type: 'ascii' }>
-    | undefined;
-  const firstConv = list.find((e) => e.type === 'convolution') as
-    | Extract<VisualEffect, { type: 'convolution' }>
-    | undefined;
-
-  asciiEnabled.set(Boolean(firstAscii));
-  if (firstAscii) {
-    asciiResolution.set(clampNumber(firstAscii.cellSize, 11, 1, 100));
-  }
-
-  convolution.update((prev) => {
-    const next: ConvolutionState = { ...prev, enabled: Boolean(firstConv) };
-    if (!firstConv) return next;
-
-    if (typeof firstConv.preset === 'string') {
-      next.preset = firstConv.preset as ConvolutionPreset;
-    }
-
-    if (Array.isArray(firstConv.kernel) && firstConv.kernel.length === 9) {
-      next.kernel = firstConv.kernel.slice(0, 9);
-    } else {
-      next.kernel = null;
-    }
-
-    next.mix = clampNumber(firstConv.mix, next.mix, 0, 1);
-    next.bias = clampNumber(firstConv.bias, next.bias, -1, 1);
-    next.normalize =
-      typeof firstConv.normalize === 'boolean' ? firstConv.normalize : next.normalize;
-    next.scale = clampNumber(firstConv.scale, next.scale, 0.1, 1);
-
-    return next;
-  });
 }

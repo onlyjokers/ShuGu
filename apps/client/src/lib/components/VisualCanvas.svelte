@@ -20,6 +20,7 @@
     MelSpectrogramScene,
     DefaultSceneManager,
     type VisualContext,
+    sceneIdsFromLayer,
   } from '@shugu/visual-plugins';
   import { toneAudioEngine } from '@shugu/multimedia-core';
   import {
@@ -35,6 +36,7 @@
     resetVisualEffectPipeline,
     type VisualEffectPipeline,
   } from '@shugu/visual-effects';
+  import { drawBaseFrame as renderBaseFrame } from '$lib/features/visual-layer/base-frame';
 
   let container: HTMLElement;
   let sceneManager: DefaultSceneManager | null = null;
@@ -245,69 +247,32 @@
     animationId = requestAnimationFrame(animate);
   }
 
-  type MediaFit = 'contain' | 'fit-screen' | 'cover' | 'fill';
-
-  function getFittedDrawParams(
-    srcW: number,
-    srcH: number,
-    dstW: number,
-    dstH: number,
-    fit: MediaFit
-  ): {
-    sx: number;
-    sy: number;
-    sw: number;
-    sh: number;
-    dx: number;
-    dy: number;
-    dw: number;
-    dh: number;
-  } {
-    if (fit === 'fill') {
-      return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx: 0, dy: 0, dw: dstW, dh: dstH };
-    }
-
-    if (fit === 'cover') {
-      const scale = Math.max(dstW / srcW, dstH / srcH);
-      const sw = dstW / scale;
-      const sh = dstH / scale;
-      const sx = (srcW - sw) / 2;
-      const sy = (srcH - sh) / 2;
-      return { sx, sy, sw, sh, dx: 0, dy: 0, dw: dstW, dh: dstH };
-    }
-
-    // contain: preserve aspect ratio and don't scale up beyond 1x (real size when possible).
-    // fit-screen: preserve aspect ratio and scale up to fit the screen.
-    const scale =
-      fit === 'fit-screen'
-        ? Math.min(dstW / srcW, dstH / srcH)
-        : Math.min(1, dstW / srcW, dstH / srcH);
-    const dw = srcW * scale;
-    const dh = srcH * scale;
-    const dx = (dstW - dw) / 2;
-    const dy = (dstH - dh) / 2;
-    return { sx: 0, sy: 0, sw: srcW, sh: srcH, dx, dy, dw, dh };
-  }
-
-  const clamp = (value: number, min: number, max: number): number =>
-    Math.max(min, Math.min(max, value));
-
   function applySceneLayer(scenes: unknown[]): void {
     if (!sceneManager) return;
 
     const list = Array.isArray(scenes) ? scenes : [];
+    const desiredSceneIdsRaw = sceneIdsFromLayer(list);
     const desiredSceneIds: string[] = [];
+    const desired = new Set<string>();
 
-    for (const item of list) {
-      if (!item || typeof item !== 'object') continue;
-      const type = typeof (item as any).type === 'string' ? String((item as any).type) : '';
-      if (type === 'box') desiredSceneIds.push('box-scene');
-      if (type === 'mel') desiredSceneIds.push('mel-scene');
+    for (const sceneId of desiredSceneIdsRaw) {
+      if (!desired.has(sceneId)) {
+        desired.add(sceneId);
+        desiredSceneIds.push(sceneId);
+      }
     }
 
-    const enabled = new Set(desiredSceneIds);
-    sceneManager.setSceneEnabled('box-scene', enabled.has('box-scene'));
-    sceneManager.setSceneEnabled('mel-scene', enabled.has('mel-scene'));
+    // Disable scenes no longer desired.
+    for (const scene of sceneManager.getActiveScenes()) {
+      if (!desired.has(scene.id)) {
+        sceneManager.setSceneEnabled(scene.id, false);
+      }
+    }
+
+    // Enable desired scenes.
+    for (const sceneId of desiredSceneIds) {
+      sceneManager.setSceneEnabled(sceneId, true);
+    }
 
     // Best-effort: keep DOM canvas order in sync with the scene chain.
     reorderSceneCanvases(desiredSceneIds);
@@ -355,137 +320,16 @@
     height: number,
     dpr: number
   ): void {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#0a0a0f';
-    ctx.fillRect(0, 0, width, height);
-
-    // Draw any mounted scene canvases first (Box, Mel, ...).
-    const sceneCanvases = Array.from(
-      container?.querySelectorAll('canvas') ?? []
-    ) as HTMLCanvasElement[];
-    for (const c of sceneCanvases) {
-      if (c === effectCanvas) continue;
-      if (!c.width || !c.height) continue;
-      try {
-        ctx.drawImage(c, 0, 0, width, height);
-      } catch {
-        // ignore
-      }
-    }
-
-    // Draw video (if any) on top of scenes.
-    const video = container?.querySelector('.video-overlay video') as HTMLVideoElement | null;
-    if (video && $videoState.url && video.readyState >= 2) {
-      const srcW = video.videoWidth || 0;
-      const srcH = video.videoHeight || 0;
-      if (srcW > 0 && srcH > 0) {
-        const fit = ($videoState.fit ?? 'contain') as MediaFit;
-        const padding = fit === 'contain' ? 24 : 0;
-        const dstW = Math.max(0, width - padding * 2);
-        const dstH = Math.max(0, height - padding * 2);
-        if (dstW > 0 && dstH > 0) {
-          const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
-            srcW,
-            srcH,
-            dstW,
-            dstH,
-            fit
-          );
-          try {
-            ctx.drawImage(video, sx, sy, sw, sh, padding + dx, padding + dy, dw, dh);
-          } catch {
-            // cross-origin without CORS
-          }
-        }
-      }
-    }
-
-    // Draw image (if any) on top of video.
-    const img = container?.querySelector('.image-overlay img') as HTMLImageElement | null;
-    if (img && $imageState.visible && $imageState.url) {
-      const srcW = img.naturalWidth || img.clientWidth || 0;
-      const srcH = img.naturalHeight || img.clientHeight || 0;
-      if (srcW > 0 && srcH > 0) {
-        const fit = ($imageState.fit ?? 'contain') as MediaFit;
-        const padding = fit === 'contain' ? 24 : 0;
-        const dstW = Math.max(0, width - padding * 2);
-        const dstH = Math.max(0, height - padding * 2);
-        if (dstW > 0 && dstH > 0) {
-          const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
-            srcW,
-            srcH,
-            dstW,
-            dstH,
-            fit
-          );
-
-          const scale = (() => {
-            const raw = typeof $imageState.scale === 'number' ? $imageState.scale : 1;
-            return Number.isFinite(raw) ? Math.max(0.1, Math.min(10, raw)) : 1;
-          })();
-          const offsetX = (() => {
-            const raw = typeof $imageState.offsetX === 'number' ? $imageState.offsetX : 0;
-            return Number.isFinite(raw) ? raw : 0;
-          })();
-          const offsetY = (() => {
-            const raw = typeof $imageState.offsetY === 'number' ? $imageState.offsetY : 0;
-            return Number.isFinite(raw) ? raw : 0;
-          })();
-          const opacity = (() => {
-            const raw = typeof $imageState.opacity === 'number' ? $imageState.opacity : 1;
-            return Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : 1;
-          })();
-
-          const centerX = padding + dx + dw / 2;
-          const centerY = padding + dy + dh / 2;
-          const scaledW = dw * scale;
-          const scaledH = dh * scale;
-          const drawX = centerX - scaledW / 2 + offsetX;
-          const drawY = centerY - scaledH / 2 + offsetY;
-
-          try {
-            ctx.save();
-            ctx.globalAlpha = opacity;
-            ctx.drawImage(img, sx, sy, sw, sh, drawX, drawY, scaledW, scaledH);
-            ctx.restore();
-          } catch {
-            // cross-origin without CORS
-          }
-        }
-      }
-    }
-
-    // Draw camera on top (if enabled).
-    if (
-      cameraVideoElement &&
-      $cameraStream &&
-      ($frontCameraEnabled || $backCameraEnabled) &&
-      cameraVideoElement.readyState >= 2
-    ) {
-      const srcW = cameraVideoElement.videoWidth || 0;
-      const srcH = cameraVideoElement.videoHeight || 0;
-      if (srcW > 0 && srcH > 0) {
-        const { sx, sy, sw, sh, dx, dy, dw, dh } = getFittedDrawParams(
-          srcW,
-          srcH,
-          width,
-          height,
-          'cover'
-        );
-        try {
-          ctx.save();
-          if ($frontCameraEnabled) {
-            ctx.translate(width, 0);
-            ctx.scale(-1, 1);
-          }
-          ctx.drawImage(cameraVideoElement, sx, sy, sw, sh, dx, dy, dw, dh);
-          ctx.restore();
-        } catch {
-          // ignore
-        }
-      }
-    }
+    renderBaseFrame(ctx, width, height, dpr, {
+      container,
+      effectCanvas,
+      cameraVideoElement,
+      videoState: $videoState,
+      imageState: $imageState,
+      cameraStream: $cameraStream,
+      frontCameraEnabled: $frontCameraEnabled,
+      backCameraEnabled: $backCameraEnabled,
+    });
   }
 
   function renderAsciiBorder(

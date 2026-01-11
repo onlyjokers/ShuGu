@@ -94,12 +94,14 @@ Two modes share the same UX goal: “Display reliably receives control/media upd
 - Routes entry: `apps/client/src/routes/+page.svelte`
 - Core store: `apps/client/src/lib/stores/client.ts`
 - Main canvas: `apps/client/src/lib/components/VisualCanvas.svelte`
+- Note: Camera display is still a DOM overlay managed by `VisualCanvas` (not a visual plugin yet).
 
 ### `apps/display/`
 
 - Routes entry: `apps/display/src/routes/+page.svelte`
 - Core store: `apps/display/src/lib/stores/display.ts`
 - Player component: `apps/display/src/lib/components/VideoPlayer.svelte`
+- Note: `screenColor` remains a control-action overlay (not part of Scene/Effect layers).
 
 ## Hotspots (known debt)
 

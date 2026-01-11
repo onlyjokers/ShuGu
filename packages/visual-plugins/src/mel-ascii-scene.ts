@@ -1,5 +1,5 @@
 /**
- * ASCII Art Scene
+ * Mel ASCII Scene
  * Converts audio-driven mel bands into a stylized, colored ASCII mosaic.
  * - Bright peaks become solid color tiles (no glyphs).
  * - Near-black regions stay transparent/black to let the background show through.
@@ -7,7 +7,7 @@
  */
 import type { VisualScene, VisualContext } from './types.js';
 
-export interface AsciiSceneOptions {
+export interface MelAsciiSceneOptions {
     /** Pixel size of a single character cell (before devicePixelRatio scaling). */
     cellSize?: number;
     /** Target render frame rate. */
@@ -26,8 +26,8 @@ export interface AsciiSceneOptions {
 
 type RGB = [number, number, number];
 
-export class AsciiArtScene implements VisualScene {
-    readonly id = 'ascii-scene';
+export class MelAsciiScene implements VisualScene {
+    readonly id = 'mel-ascii-scene';
 
     private container: HTMLElement | null = null;
     private canvas: HTMLCanvasElement | null = null;
@@ -40,7 +40,7 @@ export class AsciiArtScene implements VisualScene {
     private cellH = 0;
     private grid: number[][] = [];
     private accumulator = 0;
-    private options: Required<AsciiSceneOptions>;
+    private options: Required<MelAsciiSceneOptions>;
     private palette: RGB[];
     private resizeObserver: ResizeObserver | null = null;
     private seed = Math.floor(Math.random() * 1_000_000);
@@ -51,7 +51,7 @@ export class AsciiArtScene implements VisualScene {
     private readonly baseRamp = ['.', '`', ',', ':', ';', '-', '~', '+', '*', 'x', 'o', 'O', '%', '#', '@'];
     private readonly strokeRamp = ['/', '\\', '|', '-', '='];
 
-    constructor(options: AsciiSceneOptions = {}) {
+    constructor(options: MelAsciiSceneOptions = {}) {
         this.options = {
             cellSize: options.cellSize ?? 11,
             frameRate: options.frameRate ?? 24,

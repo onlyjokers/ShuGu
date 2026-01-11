@@ -521,11 +521,8 @@ export class NodeRuntime {
     // numeric parameters) should be excluded from oscillation detection. These commands
     // naturally change frequently when the user adjusts sliders/knobs.
     const continuousActions = new Set([
-      'convolution',
       'visualScenes',
       'visualEffects',
-      'asciiMode',
-      'asciiResolution',
       'screenColor',
       'modulateSoundUpdate',
     ]);

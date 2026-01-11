@@ -8,6 +8,8 @@
 - [x] Phase 1：功能回归（保证“现有全部能力”在新骨架上跑通）
 - [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
+- [x] Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）
+- [ ] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -208,3 +210,36 @@
     - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
   - [x] 5C 回归：Phase 1 checklist 全绿（重点：Assets/Display/NodeGraph/媒体动作；Console 已移除则不再作为回归入口）。
     - 结果（2026-01-10）：Assets/Display/NodeGraph/媒体动作 ✅；Console 已移除。
+
+- [x] Phase 2.2 对齐清单：新增 `phase2_2_alignment.md`（同层级能力统一入口与目录归属）。
+- [x] Phase 2.2-2 Scene 映射统一（registry 替代硬编码）：
+  - [x] 新增 `packages/visual-plugins/src/scene-registry.ts` 统一 scene type ↔ plugin id 映射（front/back camera 先标记为 null）。
+  - [x] Client `VisualCanvas` 改为 `sceneIdsFromLayer(...)`；去掉 box/mel 的硬编码映射。
+  - [x] Acceptance hook：`rg "box-scene|mel-scene" apps/client` 无命中（字符串只在 registry 侧出现）。
+- [x] Phase 2.2-3 Camera Scene 决策（选 B：记录为例外）：
+  - [x] `docs/ARCHITECTURE.md` 增加说明：Camera 仍为 DOM overlay（尚未插件化）。
+  - [x] `phase2_2_alignment.md` 更新状态为“完成（选 B）”。
+- [x] Phase 2.2-4 ASCII 命名冲突清理：
+  - [x] `packages/visual-plugins/src/ascii-scene.ts` → `packages/visual-plugins/src/mel-ascii-scene.ts`，id 改为 `mel-ascii-scene`。
+  - [x] `packages/protocol/src/types.ts`：`VisualPluginId` 更新为 `mel-ascii-scene`。
+  - [x] `packages/visual-plugins/src/index.ts` 更新导出入口。
+- [x] Phase 2.2-5 ScreenColor 语义归属（选 B：保持 Control Overlay）：
+  - [x] `docs/ARCHITECTURE.md` 补充说明：`screenColor` 仍为 control-action overlay（非 Scene/Effect）。
+  - [x] `phase2_2_alignment.md` 更新状态为“完成（选 B）”。
+- [x] Phase 2.2-1 Visual Effect 旧命令清理（只保留 `visualEffects`）：
+  - [x] Protocol：移除 `asciiMode/asciiResolution/convolution` 控制动作与 payload，新增 `ConvolutionPreset` 供 effect 链使用。
+  - [x] Client：删除 legacy stores（ascii/convolution）与 `syncLegacyVisualEffects` 胶水；`visualEffects` 成为唯一入口。
+  - [x] Manager/SDK：删除 `asciiMode/asciiResolution` 调用入口。
+  - [x] Node-core：删除 `proc-visual-effect-*` legacy 节点并停止注册；runtime 连续动作列表去除旧 action。
+- [x] Phase 2.2-6 Base Frame 职责边界抽离：
+  - [x] 新增 `apps/client/src/lib/features/visual-layer/base-frame.ts`（base layer 合成逻辑）。
+  - [x] `VisualCanvas` 仅负责编排，base-frame 由模块实现。
+
+- [ ] Phase 2.2 固定动作（after-delete gates）：
+  - `pnpm guard:deps` ✅（`[deps-guard] ok (519 files scanned)`）
+  - `pnpm lint` ✅（0 errors；warnings 为历史债）
+  - `pnpm build:all` ⛔（TS5033：`packages/visual-effects/dist-visual-effects-out` 为 root-owned，tsc 无法写入；先 `sudo chown -R $(whoami):staff packages/visual-effects/dist-visual-effects-out` 后重跑）
+    - 临时 typecheck：`pnpm --filter @shugu/visual-effects exec tsc -p tsconfig.json --noEmit` ✅（仅 emit 被 outDir 权限阻塞）
+  - Acceptance hooks：
+    - `rg "asciiMode|asciiResolution" apps/client apps/manager packages/node-core packages/sdk-manager` ✅（无命中）
+    - `rg "action: 'convolution'|action: \\\"convolution\\\"\" apps/client apps/manager packages/node-core` ✅（无命中）

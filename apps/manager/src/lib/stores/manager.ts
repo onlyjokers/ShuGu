@@ -660,14 +660,6 @@ export function setVisualScenes(scenes: VisualSceneLayerItem[], toAll = false, e
     sdk?.setVisualScenes(scenes, toAll, executeAt);
 }
 
-export function asciiMode(enabled: boolean, toAll = false, executeAt?: number): void {
-    sdk?.asciiMode(enabled, toAll, executeAt);
-}
-
-export function asciiResolution(cellSize: number, toAll = false, executeAt?: number): void {
-    sdk?.asciiResolution(cellSize, toAll, executeAt);
-}
-
 export function sendPluginControl(
     pluginId: string,
     command: 'init' | 'start' | 'stop' | 'configure',

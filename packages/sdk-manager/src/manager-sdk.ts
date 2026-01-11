@@ -627,30 +627,6 @@ export class ManagerSDK {
         }
     }
 
-    /**
-     * Toggle ASCII post effect on clients
-     */
-    asciiMode(enabled: boolean, toAll = false, executeAt?: number): void {
-        const payload = { enabled };
-        if (toAll) {
-            this.sendControlToAll('asciiMode', payload, executeAt);
-        } else {
-            this.sendControlToSelected('asciiMode', payload, executeAt);
-        }
-    }
-
-    /**
-     * Adjust ASCII resolution on clients (cell size in px)
-     */
-    asciiResolution(cellSize: number, toAll = false, executeAt?: number): void {
-        const payload = { cellSize };
-        if (toAll) {
-            this.sendControlToAll('asciiResolution', payload, executeAt);
-        } else {
-            this.sendControlToSelected('asciiResolution', payload, executeAt);
-        }
-    }
-
     private setupSocketListeners(): void {
         if (!this.socket) return;
 

@@ -81,12 +81,7 @@ import {
   createSceneFrontCameraNode,
   createSceneMelNode,
 } from './nodes/scenes.js';
-import {
-  createAsciiEffectProcessorNode,
-  createConvolutionEffectProcessorNode,
-  createEffectAsciiNode,
-  createEffectConvolutionNode,
-} from './nodes/effects.js';
+import { createEffectAsciiNode, createEffectConvolutionNode } from './nodes/effects.js';
 
 export function registerDefaultNodeDefinitions(
   registry: NodeRegistry,
@@ -158,6 +153,4 @@ export function registerDefaultNodeDefinitions(
   registry.register(createSceneBackCameraNode());
   registry.register(createEffectConvolutionNode());
   registry.register(createEffectAsciiNode());
-  registry.register(createAsciiEffectProcessorNode());
-  registry.register(createConvolutionEffectProcessorNode());
 }
