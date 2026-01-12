@@ -25,6 +25,10 @@ export type NodeVisualState = {
   selected?: boolean;
   /** Node is visually collapsed/minimized in the editor UI (manager-only). */
   collapsed?: boolean;
+  /** Node is hidden from the editor UI (manager-only). */
+  hidden?: boolean;
+  /** Node belongs to a minimized Group frame (manager-only). */
+  groupMinimized?: boolean;
   groupDisabled?: boolean;
   groupSelected?: boolean;
   localLoop?: boolean;
@@ -37,6 +41,8 @@ export type NodeVisualState = {
 };
 
 export type ConnectionVisualState = {
+  /** Connection is hidden from the editor UI (manager-only). */
+  hidden?: boolean;
   localLoop?: boolean;
   deployedLoop?: boolean;
   active?: boolean;

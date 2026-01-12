@@ -246,6 +246,29 @@ export function createLoadAudioFromAssetsNode(): NodeDefinition {
   };
 }
 
+export function createLoadAudioAssetFromAssetsNode(): NodeDefinition {
+  return {
+    type: 'load-audio-asset-from-assets',
+    label: 'Load Audio Asset From Remote',
+    category: 'Assets',
+    inputs: [],
+    outputs: [{ id: 'ref', label: 'Audio Asset', type: 'asset' }],
+    configSchema: [
+      {
+        key: 'assetId',
+        label: 'Audio Asset',
+        type: 'asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
+    ],
+    process: (_inputs, config) => {
+      const assetId = typeof config.assetId === 'string' ? config.assetId.trim() : '';
+      return { ref: assetId ? `asset:${assetId}` : '' };
+    },
+  };
+}
+
 export function createLoadAudioFromLocalNode(): NodeDefinition {
   return {
     type: 'load-audio-from-local',

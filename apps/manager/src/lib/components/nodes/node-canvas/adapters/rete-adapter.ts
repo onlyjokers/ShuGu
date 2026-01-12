@@ -137,6 +137,8 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     return {
       selected: Boolean((node as any).selected),
       collapsed: Boolean((node as any).collapsed),
+      hidden: Boolean((node as any).hidden),
+      groupMinimized: Boolean((node as any).groupMinimized),
       groupDisabled: Boolean((node as any).groupDisabled),
       groupSelected: Boolean((node as any).groupSelected),
       localLoop: Boolean((node as any).localLoop),
@@ -166,6 +168,14 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
       }
     }
 
+    if ('hidden' in patch) {
+      const next = Boolean(patch.hidden);
+      if (Boolean((node as any).hidden) !== next) {
+        (node as any).hidden = next;
+        changed = true;
+      }
+    }
+
     if ('selected' in patch) {
       const next = Boolean(patch.selected);
       if (Boolean((node as any).selected) !== next) {
@@ -186,6 +196,14 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
       const next = Boolean(patch.groupSelected);
       if (Boolean((node as any).groupSelected) !== next) {
         (node as any).groupSelected = next;
+        changed = true;
+      }
+    }
+
+    if ('groupMinimized' in patch) {
+      const next = Boolean(patch.groupMinimized);
+      if (Boolean((node as any).groupMinimized) !== next) {
+        (node as any).groupMinimized = next;
         changed = true;
       }
     }
@@ -255,6 +273,7 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     const conn = getConnectionMap().get(String(connId));
     if (!conn) return null;
     return {
+      hidden: Boolean((conn as any).hidden),
       localLoop: Boolean((conn as any).localLoop),
       deployedLoop: Boolean((conn as any).deployedLoop),
       active: Boolean((conn as any).active),
@@ -272,6 +291,14 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     if (!conn) return;
 
     let changed = false;
+
+    if ('hidden' in patch) {
+      const next = Boolean(patch.hidden);
+      if (Boolean((conn as any).hidden) !== next) {
+        (conn as any).hidden = next;
+        changed = true;
+      }
+    }
 
     if ('localLoop' in patch) {
       const next = Boolean(patch.localLoop);

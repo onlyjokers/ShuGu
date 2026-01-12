@@ -77,6 +77,11 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
       const onlineCount = get(audienceClients).length;
       return `Client: ${onlineCount} online`;
     }
+    if (node.type === 'group-frame') {
+      const raw = (node.config as any)?.name;
+      const name = typeof raw === 'string' && raw.trim() ? raw.trim() : raw ? String(raw) : 'Group';
+      return name;
+    }
     return nodeRegistry.get(node.type)?.label ?? node.type;
   };
 
@@ -93,6 +98,15 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
     for (const field of configFields) configFieldByKey.set(field.key, field);
     const inputControlKeys = new Set<string>();
     node.id = instance.id;
+
+    // Feature: Group Proxy ports inherit their "effective" type from config.portType so sockets show correct color/tooltips.
+    const proxyPortType =
+      instance.type === 'group-proxy'
+        ? (() => {
+            const raw = (instance.config as any)?.portType;
+            return typeof raw === 'string' && raw ? raw : raw ? String(raw) : 'any';
+          })()
+        : null;
 
     const cmdAggInputCount = (() => {
       if (instance.type !== 'cmd-aggregator') return null;
@@ -112,7 +126,11 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
       }
       // Allow users to attempt multiple links; NodeEngine enforces the global rule that each input
       // port can only be connected once (and shows the error message on violation).
-      const inp = new ClassicPreset.Input(socketFor(input.type), input.label ?? input.id, true);
+      const inp = new ClassicPreset.Input(
+        socketFor(proxyPortType ?? input.type),
+        input.label ?? input.id,
+        true
+      );
 
       const hasDefault = input.defaultValue !== undefined;
       const isPrimitive = input.type === 'number' || input.type === 'string' || input.type === 'boolean';
@@ -284,7 +302,7 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
     }
 
     for (const output of def?.outputs ?? []) {
-      const out: any = new ClassicPreset.Output(socketFor(output.type), output.label ?? output.id);
+      const out: any = new ClassicPreset.Output(socketFor(proxyPortType ?? output.type), output.label ?? output.id);
       if (instance.type === 'proc-client-sensors') {
         out.control = new ClientSensorValueControl({ nodeId: instance.id, portId: output.id });
       }
@@ -628,6 +646,7 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
   };
 
   const isCompatible = (sourceType: PortType, targetType: PortType) => {
+    if (sourceType === 'asset' || targetType === 'asset') return sourceType === 'asset' && targetType === 'asset';
     if (sourceType === 'audio' || targetType === 'audio') return sourceType === 'audio' && targetType === 'audio';
     if (sourceType === 'image' || targetType === 'image') return sourceType === 'image' && targetType === 'image';
     if (sourceType === 'video' || targetType === 'video') return sourceType === 'video' && targetType === 'video';

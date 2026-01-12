@@ -1,0 +1,13 @@
+{
+  "__purpose": "Manager node spec for converting a number input into a boolean (>= trigger threshold).",
+  "type": "logic-number-to-boolean",
+  "label": "Number to Boolean",
+  "category": "Logic",
+  "inputs": [
+    { "id": "number", "label": "Number", "type": "number", "defaultValue": 0 },
+    { "id": "trigger", "label": "Trigger", "type": "number", "defaultValue": 0.5 }
+  ],
+  "outputs": [{ "id": "out", "label": "Out", "type": "boolean" }],
+  "configSchema": [],
+  "runtime": { "kind": "logic-number-to-boolean" }
+}

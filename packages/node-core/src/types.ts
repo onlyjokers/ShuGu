@@ -9,6 +9,7 @@ export type PortType =
   | 'number'
   | 'boolean'
   | 'string'
+  | 'asset'
   | 'color'
   | 'audio'
   | 'image'

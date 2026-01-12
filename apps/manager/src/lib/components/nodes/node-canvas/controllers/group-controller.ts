@@ -7,6 +7,10 @@ import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
 import { audienceClients } from '$lib/stores/manager';
 import type { GraphViewAdapter, NodeBounds } from '../adapters';
+import { groupIdFromNode, isGroupPortNodeType } from '../utils/group-port-utils';
+
+const GROUP_FRAME_NODE_TYPE = 'group-frame';
+const isGroupDecorationNodeType = (type: string) => isGroupPortNodeType(type) || type === GROUP_FRAME_NODE_TYPE;
 
 export type NodeGroup = {
   id: string;
@@ -14,7 +18,9 @@ export type NodeGroup = {
   name: string;
   nodeIds: string[];
   disabled: boolean;
-  /** Runtime gate from Group Activate node; defaults to true when unset. */
+  /** When true, the group frame collapses into a node-like form and hides its subtree nodes/connections. */
+  minimized: boolean;
+  /** Runtime gate from Group Gate port; defaults to true when unset. */
   runtimeActive?: boolean;
 };
 export type GroupFrame = {
@@ -46,6 +52,7 @@ export type GroupController = {
   groupFrames: Writable<GroupFrame[]>;
   groupSelectionNodeIds: Writable<Set<string>>;
   groupSelectionBounds: Writable<{ left: number; top: number; width: number; height: number } | null>;
+  selectedGroupId: Writable<string | null>;
   editModeGroupId: Writable<string | null>;
   canvasToast: Writable<string | null>;
   groupEditToast: Writable<GroupEditToast>;
@@ -62,6 +69,7 @@ export type GroupController = {
   clearSelection: () => void;
   createGroupFromSelection: () => void;
   toggleGroupDisabled: (groupId: string) => void;
+  toggleGroupMinimized: (groupId: string) => void;
   disassembleGroup: (groupId: string) => void;
   renameGroup: (groupId: string, name: string) => void;
   toggleGroupEditMode: (groupId: string) => void;
@@ -102,6 +110,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   const groupSelectionBounds = writable<{ left: number; top: number; width: number; height: number } | null>(
     null
   );
+  const selectedGroupId = writable<string | null>(null);
   const editModeGroupId = writable<string | null>(null);
   const canvasToast = writable<string | null>(null);
   const groupEditToast = writable<GroupEditToast>(null);
@@ -190,8 +199,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         const id = String(nodeId);
         if (!id) continue;
         const type = typeByNodeId.get(id) ?? '';
-        // Group Activate is a UI-only edge port and should stay enabled even when the group is gated.
-        if (type === 'group-activate') continue;
+        // Group decoration nodes are UI-only and should stay enabled even when the group is gated.
+        if (isGroupDecorationNodeType(type)) continue;
         next.add(id);
       }
     }
@@ -219,19 +228,65 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const disabled = get(groupDisabledNodeIds);
     const selected = get(groupSelectionNodeIds);
     const graph = opts.getGraphState();
+    const groups = get(nodeGroups);
 
+    const hiddenNodeIds = new Set<string>();
+    const minimizedGroupIds: string[] = [];
+    for (const g of groups) {
+      if (!g.minimized) continue;
+      minimizedGroupIds.push(String(g.id));
+      for (const nodeId of g.nodeIds ?? []) hiddenNodeIds.add(String(nodeId));
+    }
+    const minimizedGroupIdSet = new Set(minimizedGroupIds);
+
+    const hiddenGroupIds = new Set<string>();
+    if (minimizedGroupIds.length > 0) {
+      const { childrenByParentId } = buildGroupIndex(groups);
+      const stack: string[] = [];
+      for (const gid of minimizedGroupIds) {
+        for (const childId of childrenByParentId.get(String(gid)) ?? []) stack.push(String(childId));
+      }
+      while (stack.length > 0) {
+        const next = String(stack.pop() ?? '');
+        if (!next || hiddenGroupIds.has(next)) continue;
+        hiddenGroupIds.add(next);
+        for (const childId of childrenByParentId.get(next) ?? []) stack.push(String(childId));
+      }
+    }
+
+    const hiddenNodesEffective = new Set<string>();
     for (const node of graph.nodes ?? []) {
       const id = String(node.id);
       if (!id) continue;
 
+      const type = String(node.type ?? '');
+      const nextHidden =
+        hiddenNodeIds.has(id) || (isGroupDecorationNodeType(type) && hiddenGroupIds.has(groupIdFromNode(node as any)));
+      if (nextHidden) hiddenNodesEffective.add(id);
+
       const nextDisabled = disabled.has(id);
       const nextSelected = selected.has(id);
+      const nextGroupMinimized =
+        isGroupPortNodeType(type) && minimizedGroupIdSet.has(groupIdFromNode(node as any));
       const prev = adapter.getNodeVisualState(id);
 
-      const patch: { groupDisabled?: boolean; groupSelected?: boolean } = {};
+      const patch: { hidden?: boolean; groupDisabled?: boolean; groupSelected?: boolean; groupMinimized?: boolean } = {};
+      if (Boolean(prev?.hidden) !== nextHidden) patch.hidden = nextHidden;
       if (Boolean(prev?.groupDisabled) !== nextDisabled) patch.groupDisabled = nextDisabled;
       if (Boolean(prev?.groupSelected) !== nextSelected) patch.groupSelected = nextSelected;
+      if (Boolean(prev?.groupMinimized) !== nextGroupMinimized) patch.groupMinimized = nextGroupMinimized;
       if (Object.keys(patch).length > 0) await adapter.setNodeVisualState(id, patch);
+    }
+
+    for (const conn of graph.connections ?? []) {
+      const id = String(conn.id);
+      if (!id) continue;
+      const nextHidden =
+        hiddenNodesEffective.has(String(conn.sourceNodeId)) || hiddenNodesEffective.has(String(conn.targetNodeId));
+      const prev = adapter.getConnectionVisualState(id);
+      const patch: { hidden?: boolean } = {};
+      if (Boolean(prev?.hidden) !== nextHidden) patch.hidden = nextHidden;
+      if (Object.keys(patch).length > 0) await adapter.setConnectionVisualState(id, patch);
     }
   };
 
@@ -277,6 +332,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         id,
         parentId,
         nodeIds: (group.nodeIds ?? []).map((nodeId) => String(nodeId)),
+        minimized: Boolean((group as any).minimized),
       };
       byId.set(id, normalized);
       if (!parentId) continue;
@@ -294,7 +350,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     byId: Map<string, NodeGroup>,
     childrenByParentId: Map<string, string[]>,
     cache: Map<string, NodeBounds | null>,
-    visiting: Set<string>
+    visiting: Set<string>,
+    hiddenNodeIds: Set<string>
   ): NodeBounds | null => {
     const cached = cache.get(groupId);
     if (cached !== undefined) return cached;
@@ -305,6 +362,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     visiting.add(groupId);
 
+    const minimized = Boolean(group.minimized);
     const isSubGroup = Boolean(group.parentId);
     const paddingX = isSubGroup ? 36 : 52;
     const paddingTop = isSubGroup ? 54 : 64;
@@ -319,15 +377,75 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     if (!adapter) return null;
 
     const graph = opts.getGraphState();
+    const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
     const typeByNodeId = new Map((graph.nodes ?? []).map((node) => [String(node.id), String(node.type ?? '')]));
     const isDecorationNodeId = (nodeId: string): boolean => {
       const type = typeByNodeId.get(String(nodeId)) ?? '';
-      return type === 'group-activate';
+      return isGroupDecorationNodeType(type);
     };
+
+    const unionBoundsFromPositions = (nodeIds: string[]) => {
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+
+      for (const nodeId of nodeIds) {
+        if (isDecorationNodeId(nodeId)) continue;
+        const node = nodeById.get(String(nodeId)) as any;
+        if (!node) continue;
+        const x = Number(node.position?.x ?? 0);
+        const y = Number(node.position?.y ?? 0);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+
+      const ok =
+        Number.isFinite(minX) &&
+        Number.isFinite(minY) &&
+        Number.isFinite(maxX) &&
+        Number.isFinite(maxY);
+      if (!ok) return null;
+      return { minX, minY, maxX, maxY, centerX: (minX + maxX) / 2, centerY: (minY + maxY) / 2 };
+    };
+
+    if (minimized) {
+      const posBounds = unionBoundsFromPositions(group.nodeIds ?? []);
+      const centerX = posBounds?.centerX ?? 220;
+      const centerY = posBounds?.centerY ?? 160;
+
+      const proxyNodes = (graph.nodes ?? []).filter(
+        (n) =>
+          String((n as any).type ?? '') === 'group-proxy' &&
+          String(((n as any).config as any)?.groupId ?? '') === groupId
+      );
+      const inputProxyCount = proxyNodes.filter((n) => String(((n as any).config as any)?.direction ?? 'output') === 'input').length;
+      const outputProxyCount = Math.max(0, proxyNodes.length - inputProxyCount);
+      const portRows = Math.max(1, Math.max(inputProxyCount, outputProxyCount));
+
+      // Minimized Group should look like a standard node: title bar + port rows.
+      const width = 230;
+      const headerHeight = 44;
+      const rowHeight = 28;
+      const height = Math.max(84, headerHeight + portRows * rowHeight + 12);
+      const compact = {
+        left: centerX - width / 2,
+        top: centerY - height / 2,
+        right: centerX + width / 2,
+        bottom: centerY + height / 2,
+      };
+      cache.set(groupId, compact);
+      visiting.delete(groupId);
+      return compact;
+    }
 
     const unionBoundsGraph = (nodeIds: string[]): NodeBounds | null => {
       let merged: NodeBounds | null = null;
       for (const nodeId of nodeIds) {
+        if (hiddenNodeIds.has(String(nodeId))) continue;
         if (isDecorationNodeId(nodeId)) continue;
         const b = adapter.getNodeBounds(String(nodeId));
         merged = mergeBounds(merged, b);
@@ -359,7 +477,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         byId,
         childrenByParentId,
         cache,
-        visiting
+        visiting,
+        hiddenNodeIds
       );
       bounds = mergeBounds(bounds, childBounds);
     }
@@ -385,12 +504,19 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const groupsSnapshot = get(nodeGroups);
     const { byId, childrenByParentId } = buildGroupIndex(groupsSnapshot);
     const cache = new Map<string, NodeBounds | null>();
+
+    const hiddenNodeIds = new Set<string>();
+    for (const g of groupsSnapshot) {
+      if (!g.minimized) continue;
+      for (const nodeId of g.nodeIds ?? []) hiddenNodeIds.add(String(nodeId));
+    }
     return computeGroupFrameBoundsWithChildren(
       String(group.id),
       byId,
       childrenByParentId,
       cache,
-      new Set()
+      new Set(),
+      hiddenNodeIds
     );
   };
 
@@ -502,7 +628,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       if (!id) continue;
       if (skipNodeIds.has(id)) continue;
       const type = String((node as any).type ?? '');
-      if (type === 'group-activate') continue;
+      if (isGroupDecorationNodeType(type)) continue;
       const b = adapter.getNodeBounds(id);
       if (!b) continue;
 
@@ -571,6 +697,12 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     const { byId, childrenByParentId } = buildGroupIndex(groupsSnapshot);
 
+    const hiddenNodeIds = new Set<string>();
+    for (const g of groupsSnapshot) {
+      if (!g.minimized) continue;
+      for (const nodeId of g.nodeIds ?? []) hiddenNodeIds.add(String(nodeId));
+    }
+
     const groupBoundsCache = new Map<string, NodeBounds | null>();
     const computeGroupBoundsCached = (groupId: string) =>
       computeGroupFrameBoundsWithChildren(
@@ -578,7 +710,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         byId,
         childrenByParentId,
         groupBoundsCache,
-        new Set()
+        new Set(),
+        hiddenNodeIds
       );
 
     const frameById = new Map<string, FrameInfo>();
@@ -688,11 +821,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         const added: string[] = [];
         const removed: string[] = [];
 
-        for (const movedId of nodeIds) {
-          const id = String(movedId);
-          if (typeByNodeId.get(id) === 'group-activate') continue;
-          const c = getNodeCenter(id);
-          if (!c) continue;
+	        for (const movedId of nodeIds) {
+	          const id = String(movedId);
+	          if (isGroupDecorationNodeType(typeByNodeId.get(id) ?? '')) continue;
+	          const c = getNodeCenter(id);
+	          if (!c) continue;
           const inside = c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom;
 
           if (inside && !nextSet.has(id)) {
@@ -851,11 +984,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
   const addNodeToGroupChain = (groupId: string, nodeId: string) => {
     const rootId = String(groupId ?? '');
-    const createdId = String(nodeId ?? '');
-    if (!rootId || !createdId) return;
+	    const createdId = String(nodeId ?? '');
+	    if (!rootId || !createdId) return;
 
-    const createdType = String(opts.getGraphState().nodes.find((n) => String(n.id) === createdId)?.type ?? '');
-    if (createdType === 'group-activate') return;
+	    const createdType = String(opts.getGraphState().nodes.find((n) => String(n.id) === createdId)?.type ?? '');
+	    if (isGroupDecorationNodeType(createdType)) return;
 
     const groupsSnapshot = get(nodeGroups);
     const byId = new Map<string, NodeGroup>();
@@ -940,13 +1073,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const createGroupFromSelection = () => {
-    const selectedRaw = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
-    const graph = opts.getGraphState();
-    const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
-    const selected = selectedRaw.filter((id) => {
-      const type = String(nodeById.get(id)?.type ?? '');
-      return type !== 'group-activate';
-    });
+	    const selectedRaw = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
+	    const graph = opts.getGraphState();
+	    const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
+	    const selected = selectedRaw.filter((id) => {
+	      const type = String(nodeById.get(id)?.type ?? '');
+	      return !isGroupDecorationNodeType(type);
+	    });
     if (selected.length === 0) return;
 
     const groups = get(nodeGroups);
@@ -1063,6 +1196,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
       name: nextName,
       nodeIds: Array.from(ids),
       disabled: false,
+      minimized: false,
       runtimeActive: true,
     };
 
@@ -1098,6 +1232,28 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     opts.requestLoopFramesUpdate();
 
     if (nextDisabled) stopDeployedLoopsIntersecting(group.nodeIds);
+  };
+
+  const toggleGroupMinimized = (groupId: string) => {
+    const id = String(groupId ?? '');
+    if (!id) return;
+    const group = get(nodeGroups).find((g) => String(g.id) === id);
+    if (!group) return;
+
+    const nextMinimized = !group.minimized;
+    nodeGroups.set(get(nodeGroups).map((g) => (String(g.id) === id ? { ...g, minimized: nextMinimized } : g)));
+
+    // Exiting edit mode is less surprising when the frame is minimized.
+    if (nextMinimized && get(editModeGroupId) === id) {
+      editModeGroupId.set(null);
+      editModeGroupBounds = null;
+      clearGroupEditToast();
+    }
+
+    scheduleHighlight();
+    requestFramesUpdate();
+    opts.requestLoopFramesUpdate();
+    opts.requestMinimapUpdate();
   };
 
   const disassembleGroup = (groupId: string) => {
@@ -1183,6 +1339,32 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     const { byId, childrenByParentId } = buildGroupIndex(groups);
 
+    const hiddenNodeIds = new Set<string>();
+    const minimizedGroupIds: string[] = [];
+    for (const g of groups) {
+      if (!g.minimized) continue;
+      minimizedGroupIds.push(String(g.id));
+      for (const nodeId of g.nodeIds ?? []) hiddenNodeIds.add(String(nodeId));
+    }
+
+    const hiddenGroupIds = new Set<string>();
+    if (minimizedGroupIds.length > 0) {
+      const stack: string[] = [];
+      for (const gid of minimizedGroupIds) {
+        for (const childId of childrenByParentId.get(String(gid)) ?? []) {
+          stack.push(String(childId));
+        }
+      }
+      while (stack.length > 0) {
+        const next = String(stack.pop() ?? '');
+        if (!next || hiddenGroupIds.has(next)) continue;
+        hiddenGroupIds.add(next);
+        for (const childId of childrenByParentId.get(next) ?? []) {
+          stack.push(String(childId));
+        }
+      }
+    }
+
     const depthCache = new Map<string, number>();
     const getDepth = (groupId: string, visiting = new Set<string>()): number => {
       const cached = depthCache.get(groupId);
@@ -1219,10 +1401,18 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
     const boundsCache = new Map<string, NodeBounds | null>();
     const computeBoundsCached = (groupId: string) =>
-      computeGroupFrameBoundsWithChildren(groupId, byId, childrenByParentId, boundsCache, new Set());
+      computeGroupFrameBoundsWithChildren(
+        groupId,
+        byId,
+        childrenByParentId,
+        boundsCache,
+        new Set(),
+        hiddenNodeIds
+      );
 
     const frames: GroupFrame[] = [];
     for (const group of groups) {
+      if (hiddenGroupIds.has(String(group.id))) continue;
       const depth = getDepth(String(group.id));
       const effectiveDisabled = getEffectiveDisabled(String(group.id));
 
@@ -1345,8 +1535,8 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     for (const node of graph.nodes ?? []) {
       const id = String(node.id ?? '');
       if (!id) continue;
-      // Ignore UI-only group edge ports so a deleted group doesn't "stick" just because a port node survived.
-      if (String(node.type ?? '') === 'group-activate') continue;
+      // Ignore UI-only group decoration nodes so a deleted group doesn't "stick" just because a port node survived.
+      if (isGroupDecorationNodeType(String(node.type ?? ''))) continue;
       existingNodeIds.add(id);
     }
 
@@ -1512,9 +1702,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const clearSelection = () => {
-    if (get(groupSelectionNodeIds).size === 0) return;
-    groupSelectionNodeIds.set(new Set());
+    const hadNodes = get(groupSelectionNodeIds).size > 0;
+    const hadGroup = Boolean(get(selectedGroupId));
+    if (!hadNodes && !hadGroup) return;
+
+    if (hadNodes) groupSelectionNodeIds.set(new Set());
     groupSelectionBounds.set(null);
+    selectedGroupId.set(null);
     scheduleHighlight();
   };
 
@@ -1622,6 +1816,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     groupFrames,
     groupSelectionNodeIds,
     groupSelectionBounds,
+    selectedGroupId,
     editModeGroupId,
     canvasToast,
     groupEditToast,
@@ -1637,6 +1832,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     clearSelection,
     createGroupFromSelection,
     toggleGroupDisabled,
+    toggleGroupMinimized,
     disassembleGroup,
     renameGroup,
     toggleGroupEditMode,

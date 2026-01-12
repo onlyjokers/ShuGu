@@ -24,6 +24,7 @@
   export let localLoop: boolean | undefined = undefined;
   export let deployedLoop: boolean | undefined = undefined;
   export let active: boolean | undefined = undefined;
+  export let hidden: boolean | undefined = undefined;
 
   // svelte-ignore unused-export-let
   export let start: Position = { x: 0, y: 0 };
@@ -57,7 +58,7 @@
 <svg
   class="connection {localLoop ? 'local-loop' : ''} {deployedLoop ? 'deployed-loop' : ''} {active
     ? 'active'
-    : ''} {shadowsEnabled ? 'with-shadow' : 'no-shadow'}"
+    : ''} {hidden ? 'hidden' : ''} {shadowsEnabled ? 'with-shadow' : 'no-shadow'}"
   data-connection-id={id}
   data-testid="connection"
   {viewBox}
@@ -74,6 +75,10 @@
     position: absolute;
     pointer-events: none;
     /* Width/height set via inline style based on connection bounds */
+  }
+
+  svg.hidden {
+    display: none !important;
   }
 
   svg path {

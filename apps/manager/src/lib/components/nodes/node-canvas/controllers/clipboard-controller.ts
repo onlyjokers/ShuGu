@@ -5,7 +5,8 @@
 import { get } from 'svelte/store';
 import type { Connection as EngineConnection, GraphState, NodeInstance } from '$lib/nodes/types';
 import type { GraphViewAdapter } from '../adapters';
-import type { GroupController } from './group-controller';
+import type { GroupController, NodeGroup } from './group-controller';
+import { groupIdFromNode, isGroupPortNodeType } from '../utils/group-port-utils';
 
 export type ClipboardController = {
   copySelectedNodes: () => boolean;
@@ -44,6 +45,9 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
   let clipboardNodes: NodeInstance[] = [];
   // Track internal connections so paste can restore them.
   let clipboardConnections: EngineConnection[] = [];
+  let clipboardKind: 'nodes' | 'group' = 'nodes';
+  let clipboardGroups: NodeGroup[] = [];
+  let clipboardRootGroupId: string | null = null;
   let clipboardPasteIndex = 0;
 
   const cloneNodeInstance = (
@@ -82,6 +86,85 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
     };
   };
 
+  const collectGroupSubtreeIds = (rootGroupId: string, groups: NodeGroup[]): string[] => {
+    const childrenByParentId = new Map<string, string[]>();
+    for (const group of groups) {
+      const parentId = group.parentId ? String(group.parentId) : '';
+      if (!parentId) continue;
+      const list = childrenByParentId.get(parentId) ?? [];
+      list.push(String(group.id));
+      childrenByParentId.set(parentId, list);
+    }
+
+    const ids: string[] = [];
+    const visited = new Set<string>();
+    const stack = [String(rootGroupId)];
+    while (stack.length > 0) {
+      const current = String(stack.pop() ?? '');
+      if (!current || visited.has(current)) continue;
+      visited.add(current);
+      ids.push(current);
+      for (const childId of childrenByParentId.get(current) ?? []) stack.push(String(childId));
+    }
+
+    return ids;
+  };
+
+  const collectCopySelectedGroup = (): {
+    rootGroupId: string;
+    groups: NodeGroup[];
+    nodes: NodeInstance[];
+    nodeIds: string[];
+    connections: EngineConnection[];
+  } | null => {
+    const rootGroupId = String(get(groupController.selectedGroupId) ?? '');
+    if (!rootGroupId) return null;
+
+    const groupsSnapshot = get(groupController.nodeGroups) ?? [];
+    const byId = new Map(groupsSnapshot.map((g) => [String(g.id), g] as const));
+    const root = byId.get(rootGroupId);
+    if (!root) return null;
+
+    const subtreeIds = collectGroupSubtreeIds(rootGroupId, groupsSnapshot);
+    const subtreeSet = new Set(subtreeIds);
+
+    const groups: NodeGroup[] = subtreeIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((g) => ({
+        id: String(g!.id),
+        parentId: g!.parentId ? String(g!.parentId) : null,
+        name: String(g!.name ?? ''),
+        nodeIds: (g!.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean),
+        disabled: Boolean(g!.disabled),
+        minimized: Boolean((g! as any).minimized),
+      }));
+
+    const graphState = getGraphState();
+    const nodeById = new Map((graphState.nodes ?? []).map((node) => [String(node.id), node] as const));
+
+    const nodeIdSet = new Set<string>();
+    for (const g of groups) {
+      for (const nid of g.nodeIds ?? []) nodeIdSet.add(String(nid));
+    }
+
+    for (const node of graphState.nodes ?? []) {
+      const type = String(node.type ?? '');
+      if (!isGroupPortNodeType(type)) continue;
+      const groupId = groupIdFromNode(node);
+      if (!groupId || !subtreeSet.has(String(groupId))) continue;
+      nodeIdSet.add(String(node.id));
+    }
+
+    const nodeIds = Array.from(nodeIdSet);
+    const nodes = nodeIds.map((id) => nodeById.get(id)).filter(Boolean) as NodeInstance[];
+
+    const clonedNodes = nodes.map((node) => cloneNodeInstance(node, adapter.getNodePosition(String(node.id))));
+    const connections = collectCopyConnections(nodeIds);
+
+    return { rootGroupId, groups, nodes: clonedNodes, nodeIds, connections };
+  };
+
   const collectCopyConnections = (ids: string[]): EngineConnection[] => {
     const set = new Set(ids.map(String));
     const state = getGraphState();
@@ -98,9 +181,24 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
 
   const copySelectedNodes = () => {
     const { nodes, ids } = collectCopySelection();
-    if (nodes.length === 0) return false;
-    clipboardNodes = nodes;
-    clipboardConnections = collectCopyConnections(ids);
+    if (nodes.length > 0) {
+      clipboardKind = 'nodes';
+      clipboardGroups = [];
+      clipboardRootGroupId = null;
+      clipboardNodes = nodes;
+      clipboardConnections = collectCopyConnections(ids);
+      clipboardPasteIndex = 0;
+      return true;
+    }
+
+    const groupCopy = collectCopySelectedGroup();
+    if (!groupCopy) return false;
+
+    clipboardKind = 'group';
+    clipboardGroups = groupCopy.groups;
+    clipboardRootGroupId = groupCopy.rootGroupId;
+    clipboardNodes = groupCopy.nodes;
+    clipboardConnections = groupCopy.connections;
     clipboardPasteIndex = 0;
     return true;
   };
@@ -126,6 +224,128 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
     if (clipboardNodes.length === 0) return false;
 
     const anchor = computePasteAnchor();
+    if (clipboardKind === 'group' && clipboardGroups.length > 0 && clipboardRootGroupId) {
+      const groupRoot = String(clipboardRootGroupId);
+      const groupIdMap = new Map<string, string>();
+      const newGroupId = () => `group:${crypto.randomUUID?.() ?? Date.now()}`;
+      for (const g of clipboardGroups) groupIdMap.set(String(g.id), newGroupId());
+
+      const placementNodes = clipboardNodes.filter((node) => !isGroupPortNodeType(String(node.type ?? '')));
+      const positions = (placementNodes.length > 0 ? placementNodes : clipboardNodes).map((node) => node.position);
+
+      const minX = Math.min(...positions.map((p) => p.x));
+      const minY = Math.min(...positions.map((p) => p.y));
+      const maxX = Math.max(...positions.map((p) => p.x));
+      const maxY = Math.max(...positions.map((p) => p.y));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const nudge = clipboardPasteIndex * 28;
+      const offsetX = anchor.x - centerX + nudge;
+      const offsetY = anchor.y - centerY + nudge;
+
+      const idMap = new Map<string, string>();
+      const newNodeIds: string[] = [];
+
+      groupController.clearSelection();
+      setSelectedNode('');
+
+      for (const node of clipboardNodes) {
+        const newId = generateId();
+        const position = { x: node.position.x + offsetX, y: node.position.y + offsetY };
+        const config: Record<string, unknown> = { ...(node.config ?? {}) };
+
+        if (isGroupPortNodeType(String(node.type ?? ''))) {
+          const oldGroupId = config.groupId ? String(config.groupId) : '';
+          const mapped = oldGroupId ? groupIdMap.get(oldGroupId) : null;
+          if (mapped) config.groupId = mapped;
+        }
+
+        const newNode: NodeInstance = {
+          id: newId,
+          type: node.type,
+          position,
+          config,
+          inputValues: { ...(node.inputValues ?? {}) },
+          outputValues: { ...(node.outputValues ?? {}) },
+        };
+
+        nodeEngine.addNode(newNode);
+        idMap.set(String(node.id), newId);
+        newNodeIds.push(newId);
+      }
+
+      for (const conn of clipboardConnections) {
+        const sourceNodeId = idMap.get(String(conn.sourceNodeId));
+        const targetNodeId = idMap.get(String(conn.targetNodeId));
+        if (!sourceNodeId || !targetNodeId) continue;
+        const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+        const engineConn: EngineConnection = {
+          id: connId,
+          sourceNodeId,
+          sourcePortId: String(conn.sourcePortId),
+          targetNodeId,
+          targetPortId: String(conn.targetPortId),
+        };
+        nodeEngine.addConnection(engineConn);
+      }
+
+      const newGroupsRaw: NodeGroup[] = clipboardGroups.map((g) => {
+        const oldId = String(g.id ?? '');
+        const id = groupIdMap.get(oldId) ?? newGroupId();
+
+        const oldParentId = g.parentId ? String(g.parentId) : null;
+        const parentId =
+          oldId === groupRoot
+            ? null
+            : oldParentId && groupIdMap.has(oldParentId)
+              ? groupIdMap.get(oldParentId)!
+              : null;
+
+        const nodeIds = Array.from(
+          new Set(
+            (g.nodeIds ?? [])
+              .map((nid) => idMap.get(String(nid)))
+              .filter(Boolean) as string[]
+          )
+        );
+
+        return {
+          id,
+          parentId,
+          name: String(g.name ?? ''),
+          nodeIds,
+          disabled: Boolean(g.disabled),
+          minimized: Boolean((g as any).minimized),
+          runtimeActive: true,
+        };
+      });
+
+      // Ensure groups are appended parents-first so bounds and disabled propagation are stable.
+      const byId = new Map(newGroupsRaw.map((g) => [String(g.id), g] as const));
+      const depthCache = new Map<string, number>();
+      const getDepth = (groupId: string, visiting = new Set<string>()): number => {
+        const cached = depthCache.get(groupId);
+        if (cached !== undefined) return cached;
+        if (visiting.has(groupId)) return 0;
+        visiting.add(groupId);
+        const g = byId.get(groupId);
+        const parentId = g?.parentId && byId.has(String(g.parentId)) ? String(g.parentId) : null;
+        const depth = parentId ? getDepth(parentId, visiting) + 1 : 0;
+        visiting.delete(groupId);
+        depthCache.set(groupId, depth);
+        return depth;
+      };
+
+      const newGroups = [...newGroupsRaw].sort((a, b) => getDepth(String(a.id)) - getDepth(String(b.id)));
+      groupController.appendGroups(newGroups);
+
+      const rootNewId = groupIdMap.get(groupRoot);
+      if (rootNewId) groupController.selectedGroupId.set(rootNewId);
+
+      clipboardPasteIndex += 1;
+      return true;
+    }
+
     const positions = clipboardNodes.map((node) => node.position);
     const minX = Math.min(...positions.map((p) => p.x));
     const minY = Math.min(...positions.map((p) => p.y));

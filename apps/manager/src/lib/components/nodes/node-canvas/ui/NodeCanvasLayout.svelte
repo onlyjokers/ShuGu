@@ -98,6 +98,46 @@
     width: 230px !important;
   }
 
+  :global(.node-canvas-container .node.group-port) {
+    width: 14px !important;
+    min-width: 0 !important;
+    height: 14px !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    /* Ensure gate/proxy sockets stay interactive above the Group frame header overlay (z-index: 5). */
+    z-index: 6 !important;
+  }
+
+  :global(.node-canvas-container .node.group-port.group-proxy-input),
+  :global(.node-canvas-container .node.group-port.group-proxy-output) {
+    width: 48px !important;
+    height: 20px !important;
+    box-sizing: border-box !important;
+    background: rgba(2, 6, 23, 0.52) !important;
+    border: 1px solid rgba(148, 163, 184, 0.28) !important;
+    border-radius: 999px !important;
+    cursor: ns-resize !important;
+    z-index: 6 !important;
+  }
+
+  :global(.node-canvas-container .node.group-port.group-proxy-input.group-minimized),
+  :global(.node-canvas-container .node.group-port.group-proxy-output.group-minimized) {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    cursor: pointer !important;
+  }
+
+  :global(.node-canvas-container .node.group-port .title),
+  :global(.node-canvas-container .node.group-port .controls),
+  :global(.node-canvas-container .node.group-port .ports),
+  :global(.node-canvas-container .node.group-port .cmd-aggregator-controls) {
+    display: none !important;
+  }
+
   :global(.node-canvas-container .node:hover) {
     border-color: rgba(99, 102, 241, 0.6) !important;
   }
@@ -158,6 +198,11 @@
     background: rgba(99, 102, 241, 0.95) !important;
   }
 
+  /* Group Port nodes use collapsed sockets; remove margins so wires attach straight to the edge sockets. */
+  :global(.node-canvas-container .node.group-port .socket) {
+    margin: 0 !important;
+  }
+
   :global(.node-canvas-container .socket[title='number']),
   :global(.node-canvas-container .socket.port-number) {
     background: rgba(34, 197, 94, 0.92) !important;
@@ -171,6 +216,11 @@
   :global(.node-canvas-container .socket[title='string']),
   :global(.node-canvas-container .socket.port-string) {
     background: rgba(59, 130, 246, 0.95) !important;
+  }
+
+  :global(.node-canvas-container .socket[title='asset']),
+  :global(.node-canvas-container .socket.port-asset) {
+    background: rgba(148, 163, 184, 0.95) !important;
   }
 
   :global(.node-canvas-container .socket[title='color']),
@@ -218,5 +268,14 @@
 
   :global(.node-canvas-container .input-socket) {
     margin-left: -10px !important;
+  }
+
+  :global(.node-canvas-container .node.group-port .socket) {
+    margin: 0 !important;
+  }
+
+  :global(.node-canvas-container .node.group-port .output-socket),
+  :global(.node-canvas-container .node.group-port .input-socket) {
+    margin: 0 !important;
   }
 </style>

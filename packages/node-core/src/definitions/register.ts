@@ -19,6 +19,7 @@ import {
   createLogicIfNode,
   createLogicMultipleNode,
   createLogicNandNode,
+  createLogicNumberToBooleanNode,
   createLogicNorNode,
   createLogicNotNode,
   createLogicOrNode,
@@ -29,6 +30,7 @@ import {
   createNumberScriptNode,
   createNumberStabilizerNode,
 } from './nodes/logic.js';
+import { createGroupGateNode, createGroupProxyNode } from './nodes/group.js';
 import {
   createBoolNode,
   createNoteNode,
@@ -47,6 +49,7 @@ import {
   createToneReverbNode,
 } from './nodes/audio.js';
 import {
+  createLoadAudioAssetFromAssetsNode,
   createLoadAudioFromAssetsNode,
   createLoadAudioFromLocalNode,
   createLoadImageFromAssetsNode,
@@ -106,6 +109,7 @@ export function registerDefaultNodeDefinitions(
   registry.register(createLogicIfNode());
   registry.register(createLogicForNode());
   registry.register(createLogicSleepNode());
+  registry.register(createLogicNumberToBooleanNode());
   registry.register(createNumberScriptNode());
   registry.register(createShowAnythingNode());
   registry.register(createNoteNode());
@@ -113,6 +117,9 @@ export function registerDefaultNodeDefinitions(
   registry.register(createStringNode());
   registry.register(createBoolNode());
   registry.register(createNumberStabilizerNode());
+  // Internal graph structure nodes (primarily for manager UI).
+  registry.register(createGroupGateNode());
+  registry.register(createGroupProxyNode());
   // Tone.js audio nodes (client runtime overrides these definitions).
   registry.register(createToneLFONode());
   registry.register(createToneOscNode());
@@ -124,6 +131,7 @@ export function registerDefaultNodeDefinitions(
   registry.register(createAudioDataNode());
   // Player helpers.
   registry.register(createLoadAudioFromAssetsNode());
+  registry.register(createLoadAudioAssetFromAssetsNode());
   registry.register(createLoadAudioFromLocalNode());
   registry.register(createLoadImageFromAssetsNode());
   registry.register(createLoadImageFromLocalNode());

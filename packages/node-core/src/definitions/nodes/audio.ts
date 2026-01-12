@@ -335,7 +335,7 @@ export function createToneGranularNode(): NodeDefinition {
     label: 'Tone Granular',
     category: 'Audio',
     inputs: [
-      { id: 'url', label: 'URL', type: 'string' },
+      { id: 'url', label: 'Asset', type: 'asset' },
       { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
       { id: 'loop', label: 'Loop', type: 'boolean' },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
@@ -346,7 +346,7 @@ export function createToneGranularNode(): NodeDefinition {
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
+      { key: 'url', label: 'Audio Asset', type: 'asset-picker', assetKind: 'audio', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },

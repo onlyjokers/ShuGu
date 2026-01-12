@@ -69,6 +69,8 @@ type VideoFinishState = {
 const videoFinishStates = new Map<string, VideoFinishState>();
 const VIDEO_FINISH_MAX_AGE_MS = 10 * 60 * 1000;
 
+const ASSET_REF_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
 function pruneVideoFinishStates(now: number): void {
   for (const [nodeId, entry] of videoFinishStates.entries()) {
     if (now - entry.updatedAt > VIDEO_FINISH_MAX_AGE_MS) videoFinishStates.delete(nodeId);
@@ -95,6 +97,40 @@ function videoFinishSignatureFromRef(ref: unknown): string {
   } catch {
     return baseUrl;
   }
+}
+
+function normalizeRemoteAssetRef(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const hashIndex = trimmed.indexOf('#');
+  const hash = hashIndex >= 0 ? trimmed.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
+
+  const queryIndex = withoutHash.indexOf('?');
+  const search = queryIndex >= 0 ? withoutHash.slice(queryIndex) : '';
+  const baseRef = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+
+  const baseTrimmed = baseRef.trim();
+  if (!baseTrimmed) return '';
+
+  if (baseTrimmed.startsWith('asset:')) {
+    const id = baseTrimmed.slice('asset:'.length).trim().split(/[?#]/)[0]?.trim() ?? '';
+    return id ? `asset:${id}${search}${hash}` : '';
+  }
+
+  const shuguPrefix = 'shugu://asset/';
+  if (baseTrimmed.startsWith(shuguPrefix)) {
+    const id = baseTrimmed.slice(shuguPrefix.length).trim().split(/[?#]/)[0]?.trim() ?? '';
+    return id ? `asset:${id}${search}${hash}` : '';
+  }
+
+  // Reject non-asset schemes (http(s), localfile, data, etc.).
+  if (ASSET_REF_SCHEME_RE.test(baseTrimmed)) return '';
+
+  // Treat bare values as asset IDs.
+  const id = baseTrimmed.split(/[?#]/)[0]?.trim() ?? '';
+  return id ? `asset:${id}${search}${hash}` : '';
 }
 export function registerToneClientDefinitions(
   registry: NodeRegistry,
@@ -580,7 +616,7 @@ export function registerToneClientDefinitions(
     label: 'Tone Granular (client)',
     category: 'Audio',
     inputs: [
-      { id: 'url', label: 'URL', type: 'string' },
+      { id: 'url', label: 'Asset', type: 'asset' },
       { id: 'gate', label: 'Gate', type: 'number', defaultValue: 0 },
       { id: 'loop', label: 'Loop', type: 'boolean' },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
@@ -591,7 +627,7 @@ export function registerToneClientDefinitions(
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'url', label: 'Audio URL', type: 'string', defaultValue: '' },
+      { key: 'url', label: 'Audio Asset', type: 'asset-picker', assetKind: 'audio', defaultValue: '' },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
@@ -606,7 +642,8 @@ export function registerToneClientDefinitions(
       const overlap = toNumber(inputs.overlap ?? config.overlap, 0.1);
       const volume = toNumber(inputs.volume ?? config.volume, 0.6);
       const urlRaw = toString(inputs.url ?? config.url, '');
-      const url = deps.resolveAssetRef ? deps.resolveAssetRef(urlRaw) : urlRaw;
+      const assetRef = normalizeRemoteAssetRef(urlRaw);
+      const url = assetRef && deps.resolveAssetRef ? deps.resolveAssetRef(assetRef) : '';
       const loop =
         inputs.loop !== undefined && inputs.loop !== null
           ? toBoolean(inputs.loop, true)
@@ -633,6 +670,11 @@ export function registerToneClientDefinitions(
         return { value: volume };
       }
 
+      if (!url) {
+        if (granularInstances.has(context.nodeId)) disposeGranularInstance(context.nodeId);
+        return { value: volume };
+      }
+
       let instance = granularInstances.get(context.nodeId);
       const params = {
         playbackRate,
@@ -644,7 +686,7 @@ export function registerToneClientDefinitions(
         playing,
       };
 
-      const shouldCreate = playing && url !== '';
+      const shouldCreate = playing;
       if (!instance) {
         if (!shouldCreate) return { value: volume };
         instance = createGranularInstance(context.nodeId, url, params);

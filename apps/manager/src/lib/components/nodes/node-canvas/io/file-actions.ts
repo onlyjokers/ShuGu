@@ -72,7 +72,8 @@ function parseNodeGroups(value: unknown): NodeGroup[] {
     const nodeIdsRaw = Array.isArray(item.nodeIds) ? item.nodeIds : [];
     const nodeIds = nodeIdsRaw.map((v) => String(v)).filter(Boolean);
     const disabled = Boolean(item.disabled);
-    groups.push({ id, parentId, name, nodeIds, disabled });
+    const minimized = Boolean(item.minimized);
+    groups.push({ id, parentId, name, nodeIds, disabled, minimized });
   }
   return groups;
 }
@@ -135,7 +136,14 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
       .filter(Boolean) as string[];
     const uniqueNodeIds = Array.from(new Set(nodeIds));
     if (uniqueNodeIds.length === 0) continue;
-    kept.push({ id, parentId, name, nodeIds: uniqueNodeIds, disabled: Boolean(group.disabled) });
+    kept.push({
+      id,
+      parentId,
+      name,
+      nodeIds: uniqueNodeIds,
+      disabled: Boolean(group.disabled),
+      minimized: Boolean(group.minimized),
+    });
   }
 
   if (kept.length === 0) return { groups: [] as NodeGroup[], groupIdMap: new Map<string, string>() };
@@ -152,6 +160,7 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
     name: String(group.name ?? ''),
     nodeIds: (group.nodeIds ?? []).map(String),
     disabled: Boolean(group.disabled),
+    minimized: Boolean(group.minimized),
   }));
 
   // Ensure parent groups include all descendant nodes so disabled propagation and bounds match expectations.
@@ -228,6 +237,7 @@ export function createFileActions(opts: FileActionsOptions) {
       name: String(g.name ?? ''),
       nodeIds: (g.nodeIds ?? []).map((id) => String(id)).filter(Boolean),
       disabled: Boolean(g.disabled),
+      minimized: Boolean(g.minimized),
     }));
     const ui: NodeGraphUiV1 | undefined =
       collapsedNodeIds.length > 0
@@ -346,12 +356,12 @@ export function createFileActions(opts: FileActionsOptions) {
 
     const { groups: importedGroups, groupIdMap } = remapImportedGroups(parsedFile.groups, nodeIdMap);
 
-    // Keep Group Activate nodes wired to the remapped group IDs *before* appending groups, so the auto
+    // Keep Group port nodes wired to the remapped group IDs *before* appending groups, so the auto
     // "ensureGroupPortNodes" hook doesn't create duplicates.
     if (groupIdMap.size > 0) {
       for (const node of sourceNodes) {
         const type = String((node as any)?.type ?? '');
-        if (type !== 'group-activate') continue;
+        if (!['group-activate', 'group-gate', 'group-proxy'].includes(type)) continue;
         const oldNodeId = String((node as any)?.id ?? '');
         const newNodeId = nodeIdMap.get(oldNodeId);
         if (!newNodeId) continue;

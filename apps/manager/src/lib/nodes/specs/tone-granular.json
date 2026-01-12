@@ -13,7 +13,7 @@
   ],
   "outputs": [{ "id": "value", "label": "Out", "type": "audio" }],
   "configSchema": [
-    { "key": "url", "label": "Audio URL", "type": "string", "defaultValue": "" },
+    { "key": "url", "label": "Audio Asset", "type": "asset-picker", "assetKind": "audio", "defaultValue": "" },
     { "key": "loop", "label": "Loop", "type": "boolean", "defaultValue": true },
     { "key": "playbackRate", "label": "Rate", "type": "number", "defaultValue": 1 },
     { "key": "detune", "label": "Detune", "type": "number", "defaultValue": 0 },

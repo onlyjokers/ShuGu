@@ -4,7 +4,7 @@
 
 import type { GraphState } from '$lib/nodes/types';
 import type { GraphViewAdapter } from '../adapters/graph-view-adapter';
-import { buildGroupPortIndex, GROUP_ACTIVATE_NODE_TYPE } from '../utils/group-port-utils';
+import { buildGroupPortIndex, isGroupPortNodeType } from '../utils/group-port-utils';
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
 
@@ -114,7 +114,7 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
     const ids = (nodeIdsRaw ?? []).map((id) => String(id)).filter(Boolean);
     const nodeIds = ids.filter((id) => {
       const type = typeByNodeId.get(id) ?? '';
-      return Boolean(type) && type !== GROUP_ACTIVATE_NODE_TYPE;
+      return Boolean(type) && !isGroupPortNodeType(type);
     });
     if (nodeIds.length === 0) return;
 
@@ -206,7 +206,7 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
       };
 
       for (const gid of groupIds) {
-        const portId = index.get(String(gid))?.activateId;
+        const portId = index.get(String(gid))?.gateId;
         if (!portId) continue;
         bounds = mergeBounds(bounds, adapter.getNodeBounds(String(portId)) ?? getPortBoundsApprox(portId));
       }
@@ -247,4 +247,3 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
 
   return { focusNodeIds, focusGroupById, setPendingFocusNodeIds, flushPendingFocus };
 }
-

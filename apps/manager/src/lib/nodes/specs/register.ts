@@ -109,9 +109,11 @@ type NodeRuntime =
   | { kind: 'logic-if' }
   | { kind: 'logic-for' }
   | { kind: 'logic-sleep' }
+  | { kind: 'logic-number-to-boolean' }
   | { kind: 'number-script' }
   | { kind: 'client-count' }
   | { kind: 'array-filter' }
+  | { kind: 'group-frame' }
   | { kind: 'group-activate' }
   | { kind: 'tone-osc' }
   | { kind: 'tone-delay' }
@@ -659,6 +661,29 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
           displayTransport.sendControl('stopMedia', {}, undefined);
           displayTransport.sendControl('hideImage', {}, undefined);
           displayTransport.sendControl('screenColor', { color: '#000000', opacity: 0, mode: 'solid' } as any, undefined);
+        },
+      };
+    }
+    case 'group-frame': {
+      return {
+        ...base,
+        process: () => ({}),
+      };
+    }
+    case 'logic-number-to-boolean': {
+      return {
+        ...base,
+        process: (inputs) => {
+          const numberRaw = (inputs as any)?.number;
+          const triggerRaw = (inputs as any)?.trigger;
+
+          const numberValue = isFiniteNumber(numberRaw) ? numberRaw : Number(numberRaw ?? 0);
+          const triggerValue = isFiniteNumber(triggerRaw) ? triggerRaw : Number(triggerRaw ?? 0.5);
+
+          const threshold = Number.isFinite(triggerValue) ? triggerValue : 0.5;
+          const current = Number.isFinite(numberValue) ? numberValue : 0;
+
+          return { out: current >= threshold };
         },
       };
     }

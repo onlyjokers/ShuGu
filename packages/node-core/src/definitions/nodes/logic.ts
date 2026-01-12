@@ -199,6 +199,35 @@ export function createLogicDivideNode(): NodeDefinition {
   };
 }
 
+export function createLogicNumberToBooleanNode(): NodeDefinition {
+  return {
+    type: 'logic-number-to-boolean',
+    label: 'Number to Boolean',
+    category: 'Logic',
+    inputs: [
+      { id: 'number', label: 'Number', type: 'number', defaultValue: 0 },
+      { id: 'trigger', label: 'Trigger', type: 'number', defaultValue: 0.5 },
+    ],
+    outputs: [{ id: 'out', label: 'Out', type: 'boolean' }],
+    configSchema: [],
+    process: (inputs) => {
+      const numberRaw = inputs.number;
+      const triggerRaw = inputs.trigger;
+      const numberValue =
+        typeof numberRaw === 'number' && Number.isFinite(numberRaw)
+          ? numberRaw
+          : Number(numberRaw ?? 0);
+      const triggerValue =
+        typeof triggerRaw === 'number' && Number.isFinite(triggerRaw)
+          ? triggerRaw
+          : Number(triggerRaw ?? 0.5);
+      const threshold = Number.isFinite(triggerValue) ? triggerValue : 0.5;
+      const current = Number.isFinite(numberValue) ? numberValue : 0;
+      return { out: current >= threshold };
+    },
+  };
+}
+
 // Gate: invert a boolean (NOT gate).
 export function createLogicNotNode(): NodeDefinition {
   return {

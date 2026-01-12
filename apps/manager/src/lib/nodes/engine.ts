@@ -418,6 +418,19 @@ class NodeEngineClass {
     const targetNode = snapshot.nodes.find((n) => n.id === connection.targetNodeId);
     if (!sourceNode || !targetNode) return false;
 
+    if (sourceNode.type === 'group-proxy' && connection.sourcePortId === 'out') {
+      const direction = String((sourceNode.config as any)?.direction ?? 'output');
+      if (direction === 'output') {
+        const alreadyConnected = snapshot.connections.some(
+          (c) => c.sourceNodeId === connection.sourceNodeId && c.sourcePortId === connection.sourcePortId
+        );
+        if (alreadyConnected) {
+          this.lastError.set('Group proxy output can only be connected once');
+          return false;
+        }
+      }
+    }
+
     const sourceDef = nodeRegistry.get(sourceNode.type);
     const targetDef = nodeRegistry.get(targetNode.type);
     const sourcePort = sourceDef?.outputs.find((p) => p.id === connection.sourcePortId);
@@ -425,8 +438,38 @@ class NodeEngineClass {
 
     if (!sourcePort || !targetPort) return false;
 
+    const resolveProxyPortType = (node: NodeInstance): PortType => {
+      const raw = (node.config as any)?.portType;
+      const t = typeof raw === 'string' ? raw : raw ? String(raw) : '';
+      if (
+        [
+          'number',
+          'boolean',
+          'string',
+          'asset',
+          'color',
+          'audio',
+          'image',
+          'video',
+          'scene',
+          'effect',
+          'client',
+          'command',
+          'fuzzy',
+          'array',
+          'any',
+        ].includes(t)
+      ) {
+        return t as PortType;
+      }
+      return 'any';
+    };
+
     let sourceType = (sourcePort.type ?? 'any') as PortType;
-    const targetType = (targetPort.type ?? 'any') as PortType;
+    let targetType = (targetPort.type ?? 'any') as PortType;
+
+    if (sourceNode.type === 'group-proxy') sourceType = resolveProxyPortType(sourceNode);
+    if (targetNode.type === 'group-proxy') targetType = resolveProxyPortType(targetNode);
 
     // Sleep output adopts its input type and is inactive until the input is connected.
     if (sourceNode.type === 'logic-sleep' && sourcePort.id === 'output') {
@@ -458,6 +501,10 @@ class NodeEngineClass {
       sourceType === 'video' || targetType === 'video'
         ? sourceType !== 'video' || targetType !== 'video'
         : false;
+    const assetMismatch =
+      sourceType === 'asset' || targetType === 'asset'
+        ? sourceType !== 'asset' || targetType !== 'asset'
+        : false;
     if (typeMismatch) {
       this.lastError.set(
         `Type mismatch: ${sourceType} -> ${targetType} (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
@@ -479,6 +526,12 @@ class NodeEngineClass {
     if (videoMismatch) {
       this.lastError.set(
         `Type mismatch: video connections must be video -> video (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
+      );
+      return false;
+    }
+    if (assetMismatch) {
+      this.lastError.set(
+        `Type mismatch: asset connections must be asset -> asset (${sourceNode.id}:${sourcePort.id} → ${targetNode.id}:${targetPort.id})`
       );
       return false;
     }

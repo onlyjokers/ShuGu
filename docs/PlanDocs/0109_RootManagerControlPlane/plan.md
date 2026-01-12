@@ -24,6 +24,7 @@ Status: Draft
 - [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [x] Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）
 - [ ] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
+- [ ] Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -726,6 +727,41 @@ Graph 侧只看到：
 - 自动化 smoke tests + 手动 checklist 同时通过。
 - 代码库中“同类能力两套通路并存”的核心历史包袱被清除（以依赖图与目录结构为证）。
 - `pnpm guard:deps` ✅，`pnpm lint` ✅（0 errors）。
+
+## Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
+
+目标：在进入 Phase 3 引入新形态/新功能之前，先把 NodeCanvas 的 Group 语义与交互“收口成最终可维护形态”，避免继续把复杂度带入 Root/Manager 拆分与 ControlPlane v2。
+
+范围（不引入 ControlPlane 新能力；只治理 NodeCanvas Group 的设计一致性与可读性）：
+
+- **A) 移除 Activate 节点：把 Gate 变成 Group 的固有属性**
+  - Group Header 左侧提供一个可连线的 Gate 输入端口（boolean，未连线默认 `true`）。
+  - Group Header 保留手动开关（Active/Deactivate）；最终 gate = `manual AND wiredInput`。
+  - Gate 输入端口禁止来源于该 Group subtree（含子 Group），避免“连线到自己内部”的语义混乱。
+  - 旧项目自动迁移：历史 `group-activate`（可能多个）合并为 AND；若来源不是 boolean，自动插入数值阈值转换节点（见 D）。
+
+- **B) Group Minimize：frame ⇄ node 形态切换**
+  - Frame header 增加最小化按钮，最小化后 Group 显示为 node 形态（保留 Gate 端口 + 手动开关）。
+  - 最小化时隐藏 subtree 的内部节点与内部连线，仅保留边界代理端口与对外连线，保证阅读性。
+  - 允许随时展开恢复编辑。
+
+- **C) Proxy 边界端口：跨边界连线必须挂在边界点上**
+  - 所有跨 Group 边界的连线自动变为“代理端口转发”，避免线条穿墙（含多层嵌套：每层边界都生成代理点）。
+  - 代理点既可自动生成（已有跨边界连线），也可手动预置（即使尚未连线）。
+  - 手动 UX：拖线靠近 Group 左边缘（输入）/右边缘（输出）时边缘高亮，松开创建代理点（线保持连着）。
+  - 输出代理点按“一条外连线一个点”建模（每个输出代理点仅允许 1 条外连线）。
+  - 自动生成的代理点：当其对应外连线被删除后自动消失；手动 pinned 的代理点保留。
+
+- **D) 新增节点：Number to Boolean**
+  - 新增 Logic 节点 `Number to Boolean`：输入 `number` 与 `trigger number`，当 `number >= trigger` 输出 `true` 否则 `false`。
+  - 用于旧 Activate 输入的数值/any 类型迁移为 boolean gate。
+
+验收：
+
+- 不再出现 `Activate` 节点 UI；Gate 输入端口只存在于 Group header / minimized node 形态。
+- 任意跨边界连线都不再“穿墙”，且嵌套 Group 会在每一层边界生成代理点。
+- Minimize/Expand 不破坏功能：展开后内部节点/连线可恢复编辑；最小化后对外连线仍可正确工作。
+- 旧项目导入/打开自动迁移成功（含多 Activate 合并 AND、数值输入自动转换），不需要手工修图才能运行。
 
 ---
 

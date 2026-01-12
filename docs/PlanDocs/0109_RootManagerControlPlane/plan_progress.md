@@ -261,10 +261,17 @@
     - `pnpm --filter @shugu/sdk-manager run build` ✅
   - [ ] 2.3 回归：按 `phase1_regression_playbook.md` 全绿（重点：sensor gating、managerKey、有/无 key 下的行为、5s grace 重连/过期）。
 
-- [ ] Phase 2.5 启动：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
-  - [ ] Gate：移除 `group-activate` 节点 UI；Gate 输入端口下沉到 Group header（boolean-only，未连线默认 true，禁止来自 subtree）。
-  - [ ] Proxy：跨边界连线自动代理；支持手动 pin（拖线到边缘创建点；输出代理点 1 点仅 1 条外连线）。
-  - [ ] Minimize：frame ⇄ node；最小化隐藏 subtree 内部节点/连线，仅保留边界代理端口与对外连线。
-  - [ ] Migration：旧项目自动迁移（多 Activate 合并 AND；any/number 来源自动插入 Number-to-Boolean）。
-  - [ ] 新节点：`Number to Boolean`（>= threshold）。
-  - [ ] 验证：`pnpm --filter @shugu/node-core run test` + `pnpm lint`（0 errors）。
+- [x] Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
+  - [x] Gate：移除 `group-activate` 节点 UI；Gate 输入端口下沉到 Group header 左侧（boolean-only，未连线默认 true；禁止来自 subtree）。
+    - [x] 旧图迁移：`group-activate` → `group-gate`（多 Activate 合并 AND；非 boolean 来源插入 `logic-number-to-boolean`）。
+  - [x] Proxy：跨边界连线自动规范化为“边界代理端口链”，不再穿墙（含多层嵌套：每层边界都有代理点）。
+    - [x] 手动 pin：拖线到 Frame 左/右边缘，边缘高亮，松开创建代理点且线保持连着。
+    - [x] 输出代理点限制：规范化时把一个 `group-proxy(output)` 上的多条外连线拆成多个点（1 点 1 条外连线）。
+    - [x] 清理策略：auto proxy 在外连线断开后自动移除；pinned proxy 保留。
+  - [x] Minimize：frame ⇄ node；最小化隐藏 subtree 内部节点/连线，仅保留边界代理端口与对外连线；展开后可继续编辑。
+    - [x] 新增 `group.minimized` 并纳入导入/导出。
+  - [x] Copy/Paste：Group 作为“特殊节点”可复制（等价于复制整个 frame/subtree），仅保留代理点，跨边界外连线不复制。
+  - [x] 新节点：`logic-number-to-boolean`（`number >= trigger` → `true`）。
+  - [x] 验证：
+    - `pnpm --filter @shugu/node-core test` ✅（先 `pnpm --filter @shugu/node-core clean` 清理 root-owned dist，避免 TS5033）
+    - `pnpm lint` ✅（0 errors；warnings 为历史债）

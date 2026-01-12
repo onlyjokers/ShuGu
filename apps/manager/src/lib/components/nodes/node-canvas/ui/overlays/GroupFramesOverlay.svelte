@@ -8,12 +8,16 @@
   export let areaTransform: { k: number; tx: number; ty: number } | null = null;
   export let isRunning = false;
   export let editModeGroupId: string | null = null;
+  export let selectedGroupId: string | null = null;
   export let toast: { groupId: string; message: string } | null = null;
+  export let gateModeGroupIds: Set<string> | null = null;
   export let onToggleDisabled: (groupId: string) => void = () => undefined;
+  export let onToggleMinimized: (groupId: string) => void = () => undefined;
   export let onToggleEditMode: (groupId: string) => void = () => undefined;
   export let onDisassemble: (groupId: string) => void = () => undefined;
   export let onRename: (groupId: string, name: string) => void = () => undefined;
   export let onHeaderPointerDown: (groupId: string, event: PointerEvent) => void = () => undefined;
+  export let edgeHighlight: { groupId: string; side: 'input' | 'output' } | null = null;
 
   let editingGroupId: string | null = null;
   let draftName = '';
@@ -46,6 +50,20 @@
   function cancelEdit() {
     editingGroupId = null;
   }
+
+  function handleActionsWheel(event: WheelEvent) {
+    const el = event.currentTarget as HTMLDivElement | null;
+    if (!el) return;
+    if (el.scrollWidth <= el.clientWidth + 1) return;
+
+    event.stopPropagation();
+    event.preventDefault();
+
+    const dx = event.deltaX;
+    const dy = event.deltaY;
+    const delta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+    el.scrollLeft += delta;
+  }
 </script>
 
 {#if frames.length > 0}
@@ -57,6 +75,10 @@
       {@const showCount = !isTiny}
       {@const runtimeGateClosed = group.runtimeActive === false}
       {@const gateClosed = !isRunning || frame.effectiveDisabled}
+      {@const isGateMode = Boolean(gateModeGroupIds?.has?.(group.id))}
+      {@const isMinimized = Boolean(group.minimized)}
+      {@const highlightSide = edgeHighlight?.groupId === group.id ? edgeHighlight.side : null}
+      {@const isSelected = selectedGroupId === group.id}
       {@const gateReason = !isRunning
         ? 'Graph STOP'
         : frame.effectiveDisabled
@@ -66,67 +88,78 @@
               ? 'Input gate closed'
               : 'Parent gate closed'
           : 'Gate open'}
-      <div
-        class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''}"
-        style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
-      >
-        <div
-          class="group-frame-header"
-          on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
-        >
-          {#if editingGroupId === group.id}
-            <div class="group-frame-title editing">
-              <input
-                class="group-frame-title-input"
-                bind:this={nameInputEl}
-                bind:value={draftName}
-                on:pointerdown|stopPropagation
-                on:keydown={(e) => {
-                  if (e.key === 'Enter') commitEdit();
-                  if (e.key === 'Escape') cancelEdit();
-                }}
-                on:blur={commitEdit}
+	      {#if !isMinimized}
+	        <div
+	          class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''} {isSelected ? 'selected' : ''} {highlightSide === 'input' ? 'edge-highlight-input' : ''} {highlightSide === 'output' ? 'edge-highlight-output' : ''}"
+	          style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
+	        >
+	          <div class="group-frame-header">
+	            <div class="group-frame-title-row">
+	              <div
+	                class="group-frame-gate-port"
+	                title="Group gate input (boolean)"
+                aria-hidden="true"
               />
+            {#if editingGroupId === group.id}
+              <div class="group-frame-title editing">
+                <input
+                  class="group-frame-title-input"
+                  bind:this={nameInputEl}
+                  bind:value={draftName}
+                  on:pointerdown|stopPropagation
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter') commitEdit();
+                    if (e.key === 'Escape') cancelEdit();
+                  }}
+                  on:blur={commitEdit}
+                />
+              </div>
+	            {:else}
+	              <button
+	                type="button"
+	                class="group-frame-title"
+	                on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
+	                on:click={() => startEdit(group)}
+	                on:keydown={(e) => {
+	                  if (e.key === 'Enter' || e.key === ' ') startEdit(group);
+	                }}
+                title={gateReason}
+              >
+                <span class="group-frame-title-name">{group.name ?? 'Group'}</span>
+                {#if showCount}
+                  <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
+                {/if}
+                {#if !isGateMode}
+                  <span class="group-frame-gate {gateClosed ? 'closed' : 'open'}">
+                    {gateClosed ? 'Gate: Closed' : 'Gate: Open'}
+                  </span>
+                {/if}
+              </button>
+            {/if}
             </div>
-          {:else}
-            <button
-              type="button"
-              class="group-frame-title"
-              on:click={() => startEdit(group)}
-              on:keydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') startEdit(group);
-              }}
-              title={gateReason}
-            >
-              <span class="group-frame-title-name">{group.name ?? 'Group'}</span>
-              {#if showCount}
-                <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
-              {/if}
-              <span class="group-frame-gate {gateClosed ? 'closed' : 'open'}">
-                {gateClosed ? 'Gate: Closed' : 'Gate: Open'}
-              </span>
-            </button>
-          {/if}
-          <div class="group-frame-actions">
-            <Button
-              variant={isEditing ? 'primary' : 'ghost'}
-              size="sm"
-              on:click={() => onToggleEditMode(group.id)}
-            >
-              {isEditing ? 'Editing…' : 'Edit Group'}
-            </Button>
-            <Button variant="ghost" size="sm" on:click={() => onDisassemble(group.id)}>
-              Disassemble
-            </Button>
-            <Button
-              variant={group.disabled ? 'primary' : 'ghost'}
-              size="sm"
-              on:click={() => onToggleDisabled(group.id)}
-            >
-              {group.disabled ? 'Activate group' : 'Deactivate group'}
-            </Button>
+            <div class="group-frame-actions" on:wheel={handleActionsWheel}>
+              <Button variant="ghost" size="sm" on:click={() => onToggleMinimized(group.id)}>
+                Minimize
+              </Button>
+              <Button
+                variant={isEditing ? 'primary' : 'ghost'}
+                size="sm"
+                on:click={() => onToggleEditMode(group.id)}
+              >
+                {isEditing ? 'Editing…' : 'Edit Group'}
+              </Button>
+              <Button variant="ghost" size="sm" on:click={() => onDisassemble(group.id)}>
+                Disassemble
+              </Button>
+              <Button
+                variant={group.disabled ? 'primary' : 'ghost'}
+                size="sm"
+                on:click={() => onToggleDisabled(group.id)}
+              >
+                {group.disabled ? 'Activate group' : 'Deactivate group'}
+              </Button>
+            </div>
           </div>
-        </div>
 
         {#if toastMessage}
           <div class="group-frame-toast" aria-live="polite">
@@ -134,6 +167,7 @@
           </div>
         {/if}
       </div>
+      {/if}
     {/each}
   </div>
 {/if}
@@ -165,6 +199,36 @@
       0 18px 64px rgba(148, 163, 184, 0.06);
   }
 
+  .group-frame.selected {
+    border-color: rgba(99, 102, 241, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(99, 102, 241, 0.22),
+      0 18px 64px rgba(99, 102, 241, 0.1);
+  }
+
+  .group-frame.disabled.selected {
+    border-color: rgba(148, 163, 184, 0.7);
+    box-shadow:
+      0 0 0 1px rgba(148, 163, 184, 0.22),
+      0 18px 64px rgba(148, 163, 184, 0.08);
+  }
+
+  .group-frame.edge-highlight-input {
+    border-left-width: 4px;
+    border-left-color: rgba(245, 158, 11, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(245, 158, 11, 0.22),
+      0 18px 64px rgba(245, 158, 11, 0.08);
+  }
+
+  .group-frame.edge-highlight-output {
+    border-right-width: 4px;
+    border-right-color: rgba(99, 102, 241, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(99, 102, 241, 0.18),
+      0 18px 64px rgba(99, 102, 241, 0.08);
+  }
+
   .group-frame.editing {
     animation: group-frame-pulse 1.4s ease-in-out infinite;
   }
@@ -173,24 +237,44 @@
     animation-name: group-frame-pulse-disabled;
   }
 
-  .group-frame-header {
-    position: absolute;
-    top: 12px;
-    left: 18px;
-    right: 18px;
+	  .group-frame-header {
+	    position: absolute;
+	    top: 12px;
+	    left: 18px;
+	    right: 18px;
+	    display: flex;
+	    align-items: center;
+	    justify-content: space-between;
+	    gap: 14px;
+	    min-width: 0;
+	    overflow: hidden;
+	    pointer-events: none;
+	    user-select: none;
+	    -webkit-user-select: none;
+	    touch-action: none;
+	  }
+
+  .group-frame-title-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    pointer-events: auto;
-    cursor: grab;
-    user-select: none;
-    -webkit-user-select: none;
-    touch-action: none;
+    gap: 10px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
   }
 
-  .group-frame-header.compact {
-    justify-content: flex-start;
+  .group-frame-gate-port {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    background: rgba(245, 158, 11, 0.95);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.22),
+      0 10px 24px rgba(0, 0, 0, 0.36);
+    pointer-events: none;
+    /* Keep spacing in the title row but avoid rendering a second "gate dot" (the actual socket is the dot). */
+    opacity: 0;
   }
 
   .group-frame-header:active,
@@ -215,6 +299,10 @@
     white-space: nowrap;
     gap: 8px;
     cursor: pointer;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
   }
 
   .group-frame-title.editing {
@@ -224,11 +312,15 @@
   .group-frame-title-name {
     font-weight: 700;
     letter-spacing: 0.2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .group-frame-title-count {
     color: rgba(148, 163, 184, 0.95);
     font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
   }
 
   .group-frame-gate {
@@ -276,11 +368,23 @@
     pointer-events: auto;
     flex-wrap: nowrap;
     white-space: nowrap;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 
   .group-frame-actions :global(.btn) {
     border-radius: 999px;
     white-space: nowrap;
+  }
+
+  .group-frame-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .group-frame-toast {

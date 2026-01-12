@@ -76,6 +76,12 @@
   let altDuplicateDragPointerId: number | null = null;
   let altDuplicateDragMoveHandler: ((event: PointerEvent) => void) | null = null;
   let altDuplicateDragUpHandler: ((event: PointerEvent) => void) | null = null;
+	  let proxyDragPointerId: number | null = null;
+	  let proxyDragMoveHandler: ((event: PointerEvent) => void) | null = null;
+	  let proxyDragUpHandler: ((event: PointerEvent) => void) | null = null;
+	  let groupFrameToggleHandler: ((event: Event) => void) | null = null;
+	  let groupFrameDisabledHandler: ((event: Event) => void) | null = null;
+	  let groupFrameTranslateDepth = 0;
   let resizeObserver: ResizeObserver | null = null;
   let socketPositionWatcher: LiveDOMSocketPosition | null = null;
   let managerUnsub: (() => void) | null = null;
@@ -86,6 +92,7 @@
     number: new ClassicPreset.Socket('number'),
     boolean: new ClassicPreset.Socket('boolean'),
     string: new ClassicPreset.Socket('string'),
+    asset: new ClassicPreset.Socket('asset'),
     color: new ClassicPreset.Socket('color'),
     audio: new ClassicPreset.Socket('audio'),
     image: new ClassicPreset.Socket('image'),
@@ -106,6 +113,7 @@
   let graphState: GraphState = { nodes: [], connections: [] };
   let nodeCount = 0;
   let lastGraphNodeCount = -1;
+  let lastGraphConnKey = '';
   let selectedNodeId = '';
   let importGraphInputEl: HTMLInputElement | null = null;
   let importTemplatesInputEl: HTMLInputElement | null = null;
@@ -114,6 +122,8 @@
   let numberParamOptions: { path: string; label: string }[] = [];
   let pickerElement: HTMLDivElement | null = null;
   let lastPointerClient = { x: 0, y: 0 };
+  let groupEdgeHighlight: { groupId: string; side: 'input' | 'output' } | null = null;
+  let connectDraggingSocket: SocketData | null = null;
 
   const graphStateStore = nodeEngine?.graphState;
   const isRunningStore = nodeEngine?.isRunning;
@@ -219,12 +229,38 @@
     nodeGroups,
     groupFrames,
     editModeGroupId,
+    selectedGroupId,
     canvasToast,
     groupEditToast,
     groupSelectionBounds,
     groupSelectionNodeIds,
     marqueeRect,
   } = groupController;
+
+  // UI helper: When a Group's gate input is wired (connection into group-gate.active), we treat it as "Gate mode"
+  // and hide the "Gate: Open/Closed" badge (the wire + border state is enough).
+  $: gateModeGroupIds = (() => {
+    const nodes = Array.isArray(graphState.nodes) ? graphState.nodes : [];
+    const connections = Array.isArray(graphState.connections) ? graphState.connections : [];
+
+    const incomingTargetKeys = new Set<string>();
+    for (const c of connections) {
+      incomingTargetKeys.add(`${String((c as any).targetNodeId ?? '')}:${String((c as any).targetPortId ?? '')}`);
+    }
+
+    const result = new Set<string>();
+    for (const node of nodes) {
+      if (String((node as any).type ?? '') !== 'group-gate') continue;
+      const nodeId = String((node as any).id ?? '');
+      if (!nodeId) continue;
+      if (!incomingTargetKeys.has(`${nodeId}:active`)) continue;
+      const rawGroupId = ((node as any).config as any)?.groupId;
+      const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+      if (groupId) result.add(groupId);
+    }
+
+    return result;
+  })();
 
   const { minimap, minimapUi } = minimapController;
 
@@ -411,6 +447,7 @@
     if (prevId === nextId) return;
 
     selectedNodeId = nextId;
+    if (nextId) selectedGroupId.set(null);
 
     if (prevId) {
       const prev = nodeMap.get(prevId);
@@ -427,6 +464,20 @@
         areaPlugin?.update?.('node', nextId);
       }
     }
+  };
+
+  const handleGroupHeaderPointerDown = (groupId: string, event: PointerEvent) => {
+    const id = String(groupId ?? '');
+    if (id) selectedGroupId.set(id);
+
+    if (get(groupSelectionNodeIds).size > 0) {
+      groupSelectionNodeIds.set(new Set());
+      groupSelectionBounds.set(null);
+      groupController.scheduleHighlight();
+    }
+
+    setSelectedNode('');
+    frameDragController.startGroupHeaderDrag(id, event);
   };
 
   const generateId = () => `node-${crypto.randomUUID?.() ?? Date.now()}`;
@@ -470,7 +521,100 @@
     return null;
   };
 
-  function addNode(type: string, position?: { x: number; y: number }) {
+  const findGroupGateTargetAt = (clientX: number, clientY: number): { groupId: string } | null => {
+    const frames = get(groupFrames) ?? [];
+    if (frames.length === 0) return null;
+
+    const pos = viewAdapter.clientToGraph(clientX, clientY);
+    const k = Number(canvasTransform?.k ?? 1) || 1;
+    const radius = 22 / k;
+
+    let best: { groupId: string; dist: number; depth: number; area: number } | null = null;
+
+	    for (const frame of frames) {
+	      const groupId = String(frame?.group?.id ?? '');
+	      if (!groupId) continue;
+	      const left = Number(frame.left ?? 0);
+	      const top = Number(frame.top ?? 0);
+	      const width = Number(frame.width ?? 0);
+	      const height = Number(frame.height ?? 0);
+	      if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(width) || !Number.isFinite(height)) continue;
+
+	      // Must stay in sync with Group Gate node placement offsets in `group-port-nodes-controller.ts`.
+	      const isMinimized = Boolean((frame as any)?.group?.minimized);
+	      const gateCenterX = left + (isMinimized ? 12 : 18) + 7;
+	      const gateCenterY = top + 12 + 4 + 7;
+	      const dx = pos.x - gateCenterX;
+	      const dy = pos.y - gateCenterY;
+      const dist = Math.hypot(dx, dy);
+      if (dist > radius) continue;
+
+      const depth = Number(frame.depth ?? 0) || 0;
+      const area = Math.max(0, width) * Math.max(0, height);
+
+      if (
+        !best ||
+        dist < best.dist - 0.001 ||
+        (Math.abs(dist - best.dist) <= 0.001 && (depth > best.depth || (depth === best.depth && area < best.area)))
+      ) {
+        best = { groupId, dist, depth, area };
+      }
+    }
+
+    return best ? { groupId: best.groupId } : null;
+  };
+
+  const findGroupProxyEdgeTargetAt = (
+    clientX: number,
+    clientY: number
+  ): { groupId: string; side: 'input' | 'output'; frame: any } | null => {
+    const frames = get(groupFrames) ?? [];
+    if (frames.length === 0) return null;
+
+    const pos = viewAdapter.clientToGraph(clientX, clientY);
+    const k = Number(canvasTransform?.k ?? 1) || 1;
+    const threshold = 18 / k;
+    const yMargin = 14 / k;
+
+    let best: { groupId: string; side: 'input' | 'output'; dist: number; depth: number; area: number; frame: any } | null =
+      null;
+
+    for (const frame of frames) {
+      const groupId = String(frame?.group?.id ?? '');
+      if (!groupId) continue;
+      const left = Number(frame.left ?? 0);
+      const top = Number(frame.top ?? 0);
+      const width = Number(frame.width ?? 0);
+      const height = Number(frame.height ?? 0);
+      const right = left + width;
+      const bottom = top + height;
+
+      if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) continue;
+
+      if (pos.y < top - yMargin || pos.y > bottom + yMargin) continue;
+
+      const dl = Math.abs(pos.x - left);
+      const dr = Math.abs(pos.x - right);
+      if (dl > threshold && dr > threshold) continue;
+
+      const side: 'input' | 'output' = dl <= dr ? 'input' : 'output';
+      const dist = side === 'input' ? dl : dr;
+      const depth = Number(frame.depth ?? 0) || 0;
+      const area = Math.max(0, width) * Math.max(0, height);
+
+      if (
+        !best ||
+        dist < best.dist - 0.001 ||
+        (Math.abs(dist - best.dist) <= 0.001 && (depth > best.depth || (depth === best.depth && area < best.area)))
+      ) {
+        best = { groupId, side, dist, depth, area, frame };
+      }
+    }
+
+    return best ? { groupId: best.groupId, side: best.side, frame: best.frame } : null;
+  };
+
+  function addNode(type: string, position?: { x: number; y: number }, configPatch?: Record<string, unknown>) {
     const def = nodeRegistry.get(type);
     if (!def) return;
     const config: Record<string, unknown> = {};
@@ -482,7 +626,7 @@
       id: generateId(),
       type,
       position: position ?? fallback,
-      config,
+      config: { ...config, ...(configPatch ?? {}) },
       inputValues: {},
       outputValues: {},
     };
@@ -634,7 +778,22 @@
 
     connection.addPreset(ConnectionPresets.classic.setup());
     connection.addPipe((ctx: any) => {
+      if (ctx?.type === 'connectionpick') {
+        const sock = (ctx.data as any)?.socket;
+        if (sock) {
+          connectDraggingSocket = {
+            nodeId: String(sock.nodeId),
+            side: sock.side,
+            key: String(sock.key),
+          };
+          const edge = findGroupProxyEdgeTargetAt(lastPointerClient.x, lastPointerClient.y);
+          groupEdgeHighlight = edge ? { groupId: edge.groupId, side: edge.side } : null;
+        }
+      }
       if (ctx?.type === 'connectiondrop') {
+        connectDraggingSocket = null;
+        groupEdgeHighlight = null;
+
         const data = ctx.data as any;
         const initial = data?.initial as any;
         const socket = data?.socket as any;
@@ -645,6 +804,132 @@
             side: initial.side,
             key: String(initial.key),
           };
+
+          const gateTarget = findGroupGateTargetAt(lastPointerClient.x, lastPointerClient.y);
+          if (gateTarget && initialSocket.side === 'output') {
+            const group = get(groupController.nodeGroups).find((g) => String(g.id) === gateTarget.groupId) ?? null;
+            if (group && (group.nodeIds ?? []).some((id) => String(id) === initialSocket.nodeId)) {
+              nodeEngine.lastError.set('Group gate input cannot originate from inside the group.');
+              return ctx;
+            }
+
+            const state = nodeEngine.exportGraph();
+            const gateNodeId =
+              state.nodes.find(
+                (n) =>
+                  String(n.type) === 'group-gate' &&
+                  String((n as any)?.config?.groupId ?? '') === gateTarget.groupId
+              )?.id ?? '';
+            if (gateNodeId) {
+              const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+              nodeEngine.addConnection({
+                id: connId,
+                sourceNodeId: initialSocket.nodeId,
+                sourcePortId: initialSocket.key,
+                targetNodeId: String(gateNodeId),
+                targetPortId: 'active',
+              });
+              groupPortNodesController.scheduleNormalizeProxies();
+              return ctx;
+            }
+          }
+
+          const edgeTarget = findGroupProxyEdgeTargetAt(lastPointerClient.x, lastPointerClient.y);
+          if (edgeTarget) {
+            const validTypes = new Set([
+              'number',
+              'boolean',
+              'string',
+              'asset',
+              'color',
+              'audio',
+              'image',
+              'video',
+              'scene',
+              'effect',
+              'client',
+              'command',
+              'fuzzy',
+              'array',
+              'any',
+            ]);
+            const resolveTypeForSocket = (sock: SocketData) => {
+              const node = nodeEngine.getNode(String(sock.nodeId));
+              if (!node) return 'any';
+              if (node.type === 'group-proxy') {
+                const raw = (node.config as any)?.portType;
+                const t = typeof raw === 'string' && raw ? raw : raw ? String(raw) : '';
+                return validTypes.has(t) ? t : 'any';
+              }
+              const def = nodeRegistry.get(String(node.type ?? ''));
+              const ports = sock.side === 'input' ? def?.inputs : def?.outputs;
+              const port = (ports ?? []).find((p) => String(p.id) === String(sock.key));
+              const t = String((port as any)?.type ?? 'any');
+              return validTypes.has(t) ? t : 'any';
+            };
+
+            const frame = edgeTarget.frame;
+            const groupId = edgeTarget.groupId;
+            const direction = edgeTarget.side === 'input' ? 'input' : 'output';
+            const graphPos = computeGraphPosition(lastPointerClient.x, lastPointerClient.y);
+            const left = Number(frame.left ?? 0);
+            const top = Number(frame.top ?? 0);
+            const width = Number(frame.width ?? 0);
+            const height = Number(frame.height ?? 0);
+            const right = left + width;
+            const bottom = top + height;
+
+            const clampY = (y: number) => {
+              const isMinimized = Boolean((frame as any)?.group?.minimized);
+              const topPad = isMinimized ? 44 + 6 + 28 / 2 : 56;
+              const bottomPad = isMinimized ? 6 + 28 / 2 : 56;
+              const minY = top + topPad;
+              const maxY = bottom - bottomPad;
+              if (!Number.isFinite(y)) return top + height / 2;
+              if (!Number.isFinite(minY) || !Number.isFinite(maxY) || maxY <= minY) return top + height / 2;
+              return Math.max(minY, Math.min(maxY, y));
+            };
+
+	            const proxyWidth = 48;
+	            const proxyOutset = 10;
+	            const proxyEdgeNudge = 12;
+	            const isMinimized = Boolean((frame as any)?.group?.minimized);
+	            const x = isMinimized
+	              ? direction === 'input'
+	                ? left - proxyOutset
+	                : right + proxyOutset - proxyWidth
+	              : direction === 'input'
+	                ? left - proxyWidth / 2 - proxyEdgeNudge
+	                : right - proxyWidth / 2 + proxyEdgeNudge;
+            const y = clampY(graphPos.y);
+            const portType = resolveTypeForSocket(initialSocket);
+
+            const proxyId = addNode('group-proxy', { x, y: y - 10 }, { groupId, direction, portType, pinned: true });
+            if (proxyId) {
+              const connId = `conn-${crypto.randomUUID?.() ?? Date.now()}`;
+              const conn: EngineConnection =
+                initialSocket.side === 'output'
+                  ? {
+                      id: connId,
+                      sourceNodeId: initialSocket.nodeId,
+                      sourcePortId: initialSocket.key,
+                      targetNodeId: proxyId,
+                      targetPortId: 'in',
+                    }
+                  : {
+                      id: connId,
+                      sourceNodeId: proxyId,
+                      sourcePortId: 'out',
+                      targetNodeId: initialSocket.nodeId,
+                      targetPortId: initialSocket.key,
+                    };
+              nodeEngine.addConnection(conn);
+              groupPortNodesController.scheduleAlign();
+              groupPortNodesController.scheduleNormalizeProxies();
+              return ctx;
+            }
+          }
+
           const desiredSide = initialSocket.side === 'output' ? 'input' : 'output';
           const snapped = findPortRowSocketAt(
             lastPointerClient.x,
@@ -670,6 +955,7 @@
                     targetPortId: initialSocket.key,
                   };
             nodeEngine.addConnection(engineConn);
+            groupPortNodesController.scheduleNormalizeProxies();
           } else {
             openConnectPicker(initialSocket);
           }
@@ -732,6 +1018,10 @@
       const prevNodeCount = lastGraphNodeCount;
       lastGraphNodeCount = nextNodeCount;
 
+      const nextConnKey = (state.connections ?? []).map((c) => String(c.id)).join('|');
+      const connectionsChanged = nextConnKey !== lastGraphConnKey;
+      lastGraphConnKey = nextConnKey;
+
       // Only reconcile on node removal to avoid interfering with imports (nodes are added one-by-one).
       if (prevNodeCount >= 0 && nextNodeCount < prevNodeCount) {
         const removedGroupIds = groupController.reconcileGraphNodes(state);
@@ -744,12 +1034,14 @@
       }
 
       graphSync?.schedule(state);
+      if (connectionsChanged) groupPortNodesController.scheduleNormalizeProxies();
       patchRuntime.onGraphStateChanged();
     });
 
     groupNodesUnsub = groupController.nodeGroups.subscribe(() => {
       groupPortNodesController.ensureGroupPortNodes();
       groupPortNodesController.scheduleAlign();
+      groupPortNodesController.scheduleNormalizeProxies();
     });
 
     groupFramesUnsub = groupFrames.subscribe(() => {
@@ -821,11 +1113,11 @@
       schedulePatchReconcile('display-bridge');
     });
 
-    bindRetePipes({
-      editor,
-      areaPlugin,
-      nodeEngine,
-      nodeMap,
+	    bindRetePipes({
+	      editor,
+	      areaPlugin,
+	      nodeEngine,
+	      nodeMap,
       connectionMap,
       isSyncing: () => isSyncingRef.value,
       setSelectedNode,
@@ -833,8 +1125,127 @@
       isProgrammaticTranslate: groupController.isProgrammaticTranslate,
       handleDroppedNodesAfterDrag: groupController.handleDroppedNodesAfterDrag,
       requestFramesUpdate,
-      requestMinimapUpdate: minimapController.requestUpdate,
-    });
+	      requestMinimapUpdate: minimapController.requestUpdate,
+	    });
+
+	    // UI: Group minimized node expand toggle (from ReteNode's group-frame nodes).
+	    const onGroupFrameToggle = (event: Event) => {
+	      const detail = (event as any)?.detail ?? null;
+	      const rawGroupId = detail?.groupId;
+	      const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+	      if (!groupId) return;
+	      groupController.toggleGroupMinimized(groupId);
+	    };
+	    window.addEventListener('shugu:toggle-group-minimized', onGroupFrameToggle as any);
+	    groupFrameToggleHandler = onGroupFrameToggle;
+
+	    // UI: Minimized Group node active toggle (manually activate/deactivate the group).
+	    const onGroupFrameToggleDisabled = (event: Event) => {
+	      const detail = (event as any)?.detail ?? null;
+	      const rawGroupId = detail?.groupId;
+	      const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+	      if (!groupId) return;
+	      groupController.toggleGroupDisabled(groupId);
+	    };
+	    window.addEventListener('shugu:toggle-group-disabled', onGroupFrameToggleDisabled as any);
+	    groupFrameDisabledHandler = onGroupFrameToggleDisabled;
+
+	    // UX: Dragging the minimized Group node should move the entire group (incl. nested frames/ports).
+	    if (areaPlugin) {
+	      areaPlugin.addPipe(async (ctx: any) => {
+	        if (ctx?.type !== 'nodetranslated') return ctx;
+	        if (isSyncingRef.value) return ctx;
+	        if (groupController.isProgrammaticTranslate()) return ctx;
+	        if (groupFrameTranslateDepth > 0) return ctx;
+
+	        const data = ctx.data ?? {};
+	        const nodeId = String(data.id ?? '');
+	        const pos = data.position as { x: number; y: number } | undefined;
+	        const prev = data.previous as { x: number; y: number } | undefined;
+	        if (!nodeId || !pos || !prev) return ctx;
+
+	        const node = nodeEngine.getNode(nodeId);
+	        if (!node || String(node.type) !== 'group-frame') return ctx;
+
+	        const rawGroupId = (node.config as any)?.groupId;
+	        const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+	        if (!groupId) return ctx;
+
+	        const dx = Number(pos.x ?? 0) - Number(prev.x ?? 0);
+	        const dy = Number(pos.y ?? 0) - Number(prev.y ?? 0);
+	        if (!dx && !dy) return ctx;
+
+	        const groups = get(groupController.nodeGroups) ?? [];
+	        const subtreeGroupIds = new Set<string>();
+	        const stack = [groupId];
+	        while (stack.length > 0) {
+	          const gid = String(stack.pop() ?? '');
+	          if (!gid || subtreeGroupIds.has(gid)) continue;
+	          subtreeGroupIds.add(gid);
+	          for (const g of groups) {
+	            if (String((g as any)?.parentId ?? '') === gid) stack.push(String((g as any)?.id ?? ''));
+	          }
+	        }
+
+	        const nodeIdsToMove = new Set<string>();
+	        for (const g of groups) {
+	          const gid = String((g as any)?.id ?? '');
+	          if (!gid || !subtreeGroupIds.has(gid)) continue;
+	          for (const id of (g as any)?.nodeIds ?? []) nodeIdsToMove.add(String(id));
+	        }
+
+	        const state: GraphState = nodeEngine.exportGraph();
+	        for (const n of state.nodes ?? []) {
+	          const type = String((n as any)?.type ?? '');
+	          if (type !== 'group-gate' && type !== 'group-proxy' && type !== 'group-frame') continue;
+	          const gid = String(((n as any)?.config as any)?.groupId ?? '');
+	          if (!gid || !subtreeGroupIds.has(gid)) continue;
+	          nodeIdsToMove.add(String((n as any).id ?? ''));
+	        }
+	        nodeIdsToMove.delete(nodeId);
+
+	        if (nodeIdsToMove.size === 0) return ctx;
+
+	        groupFrameTranslateDepth += 1;
+	        groupController.beginProgrammaticTranslate();
+	        try {
+	          const promises: Promise<unknown>[] = [];
+	          for (const id of nodeIdsToMove) {
+	            const view = areaPlugin?.nodeViews?.get?.(String(id));
+	            const viewPos = view?.position as { x: number; y: number } | undefined;
+	            if (viewPos && Number.isFinite(viewPos.x) && Number.isFinite(viewPos.y)) {
+	              promises.push(areaPlugin.translate(String(id), { x: viewPos.x + dx, y: viewPos.y + dy }));
+	            } else {
+	              const instance = nodeEngine.getNode(String(id));
+	              if (!instance) continue;
+	              const cx = Number((instance as any).position?.x ?? 0);
+	              const cy = Number((instance as any).position?.y ?? 0);
+	              if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+	              nodeEngine.updateNodePosition(String(id), { x: cx + dx, y: cy + dy });
+	            }
+	          }
+	          await Promise.all(promises);
+	        } finally {
+	          groupController.endProgrammaticTranslate();
+	          groupFrameTranslateDepth = Math.max(0, groupFrameTranslateDepth - 1);
+	        }
+
+	        // Persist translated positions for nodes that were moved programmatically via the view.
+	        for (const id of nodeIdsToMove) {
+	          const view = areaPlugin?.nodeViews?.get?.(String(id));
+	          const viewPos = view?.position as { x: number; y: number } | undefined;
+	          if (viewPos && Number.isFinite(viewPos.x) && Number.isFinite(viewPos.y)) {
+	            nodeEngine.updateNodePosition(String(id), { x: viewPos.x, y: viewPos.y });
+	          }
+	        }
+
+	        groupPortNodesController.scheduleAlign();
+	        requestFramesUpdate();
+	        minimapController.requestUpdate();
+
+	        return ctx;
+	      });
+	    }
 
     if (areaPlugin) {
       await AreaExtensions.zoomAt(areaPlugin, Array.from(nodeMap.values()));
@@ -932,9 +1343,139 @@
     contextMenuHandler = onContextMenu;
 
     const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest?.('.group-frame-header')) selectedGroupId.set(null);
+
+      // Feature: Group proxy ports can be dragged along the group edge (vertical only).
+      if (event.button === 0 && !event.altKey && proxyDragPointerId === null) {
+        const nodeEl = (target?.closest?.('.node') as HTMLElement | null) ?? null;
+        const nodeId = String(nodeEl?.dataset?.reteNodeId ?? '');
+        const isOnSocket = Boolean(target?.closest?.('.socket'));
+        const isEditing =
+          Boolean(target?.closest?.('input, textarea, select, button')) ||
+          Boolean((target as any)?.isContentEditable) ||
+          Boolean(target?.closest?.('.port-control')) ||
+          Boolean(target?.closest?.('.cmd-aggregator-controls'));
+
+        if (nodeEl && nodeId && !isOnSocket && !isEditing) {
+          const node = nodeEngine.getNode(nodeId);
+          if (node?.type === 'group-proxy') {
+            const groupId = typeof (node.config as any)?.groupId === 'string' ? String((node.config as any).groupId) : '';
+            if (!groupId) return;
+
+            const frames = get(groupFrames) ?? [];
+            const frame = frames.find((f: any) => String(f?.group?.id ?? '') === groupId) ?? null;
+            if (!frame) return;
+
+	            const direction = String((node.config as any)?.direction ?? 'output') === 'input' ? 'input' : 'output';
+	            const proxyWidth = 48;
+	            const proxyHalfHeight = 10;
+	            const proxyOutset = 10;
+	            const proxyEdgeNudge = 12;
+
+            const left = Number(frame.left ?? 0);
+            const top = Number(frame.top ?? 0);
+            const width = Number(frame.width ?? 0);
+            const height = Number(frame.height ?? 0);
+
+            const isMinimized = Boolean((frame as any)?.group?.minimized);
+
+	            const fixedX = isMinimized
+	              ? direction === 'input'
+	                ? left - proxyOutset
+	                : left + width + proxyOutset - proxyWidth
+	              : direction === 'input'
+	                ? left - proxyWidth / 2 - proxyEdgeNudge
+	                : left + width - proxyWidth / 2 + proxyEdgeNudge;
+            const topPad = isMinimized
+              ? 44 + 6 + 28 / 2
+              : (() => {
+                  if (!Number.isFinite(height) || height <= 0) return 56;
+                  return Math.max(24, Math.min(56, Math.max(0, height / 2 - 18)));
+                })();
+            const bottomPad = isMinimized ? 6 + 28 / 2 : topPad;
+
+            const minCenterY = top + topPad;
+            const maxCenterY = top + height - bottomPad;
+
+            const clampCenterY = (y: number) => {
+              if (!Number.isFinite(y)) return top + height / 2;
+              if (!Number.isFinite(minCenterY) || !Number.isFinite(maxCenterY) || maxCenterY <= minCenterY) {
+                return top + height / 2;
+              }
+              return Math.max(minCenterY, Math.min(maxCenterY, y));
+            };
+
+            // Prevent the default Rete drag so the proxy stays constrained to its edge.
+            event.preventDefault();
+            event.stopPropagation();
+
+            const startGraph = computeGraphPosition(event.clientX, event.clientY);
+            const startPos =
+              viewAdapter.getNodePosition(nodeId) ??
+              ({
+                x: Number(node.position?.x ?? 0),
+                y: Number(node.position?.y ?? 0),
+              } as const);
+
+            const dragOffsetY = startGraph.y - startPos.y;
+
+            const cleanup = () => {
+              if (proxyDragMoveHandler) {
+                window.removeEventListener('pointermove', proxyDragMoveHandler, {
+                  capture: true,
+                } as any);
+              }
+              if (proxyDragUpHandler) {
+                window.removeEventListener('pointerup', proxyDragUpHandler, { capture: true } as any);
+                window.removeEventListener('pointercancel', proxyDragUpHandler, { capture: true } as any);
+              }
+              proxyDragPointerId = null;
+              proxyDragMoveHandler = null;
+              proxyDragUpHandler = null;
+            };
+
+            const onMove = (moveEvent: PointerEvent) => {
+              if (proxyDragPointerId === null) return;
+              if (moveEvent.pointerId !== proxyDragPointerId) return;
+
+              const graphPos = computeGraphPosition(moveEvent.clientX, moveEvent.clientY);
+              const desiredTopLeftY = graphPos.y - dragOffsetY;
+              const desiredCenterY = desiredTopLeftY + proxyHalfHeight;
+              const clampedCenterY = clampCenterY(desiredCenterY);
+              const topLeftY = clampedCenterY - proxyHalfHeight;
+              viewAdapter.setNodePosition(nodeId, fixedX, topLeftY);
+
+              moveEvent.preventDefault();
+              moveEvent.stopPropagation();
+            };
+
+            const onUp = (upEvent: PointerEvent) => {
+              if (proxyDragPointerId === null) return;
+              if (upEvent.pointerId !== proxyDragPointerId) return;
+
+              cleanup();
+
+              const pos = viewAdapter.getNodePosition(nodeId);
+              if (pos) nodeEngine.updateNodePosition(nodeId, { x: pos.x, y: pos.y });
+              nodeEngine.updateNodeConfig(nodeId, { pinned: true });
+              groupPortNodesController.scheduleAlign();
+            };
+
+            proxyDragPointerId = event.pointerId;
+            proxyDragMoveHandler = onMove;
+            proxyDragUpHandler = onUp;
+            window.addEventListener('pointermove', onMove, { capture: true });
+            window.addEventListener('pointerup', onUp, { capture: true });
+            window.addEventListener('pointercancel', onUp, { capture: true });
+
+            return;
+          }
+        }
+      }
+
       // New UX: Alt/Option + drag on a node duplicates it and drags the clone.
       if (event.button === 0 && event.altKey && altDuplicateDragPointerId === null) {
-        const target = event.target as HTMLElement | null;
         const nodeEl = (target?.closest?.('.node') as HTMLElement | null) ?? null;
         const nodeId = String(nodeEl?.dataset?.reteNodeId ?? '');
 
@@ -1080,6 +1621,12 @@
 
     const onPointerMove = (event: PointerEvent) => {
       lastPointerClient = { x: event.clientX, y: event.clientY };
+      if (connectDraggingSocket) {
+        const edge = findGroupProxyEdgeTargetAt(event.clientX, event.clientY);
+        groupEdgeHighlight = edge ? { groupId: edge.groupId, side: edge.side } : null;
+      } else if (groupEdgeHighlight) {
+        groupEdgeHighlight = null;
+      }
     };
     container.addEventListener('pointermove', onPointerMove, { capture: true });
     pointerMoveHandler = onPointerMove;
@@ -1170,7 +1717,10 @@
         closePicker();
         return;
       }
-      if (key === 'Escape' && get(groupController.groupSelectionNodeIds).size > 0) {
+      if (
+        key === 'Escape' &&
+        (get(groupController.groupSelectionNodeIds).size > 0 || Boolean(get(groupController.selectedGroupId)))
+      ) {
         event.preventDefault();
         groupController.clearSelection();
         return;
@@ -1271,13 +1821,28 @@
     altDuplicateDragPointerId = null;
     altDuplicateDragMoveHandler = null;
     altDuplicateDragUpHandler = null;
-    if (toolbarMenuOutsideHandler)
-      window.removeEventListener('pointerdown', toolbarMenuOutsideHandler, {
+    if (proxyDragMoveHandler)
+      window.removeEventListener('pointermove', proxyDragMoveHandler, {
         capture: true,
       } as any);
-    resizeObserver?.disconnect();
-    socketPositionWatcher?.destroy();
-    areaPlugin?.destroy?.();
+    if (proxyDragUpHandler) {
+      window.removeEventListener('pointerup', proxyDragUpHandler, { capture: true } as any);
+      window.removeEventListener('pointercancel', proxyDragUpHandler, { capture: true } as any);
+    }
+    proxyDragPointerId = null;
+    proxyDragMoveHandler = null;
+    proxyDragUpHandler = null;
+	    if (toolbarMenuOutsideHandler)
+	      window.removeEventListener('pointerdown', toolbarMenuOutsideHandler, {
+	        capture: true,
+	      } as any);
+	    if (groupFrameToggleHandler)
+	      window.removeEventListener('shugu:toggle-group-minimized', groupFrameToggleHandler as any);
+	    if (groupFrameDisabledHandler)
+	      window.removeEventListener('shugu:toggle-group-disabled', groupFrameDisabledHandler as any);
+	    resizeObserver?.disconnect();
+	    socketPositionWatcher?.destroy();
+	    areaPlugin?.destroy?.();
     editor?.clear();
     nodeMap.clear();
     connectionMap.clear();
@@ -1381,12 +1946,16 @@
       areaTransform={canvasTransform}
       isRunning={$isRunningStore}
       editModeGroupId={$editModeGroupId}
+      selectedGroupId={$selectedGroupId}
       toast={$groupEditToast}
+      edgeHighlight={groupEdgeHighlight}
+      gateModeGroupIds={gateModeGroupIds}
       onToggleDisabled={groupController.toggleGroupDisabled}
+      onToggleMinimized={groupController.toggleGroupMinimized}
       onToggleEditMode={groupController.toggleGroupEditMode}
       onDisassemble={groupPortNodesController.disassembleGroupAndPorts}
       onRename={groupController.renameGroup}
-      onHeaderPointerDown={frameDragController.startGroupHeaderDrag}
+      onHeaderPointerDown={handleGroupHeaderPointerDown}
     />
 
     <LoopFramesOverlay

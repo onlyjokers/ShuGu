@@ -1,0 +1,14 @@
+{
+  "__purpose": "Manager-only UI node that represents a minimized Group frame (visual container).",
+  "type": "group-frame",
+  "label": "Group",
+  "category": "Internal",
+  "inputs": [],
+  "outputs": [],
+  "configSchema": [
+    { "key": "groupId", "label": "Group ID", "type": "string", "defaultValue": "" },
+    { "key": "name", "label": "Name", "type": "string", "defaultValue": "Group" },
+    { "key": "disabled", "label": "Disabled", "type": "boolean", "defaultValue": false }
+  ],
+  "runtime": { "kind": "group-frame" }
+}

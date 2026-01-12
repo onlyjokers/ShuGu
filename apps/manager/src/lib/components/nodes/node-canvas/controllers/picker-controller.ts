@@ -88,6 +88,7 @@ export function createPickerController(opts: PickerControllerOptions) {
       const neededSide: 'input' | 'output' = initial.side === 'output' ? 'input' : 'output';
 
       for (const def of opts.nodeRegistry.list()) {
+        if (String(def.category ?? '') === 'Internal') continue;
         const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
         const match = opts.bestMatchingPort(ports, requiredType, neededSide);
         if (!match) continue;
@@ -106,6 +107,7 @@ export function createPickerController(opts: PickerControllerOptions) {
       }
     } else {
       for (const def of opts.nodeRegistry.list()) {
+        if (String(def.category ?? '') === 'Internal') continue;
         addItem({ type: def.type, label: def.label, category: def.category });
       }
     }

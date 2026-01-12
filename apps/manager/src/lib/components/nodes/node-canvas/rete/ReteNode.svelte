@@ -31,26 +31,21 @@
 
   // Feature: Node minimize/collapse UI (manager-only visual state).
   // Collapsing only affects layout/visibility; graph execution + connections remain intact.
-  let isCollapsed = false;
-
   const toggleCollapsed = (event: Event) => {
     event.stopPropagation();
-    const next = !isCollapsed;
-    isCollapsed = next;
+    // Important: derive next state from `data.collapsed` to avoid Svelte reactive cycles.
+    const next = !(data as any)?.collapsed;
     (data as any).collapsed = next;
   };
 
   $: width = Number.isFinite(data.width) ? `${data.width}px` : '';
+  $: isCollapsed = isGroupPortNode ? true : Boolean((data as any)?.collapsed);
   $: height = !isCollapsed && Number.isFinite(data.height) ? `${data.height}px` : '';
 
   $: inputs = sortByIndex(Object.entries(data.inputs));
   $: controls = sortByIndex(Object.entries(data.controls));
   $: outputs = sortByIndex(Object.entries(data.outputs));
 
-  $: {
-    const next = Boolean((data as any)?.collapsed);
-    if (next !== isCollapsed) isCollapsed = next;
-  }
   function any<T>(arg: T): any {
     return arg;
   }
@@ -63,6 +58,8 @@
   $: isStopped = Boolean((data as any).stopped);
   $: isGroupDisabled = Boolean((data as any).groupDisabled);
   $: isGroupSelected = Boolean((data as any).groupSelected);
+  $: isGroupMinimized = Boolean((data as any).groupMinimized);
+  $: isHidden = Boolean((data as any).hidden);
 
   // Live Port Values
   // Values are derived from NodeEngine runtime outputs and graph connections.
@@ -78,6 +75,17 @@
 
   $: instanceType = String(nodeEngine.getNode(nodeId)?.type ?? '');
   $: isCmdAggregator = instanceType === 'cmd-aggregator';
+  $: isGroupPortNode = ['group-activate', 'group-gate', 'group-proxy'].includes(instanceType);
+  $: isGroupFrameNode = instanceType === 'group-frame';
+  $: proxyDirection =
+    instanceType === 'group-proxy' ? String((nodeEngine.getNode(nodeId)?.config as any)?.direction ?? 'output') : '';
+
+  let groupFrameDisabled = false;
+  $: groupFrameDisabled = (() => {
+    if (!isGroupFrameNode) return false;
+    const instance = nodeEngine.getNode(nodeId) as any;
+    return Boolean(instance?.config?.disabled);
+  })();
 
   const cmdAggregatorMaxInputs = (): number => {
     const def = nodeRegistry.get('cmd-aggregator');
@@ -145,6 +153,24 @@
     nodeEngine.updateNodeConfig(nodeId, { inCount: next });
   };
 
+  const toggleGroupMinimized = () => {
+    const instance = nodeEngine.getNode(nodeId) as any;
+    const raw = instance?.config?.groupId;
+    const groupId = typeof raw === 'string' ? raw : raw ? String(raw) : '';
+    if (!groupId) return;
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('shugu:toggle-group-minimized', { detail: { groupId } }));
+  };
+
+  const toggleGroupDisabled = () => {
+    const instance = nodeEngine.getNode(nodeId) as any;
+    const raw = instance?.config?.groupId;
+    const groupId = typeof raw === 'string' ? raw : raw ? String(raw) : '';
+    if (!groupId) return;
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('shugu:toggle-group-disabled', { detail: { groupId } }));
+  };
+
   let inputConnections: Record<string, ConnectionInfo[]> = {};
   $: if (nodeId) {
     const byInput: Record<string, ConnectionInfo[]> = {};
@@ -196,7 +222,7 @@
 
     if (portType === 'boolean')
       return typeof value === 'boolean' ? (value ? 'true' : 'false') : null;
-    if (portType === 'string') return typeof value === 'string' ? value : null;
+    if (portType === 'string' || portType === 'asset') return typeof value === 'string' ? value : null;
     if (portType === 'color') return typeof value === 'string' ? value : null;
     if (portType === 'client' && typeof value === 'object' && value) {
       const clientId = (value as any).clientId;
@@ -209,11 +235,152 @@
   function portTypeFor(side: 'input' | 'output', portId: string): string {
     const instance = nodeEngine.getNode(nodeId);
     if (!instance) return 'any';
+    if (instance.type === 'group-proxy') {
+      const raw = (instance.config as any)?.portType;
+      return typeof raw === 'string' && raw ? raw : raw ? String(raw) : 'any';
+    }
     const def = nodeRegistry.get(instance.type);
     if (!def) return 'any';
     const ports = side === 'input' ? def.inputs : def.outputs;
     const port = ports?.find((p) => p.id === portId);
     return String(port?.type ?? 'any');
+  }
+
+  type GroupFrameProxyPort = {
+    id: string;
+    direction: 'input' | 'output';
+    portType: string;
+    centerY: number;
+    label: string;
+  };
+
+  let groupFrameProxyPorts: GroupFrameProxyPort[] = [];
+  let groupFramePortAreaHeight = 0;
+
+  $: if (isGroupFrameNode && nodeId) {
+    const instance = nodeEngine.getNode(nodeId) as any;
+    const rawGroupId = instance?.config?.groupId;
+    const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+    const groupTop = Number(instance?.position?.y ?? 0);
+    const proxyHalfHeight = 10;
+
+    const nodeById = new Map(($graphStateStore.nodes ?? []).map((n: any) => [String(n.id), n] as const));
+    const connections = Array.isArray($graphStateStore.connections) ? $graphStateStore.connections : [];
+
+    const incomingToProxy = new Map<string, any>();
+    const outgoingFromProxy = new Map<string, any[]>();
+    for (const c of connections) {
+      const targetId = String((c as any).targetNodeId ?? '');
+      const sourceId = String((c as any).sourceNodeId ?? '');
+      const targetPortId = String((c as any).targetPortId ?? '');
+      const sourcePortId = String((c as any).sourcePortId ?? '');
+      if (!targetId || !sourceId || !targetPortId || !sourcePortId) continue;
+
+      const targetNode = nodeById.get(targetId);
+      const sourceNode = nodeById.get(sourceId);
+
+      if (String((targetNode as any)?.type ?? '') === 'group-proxy' && targetPortId === 'in') {
+        incomingToProxy.set(targetId, c);
+      }
+      if (String((sourceNode as any)?.type ?? '') === 'group-proxy' && sourcePortId === 'out') {
+        const list = outgoingFromProxy.get(sourceId) ?? [];
+        list.push(c);
+        outgoingFromProxy.set(sourceId, list);
+      }
+    }
+
+    const portLabelFor = (nodeId: string, side: 'input' | 'output', portId: string): string => {
+      const node = nodeById.get(String(nodeId));
+      if (!node) return String(portId);
+      const def = nodeRegistry.get(String((node as any).type ?? ''));
+      const ports = side === 'input' ? def?.inputs : def?.outputs;
+      const port = (ports ?? []).find((p: any) => String(p.id) === String(portId)) ?? null;
+      return String((port as any)?.label ?? (port as any)?.id ?? portId);
+    };
+
+    const validPortTypes = new Set([
+      'number',
+      'boolean',
+      'string',
+      'asset',
+      'color',
+      'audio',
+      'image',
+      'video',
+      'scene',
+      'effect',
+      'client',
+      'command',
+      'fuzzy',
+      'array',
+      'any',
+    ]);
+
+    const resolveProxyPortType = (node: any): string => {
+      const raw = node?.config?.portType;
+      const t = typeof raw === 'string' ? raw : raw ? String(raw) : '';
+      return validPortTypes.has(t) ? t : 'any';
+    };
+
+    const ports: GroupFrameProxyPort[] = [];
+
+    for (const node of $graphStateStore.nodes ?? []) {
+      if (String((node as any).type ?? '') !== 'group-proxy') continue;
+      const proxyId = String((node as any).id ?? '');
+      if (!proxyId) continue;
+      const proxyGroupId = String(((node as any).config as any)?.groupId ?? '');
+      if (!proxyGroupId || proxyGroupId !== groupId) continue;
+
+      const direction =
+        String(((node as any).config as any)?.direction ?? 'output') === 'input' ? 'input' : 'output';
+      const portType = resolveProxyPortType(node);
+      const centerY = Number((node as any).position?.y ?? 0) + proxyHalfHeight;
+
+      let label = '';
+      if (direction === 'input') {
+        const internal = outgoingFromProxy.get(proxyId) ?? [];
+        const first = internal[0] ?? null;
+        if (first) {
+          label = portLabelFor(
+            String((first as any).targetNodeId),
+            'input',
+            String((first as any).targetPortId)
+          );
+        }
+      } else {
+        const internal = incomingToProxy.get(proxyId) ?? null;
+        if (internal) {
+          label = portLabelFor(
+            String((internal as any).sourceNodeId),
+            'output',
+            String((internal as any).sourcePortId)
+          );
+        }
+      }
+      if (!label) label = portType;
+
+      ports.push({
+        id: proxyId,
+        direction,
+        portType,
+        centerY: Number.isFinite(groupTop) ? centerY - groupTop : centerY,
+        label,
+      });
+    }
+
+    ports.sort((a, b) => a.centerY - b.centerY || a.id.localeCompare(b.id));
+    groupFrameProxyPorts = ports;
+
+    const inputCount = ports.filter((p) => p.direction === 'input').length;
+    const outputCount = ports.length - inputCount;
+    const rowCount = Math.max(1, Math.max(inputCount, outputCount));
+
+    const rowHeight = 28;
+    const bottomPad = 12;
+    groupFramePortAreaHeight = rowCount * rowHeight + bottomPad;
+  } else {
+    groupFrameProxyPorts = [];
+    groupFramePortAreaHeight = 0;
   }
 
   function effectiveInputValue(portId: string): unknown {
@@ -426,15 +593,18 @@
   }
 </script>
 
-<div
-  bind:this={nodeEl}
+  <div
+    bind:this={nodeEl}
   class="node {isCollapsed ? 'collapsed' : ''} {data.selected ? 'selected' : ''} {data.localLoop
     ? 'local-loop'
     : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch
     ? 'deployed-patch'
-    : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {instanceType === 'group-activate'
-    ? 'group-port-activate'
-    : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ? 'group-disabled' : ''}"
+    : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupPortNode ? 'group-port' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled || (isGroupFrameNode && groupFrameDisabled) ? 'group-disabled' : ''}"
+  class:hidden={isHidden}
+  class:group-minimized={isGroupMinimized}
+  class:group-frame={isGroupFrameNode}
+  class:group-proxy-input={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection === 'input'}
+  class:group-proxy-output={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection !== 'input'}
   style:width
   style:height
   data-testid="node"
@@ -451,16 +621,51 @@
   {/if}
 
   <div class="title" data-testid="title">
-    <button
-      type="button"
-      class="collapse-toggle"
-      aria-label={isCollapsed ? 'Expand node' : 'Minimize node'}
-      aria-pressed={isCollapsed}
-      title={isCollapsed ? 'Expand' : 'Minimize'}
-      on:pointerdown|stopPropagation|preventDefault
-      on:click={toggleCollapsed}
-    ></button>
+    {#if isGroupFrameNode}
+      <div class="group-frame-gate-slot" aria-hidden="true" />
+    {:else}
+      <button
+        type="button"
+        class="collapse-toggle"
+        aria-label={isCollapsed ? 'Expand node' : 'Minimize node'}
+        aria-pressed={isCollapsed}
+        title={isCollapsed ? 'Expand' : 'Minimize'}
+        on:pointerdown|stopPropagation|preventDefault
+        on:click={(event) => toggleCollapsed(event)}
+      />
+    {/if}
     <span class="title-label">{data.label}</span>
+    {#if isGroupFrameNode}
+      <button
+        type="button"
+        class="group-frame-active-toggle {groupFrameDisabled ? 'off' : 'on'}"
+        aria-label={groupFrameDisabled ? 'Activate group' : 'Deactivate group'}
+        aria-pressed={!groupFrameDisabled}
+        title={groupFrameDisabled ? 'Activate group' : 'Deactivate group'}
+        on:pointerdown|stopPropagation|preventDefault
+        on:click={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleGroupDisabled();
+        }}
+      >
+        <span class="group-frame-active-thumb" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="group-frame-expand"
+        aria-label="Expand group"
+        title="Expand group"
+        on:pointerdown|stopPropagation|preventDefault
+        on:click={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleGroupMinimized();
+        }}
+      >
+        Expand
+      </button>
+    {/if}
   </div>
 
   {#if !isCollapsed}
@@ -507,6 +712,13 @@
     {/if}
 
     <div class="ports">
+      {#if isGroupFrameNode}
+        <div
+          class="group-frame-port-space"
+          style="height: {groupFramePortAreaHeight}px;"
+          aria-hidden="true"
+        />
+      {/if}
       {#if inputs.length}
         <div class="inputs">
           {#each inputs as [key, input]}
@@ -624,6 +836,20 @@
         </div>
       {/if}
     </div>
+
+    {#if isGroupFrameNode && groupFrameProxyPorts.length > 0}
+      <div class="group-frame-proxy-ports" aria-hidden="true">
+        {#each groupFrameProxyPorts as port (port.id)}
+          <div
+            class="group-frame-proxy-row {port.direction}"
+            style="top: {port.centerY}px;"
+            title={port.label}
+          >
+            <div class="group-frame-proxy-label">{port.label}</div>
+          </div>
+        {/each}
+      </div>
+    {/if}
   {:else}
     <div class="collapsed-sockets" aria-hidden="true">
       {#each inputs as [key, input]}
@@ -689,6 +915,10 @@
     user-select: none;
     line-height: initial;
     position: relative;
+  }
+
+  .node.hidden {
+    display: none !important;
   }
 
   .node.group-port-activate {
@@ -805,6 +1035,25 @@
     pointer-events: none;
   }
 
+  .node.group-port .collapsed-sockets {
+    pointer-events: auto;
+  }
+
+  .node.group-port .collapsed-sockets :global(.socket) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* When the Group frame is minimized, proxies should look like normal node ports:
+     only expose the external socket (no "two-dot" proxy capsule). */
+  .node.group-proxy-input.group-minimized .collapsed-socket.output {
+    display: none;
+  }
+
+  .node.group-proxy-output.group-minimized .collapsed-socket.input {
+    display: none;
+  }
+
   .controls {
     position: relative;
     z-index: 1;
@@ -822,6 +1071,130 @@
     flex-direction: column;
     gap: 4px;
     padding: 8px 0 6px;
+  }
+
+  .node.group-frame .ports {
+    padding: 0;
+    gap: 0;
+  }
+
+  .group-frame-gate-slot {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .group-frame-active-toggle {
+    appearance: none;
+    position: relative;
+    width: 34px;
+    height: 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    background: rgba(148, 163, 184, 0.22);
+    padding: 0;
+    flex: 0 0 auto;
+    cursor: pointer;
+    transition:
+      background 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .group-frame-active-toggle.on {
+    border-color: rgba(34, 197, 94, 0.55);
+    background: rgba(34, 197, 94, 0.28);
+  }
+
+  .group-frame-active-toggle.off {
+    border-color: rgba(148, 163, 184, 0.4);
+    background: rgba(148, 163, 184, 0.2);
+  }
+
+  .group-frame-active-thumb {
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.9);
+    transform: translateY(-50%);
+    transition: transform 160ms ease;
+  }
+
+  .group-frame-active-toggle.on .group-frame-active-thumb {
+    transform: translate(16px, -50%);
+  }
+
+  .group-frame-expand {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .group-frame-expand:hover {
+    background: rgba(2, 6, 23, 0.48);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .group-frame-port-space {
+    position: relative;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .group-frame-proxy-ports {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .group-frame-proxy-row {
+    position: absolute;
+    transform: translateY(-50%);
+    left: 0;
+    right: 0;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 2px 10px;
+  }
+
+  .group-frame-proxy-row.input {
+    justify-content: flex-start;
+    padding-left: 32px;
+  }
+
+  .group-frame-proxy-row.output {
+    justify-content: flex-end;
+    padding-right: 32px;
+  }
+
+  .group-frame-proxy-label {
+    max-width: 60%;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+    color: rgba(255, 255, 255, 0.78);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .cmd-aggregator-controls {
@@ -964,6 +1337,16 @@
   :global(.output-socket) {
     margin-right: -10px;
     flex: 0 0 auto;
+  }
+
+  /* Group gate/proxy nodes render sockets without the full node chrome.
+     Avoid the standard port "outset" margins so wires attach straight. */
+  .node.group-port :global(.input-socket) {
+    margin-left: 0;
+  }
+
+  .node.group-port :global(.output-socket) {
+    margin-right: 0;
   }
 
   :global(.output-socket.socket-disabled) {
