@@ -73,6 +73,38 @@ function toSafeOriginalName(name: string): string {
   return base || 'asset';
 }
 
+function normalizeOptionalString(value: unknown, maxLen: number): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > maxLen ? trimmed.slice(0, maxLen) : trimmed;
+}
+
+function normalizeTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const clamped = trimmed.length > 48 ? trimmed.slice(0, 48) : trimmed;
+    const key = clamped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clamped);
+    if (out.length >= 32) break;
+  }
+  return out;
+}
+
+function normalizeKind(raw: unknown): AssetKind | null {
+  if (typeof raw !== 'string') return null;
+  const k = raw.trim().toLowerCase();
+  if (k === 'audio' || k === 'image' || k === 'video') return k;
+  return null;
+}
+
 @Injectable()
 export class AssetsService {
   readonly config: AssetServiceConfig = readAssetServiceConfig();
@@ -234,6 +266,80 @@ export class AssetsService {
       }
 
       return { deleted: true };
+    });
+  }
+
+  async updateAsset(
+    id: string,
+    patch: {
+      originalName?: unknown;
+      kind?: unknown;
+      tags?: unknown;
+      description?: unknown;
+    }
+  ): Promise<AssetRecord | null> {
+    const safeId = String(id ?? '').trim();
+    if (!safeId) return null;
+
+    return await this.runMutation(async () => {
+      const stored = this.index.byId.get(safeId);
+      if (!stored) return null;
+
+      let changed = false;
+      const next: StoredAssetRecord = { ...stored };
+
+      if (patch.originalName !== undefined) {
+        const raw = String(patch.originalName ?? '');
+        if (raw.trim()) {
+          const name = toSafeOriginalName(raw);
+          if (name !== next.originalName) {
+            next.originalName = name;
+            changed = true;
+          }
+        }
+      }
+
+      if (patch.kind !== undefined) {
+        const kind = normalizeKind(patch.kind);
+        if (kind && kind !== next.kind) {
+          next.kind = kind;
+          changed = true;
+        }
+      }
+
+      if (patch.tags !== undefined) {
+        const tags = normalizeTags(patch.tags);
+        const prev = Array.isArray(next.tags) ? next.tags : [];
+        const prevSerialized = prev.join('\n');
+        const nextSerialized = tags.join('\n');
+        if (nextSerialized !== prevSerialized) {
+          if (tags.length > 0) next.tags = tags;
+          else delete next.tags;
+          changed = true;
+        }
+      }
+
+      if (patch.description !== undefined) {
+        const description = normalizeOptionalString(patch.description, 2000);
+        const prev = typeof next.description === 'string' ? next.description : null;
+        if (description !== prev) {
+          if (description) next.description = description;
+          else delete next.description;
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        const { storageBackend: _backend, storageKey: _key, ...record } = next;
+        return record;
+      }
+
+      next.updatedAt = Date.now();
+      this.index.byId.set(safeId, next);
+      this.enqueuePersist();
+
+      const { storageBackend: _backend, storageKey: _key, ...record } = next;
+      return record;
     });
   }
 

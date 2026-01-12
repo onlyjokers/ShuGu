@@ -4,11 +4,13 @@
 
 import {
   BadRequestException,
+  Body,
   Controller,
   Delete,
   Get,
   Head,
   NotFoundException,
+  Patch,
   Param,
   PayloadTooLargeException,
   Post,
@@ -144,6 +146,14 @@ export class AssetsController {
   async delete(@Param('id') id: string, @Req() req: any): Promise<{ deleted: boolean }> {
     requireAssetWriteAuth(req, this.assets.config.writeToken);
     return await this.assets.deleteAsset(id);
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() body: any, @Req() req: any): Promise<{ asset: any }> {
+    requireAssetWriteAuth(req, this.assets.config.writeToken);
+    const asset = await this.assets.updateAsset(id, body ?? {});
+    if (!asset) throw new NotFoundException('asset not found');
+    return { asset };
   }
 
   @Get(':id')

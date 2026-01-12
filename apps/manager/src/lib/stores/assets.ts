@@ -15,6 +15,8 @@ export type AssetRecord = {
   sizeBytes: number;
   sha256: string;
   originalName: string;
+  tags?: string[];
+  description?: string;
   createdAt: number;
   updatedAt: number;
   durationMs?: number;
@@ -73,14 +75,14 @@ const store = writable<AssetsState>(initial);
 
 let refreshInFlight: Promise<void> | null = null;
 
-async function refresh(): Promise<void> {
+async function refresh(opts?: { serverUrl?: string; writeToken?: string }): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     store.update((s) => ({ ...s, status: 'loading', error: null }));
     try {
-      const token = readWriteToken();
+      const token = typeof opts?.writeToken === 'string' ? opts.writeToken : readWriteToken();
       if (!token) throw new Error('Missing Asset Write Token (set it on the connect screen).');
-      const serverUrl = readServerUrl();
+      const serverUrl = typeof opts?.serverUrl === 'string' ? opts.serverUrl : readServerUrl();
       const url = buildUrl(serverUrl, 'api/assets');
       if (!url) throw new Error('Missing or invalid Server URL.');
       const data = await fetchJson(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });

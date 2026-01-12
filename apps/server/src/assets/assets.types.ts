@@ -11,6 +11,16 @@ export type AssetRecord = {
   sizeBytes: number;
   sha256: string; // hex
   originalName: string;
+  /**
+   * Optional user-defined tags for browsing/filtering in the Manager UI.
+   * Stored in the on-disk asset index (assets-index.json).
+   */
+  tags?: string[];
+  /**
+   * Optional user-defined description/notes for browsing in the Manager UI.
+   * Stored in the on-disk asset index (assets-index.json).
+   */
+  description?: string;
   createdAt: number; // epoch ms
   updatedAt: number; // epoch ms
   durationMs?: number;
@@ -27,4 +37,3 @@ export type AssetIndexFile = {
   version: 1;
   assets: StoredAssetRecord[];
 };
-

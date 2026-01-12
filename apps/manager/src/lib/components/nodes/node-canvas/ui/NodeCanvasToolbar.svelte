@@ -158,7 +158,7 @@
 </script>
 
 <div class="canvas-toolbar-frame">
-  <div class="canvas-toolbar">
+  <div class="canvas-toolbar pill-toolbar">
     <div class="toolbar-left">
       <Button
         variant={isRunning ? 'danger' : 'primary'}
@@ -299,7 +299,7 @@
 <style>
   .canvas-toolbar-frame {
     position: absolute;
-    top: 14px;
+    top: var(--ui-pill-toolbar-top);
     left: 0;
     right: 0;
     margin-left: var(--space-2xl, 32px);
@@ -314,15 +314,7 @@
 
   .canvas-toolbar {
     width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 8px 12px;
-    border-radius: 999px;
-    background: rgba(15, 23, 42, 0.72);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 18px 56px rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(16px);
+    --ui-pill-toolbar-gap: 14px;
     pointer-events: auto;
   }
 

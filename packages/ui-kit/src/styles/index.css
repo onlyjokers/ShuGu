@@ -83,6 +83,17 @@
   --z-modal: 200;
   --z-toast: 300;
   --z-overlay: 400;
+
+  /* Floating pill toolbar (used by Manager overlays/toolbars) */
+  --ui-pill-toolbar-top: 6px;
+  --ui-pill-toolbar-height: 46px;
+  --ui-pill-toolbar-padding-x: 12px;
+  --ui-pill-toolbar-padding-y: 8px;
+  --ui-pill-toolbar-gap: 12px;
+  --ui-pill-toolbar-bg: rgba(15, 23, 42, 0.72);
+  --ui-pill-toolbar-border: rgba(255, 255, 255, 0.12);
+  --ui-pill-toolbar-shadow: 0 18px 56px rgba(0, 0, 0, 0.55);
+  --ui-pill-toolbar-backdrop: blur(16px);
 }
 
 /* ============================================
@@ -223,6 +234,37 @@ body {
   height: 40px;
   padding: 0;
   border-radius: var(--radius-md);
+}
+
+/* ============================================
+   Toolbars
+   ============================================ */
+
+.pill-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-pill-toolbar-gap);
+  height: var(--ui-pill-toolbar-height);
+  min-height: var(--ui-pill-toolbar-height);
+  max-height: var(--ui-pill-toolbar-height);
+  padding: var(--ui-pill-toolbar-padding-y) var(--ui-pill-toolbar-padding-x);
+  border-radius: 999px;
+  background: var(--ui-pill-toolbar-bg);
+  border: 1px solid var(--ui-pill-toolbar-border);
+  box-shadow: var(--ui-pill-toolbar-shadow);
+  backdrop-filter: var(--ui-pill-toolbar-backdrop);
+}
+
+.pill-toolbar .btn {
+  border-radius: 999px;
+  height: 30px;
+  padding: 0 12px;
+  line-height: 1;
+}
+
+.pill-toolbar .btn-sm {
+  padding: 0 12px;
+  font-size: 12px;
 }
 
 /* ============================================

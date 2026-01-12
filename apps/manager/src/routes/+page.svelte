@@ -362,7 +362,7 @@
     </div>
   {:else}
     <AppShell
-      fullBleed={activePage === 'nodes'}
+      fullBleed={activePage === 'nodes' || activePage === 'assets'}
       collapseHeader={activePage === 'nodes' && $nodeGraphRunning}
     >
       <div slot="tabs" class="page-tabs" bind:this={tabsEl}>
@@ -430,7 +430,7 @@
         </div>
       </div>
 
-      <div class:hide={activePage !== 'assets'}>
+      <div class="assets-pane" class:hide={activePage !== 'assets'}>
         <AssetsManager {serverUrl} />
       </div>
 
@@ -589,6 +589,12 @@
   }
 
   .nodes-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .assets-pane {
     flex: 1;
     min-height: 0;
     display: flex;
