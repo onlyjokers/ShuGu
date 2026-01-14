@@ -15,6 +15,8 @@ import { nodeRegistry } from './registry';
 import { getSelectOptionsForInput } from './selection-options';
 import { parameterRegistry } from '../parameters/registry';
 import { exportGraphForPatch } from './patch-export';
+import { customNodeDefinitions } from './custom-nodes/store';
+import { compileGraphForPatch } from './custom-nodes/flatten';
 
 export type LocalLoop = {
   id: string;
@@ -243,6 +245,21 @@ class NodeEngineClass {
     if (!node) return;
     node.config = { ...node.config, ...config };
     this.syncGraphState();
+  }
+
+  updateNodeType(nodeId: string, type: string): void {
+    const nextType = String(type ?? '');
+    if (!nextType) return;
+    if (!nodeRegistry.get(nextType)) return;
+
+    const node = this.runtime.getNode(nodeId);
+    if (!node) return;
+    if (String(node.type) === nextType) return;
+
+    node.type = nextType;
+    stripLegacyToneFields(nextType, node.config ?? {}, node.inputValues ?? {});
+    this.syncGraphState();
+    this.updateLocalLoops();
   }
 
   updateNodeInputValue(nodeId: string, portId: string, value: unknown): void {
@@ -1121,7 +1138,7 @@ class NodeEngineClass {
     };
     assetRefs: string[];
   } {
-    const snapshot = this.runtime.exportGraph();
+    const snapshot = compileGraphForPatch(this.runtime.exportGraph(), get(customNodeDefinitions) ?? []);
     const ids = Array.from(new Set((rootNodeIds ?? []).map(String).filter(Boolean))).sort();
     if (ids.length === 0) throw new Error('No patch root ids provided.');
 

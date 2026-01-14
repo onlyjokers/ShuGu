@@ -23,6 +23,40 @@ export type NodeGroup = {
   /** Runtime gate from Group Gate port; defaults to true when unset. */
   runtimeActive?: boolean;
 };
+
+const normalizeGroupList = (groups: NodeGroup[]): NodeGroup[] => {
+  const order: string[] = [];
+  const byId = new Map<string, NodeGroup>();
+
+  for (const group of Array.isArray(groups) ? groups : []) {
+    const id = String(group?.id ?? '');
+    if (!id) continue;
+
+    const next: NodeGroup = {
+      id,
+      parentId: group?.parentId ? String(group.parentId) : null,
+      name: String(group?.name ?? ''),
+      nodeIds: Array.from(new Set((group?.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean))),
+      disabled: Boolean(group?.disabled),
+      minimized: Boolean(group?.minimized),
+      runtimeActive: typeof group?.runtimeActive === 'boolean' ? Boolean(group.runtimeActive) : undefined,
+    };
+
+    if (!byId.has(id)) order.push(id);
+
+    const prev = byId.get(id);
+    if (prev) {
+      next.nodeIds = Array.from(new Set([...(prev.nodeIds ?? []), ...next.nodeIds]));
+      if (typeof next.runtimeActive !== 'boolean' && typeof prev.runtimeActive === 'boolean') {
+        next.runtimeActive = prev.runtimeActive;
+      }
+    }
+
+    byId.set(id, next);
+  }
+
+  return order.map((id) => byId.get(id)!).filter(Boolean);
+};
 export type GroupFrame = {
   group: NodeGroup;
   left: number;
@@ -93,6 +127,8 @@ type GroupControllerOptions = {
   getContainer: () => HTMLDivElement | null;
   getAdapter: () => GraphViewAdapter | null;
   getGraphState: () => GraphState;
+  /** Extra hidden nodes owned by host UI (e.g. expanded Custom Node mother instances). */
+  getForcedHiddenNodeIds?: () => Set<string>;
   getLocalLoops: () => LocalLoop[];
   getLoopConstraintLoops: () => LocalLoop[];
   getDeployedLoopIds: () => Set<string>;
@@ -229,6 +265,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const selected = get(groupSelectionNodeIds);
     const graph = opts.getGraphState();
     const groups = get(nodeGroups);
+    const forcedHidden = opts.getForcedHiddenNodeIds?.() ?? new Set<string>();
 
     const hiddenNodeIds = new Set<string>();
     const minimizedGroupIds: string[] = [];
@@ -261,7 +298,9 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
       const type = String(node.type ?? '');
       const nextHidden =
-        hiddenNodeIds.has(id) || (isGroupDecorationNodeType(type) && hiddenGroupIds.has(groupIdFromNode(node as any)));
+        forcedHidden.has(id) ||
+        hiddenNodeIds.has(id) ||
+        (isGroupDecorationNodeType(type) && hiddenGroupIds.has(groupIdFromNode(node as any)));
       if (nextHidden) hiddenNodesEffective.add(id);
 
       const nextDisabled = disabled.has(id);
@@ -821,11 +860,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
         const added: string[] = [];
         const removed: string[] = [];
 
-	        for (const movedId of nodeIds) {
-	          const id = String(movedId);
-	          if (isGroupDecorationNodeType(typeByNodeId.get(id) ?? '')) continue;
-	          const c = getNodeCenter(id);
-	          if (!c) continue;
+          for (const movedId of nodeIds) {
+            const id = String(movedId);
+            if (isGroupDecorationNodeType(typeByNodeId.get(id) ?? '')) continue;
+            const c = getNodeCenter(id);
+            if (!c) continue;
           const inside = c.cx > bounds.left && c.cx < bounds.right && c.cy > bounds.top && c.cy < bounds.bottom;
 
           if (inside && !nextSet.has(id)) {
@@ -984,11 +1023,11 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
 
   const addNodeToGroupChain = (groupId: string, nodeId: string) => {
     const rootId = String(groupId ?? '');
-	    const createdId = String(nodeId ?? '');
-	    if (!rootId || !createdId) return;
+      const createdId = String(nodeId ?? '');
+      if (!rootId || !createdId) return;
 
-	    const createdType = String(opts.getGraphState().nodes.find((n) => String(n.id) === createdId)?.type ?? '');
-	    if (isGroupDecorationNodeType(createdType)) return;
+      const createdType = String(opts.getGraphState().nodes.find((n) => String(n.id) === createdId)?.type ?? '');
+      if (isGroupDecorationNodeType(createdType)) return;
 
     const groupsSnapshot = get(nodeGroups);
     const byId = new Map<string, NodeGroup>();
@@ -1073,13 +1112,13 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const createGroupFromSelection = () => {
-	    const selectedRaw = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
-	    const graph = opts.getGraphState();
-	    const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
-	    const selected = selectedRaw.filter((id) => {
-	      const type = String(nodeById.get(id)?.type ?? '');
-	      return !isGroupDecorationNodeType(type);
-	    });
+      const selectedRaw = Array.from(get(groupSelectionNodeIds)).map((id) => String(id));
+      const graph = opts.getGraphState();
+      const nodeById = new Map((graph.nodes ?? []).map((node) => [String(node.id), node]));
+      const selected = selectedRaw.filter((id) => {
+        const type = String(nodeById.get(id)?.type ?? '');
+        return !isGroupDecorationNodeType(type);
+      });
     if (selected.length === 0) return;
 
     const groups = get(nodeGroups);
@@ -1340,6 +1379,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
     const { byId, childrenByParentId } = buildGroupIndex(groups);
 
     const hiddenNodeIds = new Set<string>();
+    for (const nodeId of opts.getForcedHiddenNodeIds?.() ?? []) hiddenNodeIds.add(String(nodeId));
     const minimizedGroupIds: string[] = [];
     for (const g of groups) {
       if (!g.minimized) continue;
@@ -1506,7 +1546,7 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const setGroups = (groups: NodeGroup[]) => {
-    const next = Array.isArray(groups) ? groups : [];
+    const next = normalizeGroupList(groups);
     nodeGroups.set(next);
     recomputeDisabledNodes(next);
     scheduleHighlight();
@@ -1516,9 +1556,9 @@ export function createGroupController(opts: GroupControllerOptions): GroupContro
   };
 
   const appendGroups = (groups: NodeGroup[]) => {
-    const incoming = Array.isArray(groups) ? groups : [];
+    const incoming = normalizeGroupList(groups);
     if (incoming.length === 0) return;
-    nodeGroups.set([...get(nodeGroups), ...incoming]);
+    nodeGroups.set(normalizeGroupList([...get(nodeGroups), ...incoming]));
     recomputeDisabledNodes();
     scheduleHighlight();
     requestFramesUpdate();

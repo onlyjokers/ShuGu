@@ -7,6 +7,7 @@
   } from 'rete-svelte-plugin/svelte/presets/classic/types';
   import { onDestroy, tick } from 'svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
+  import { readCustomNodeState, writeCustomNodeState } from '$lib/nodes/custom-nodes/instance';
 
   type NodeExtraData = {
     width?: number;
@@ -28,6 +29,7 @@
   export let emit: (props: SvelteArea2D<ClassicScheme>) => void;
 
   let nodeEl: HTMLDivElement | null = null;
+  let customNodeState = null;
 
   // Feature: Node minimize/collapse UI (manager-only visual state).
   // Collapsing only affects layout/visibility; graph execution + connections remain intact.
@@ -38,9 +40,7 @@
     (data as any).collapsed = next;
   };
 
-  $: width = Number.isFinite(data.width) ? `${data.width}px` : '';
   $: isCollapsed = isGroupPortNode ? true : Boolean((data as any)?.collapsed);
-  $: height = !isCollapsed && Number.isFinite(data.height) ? `${data.height}px` : '';
 
   $: inputs = sortByIndex(Object.entries(data.inputs));
   $: controls = sortByIndex(Object.entries(data.controls));
@@ -79,6 +79,15 @@
   $: isGroupFrameNode = instanceType === 'group-frame';
   $: proxyDirection =
     instanceType === 'group-proxy' ? String((nodeEngine.getNode(nodeId)?.config as any)?.direction ?? 'output') : '';
+
+  $: {
+    // Keep in sync with runtime config changes (e.g. Uncouple promotes child → mother).
+    $graphStateStore;
+    customNodeState = readCustomNodeState(nodeEngine.getNode(nodeId)?.config ?? {});
+  }
+  $: isCustomNode = Boolean(customNodeState);
+  $: customRole = customNodeState?.role ?? null;
+  $: customManualGate = Boolean(customNodeState?.manualGate);
 
   let groupFrameDisabled = false;
   $: groupFrameDisabled = (() => {
@@ -170,6 +179,35 @@
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('shugu:toggle-group-disabled', { detail: { groupId } }));
   };
+
+  const toggleCustomManualGate = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!nodeId) return;
+    const instance = nodeEngine.getNode(nodeId);
+    if (!instance) return;
+    const state = readCustomNodeState(instance.config ?? {});
+    if (!state) return;
+    const next = !state.manualGate;
+    nodeEngine.updateNodeConfig(nodeId, writeCustomNodeState(instance.config ?? {}, { ...state, manualGate: next }));
+  };
+
+  const requestCustomUncouple = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!nodeId) return;
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('shugu:custom-node-uncouple', { detail: { nodeId } }));
+  };
+
+  const requestCustomExpand = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!nodeId) return;
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('shugu:custom-node-expand', { detail: { nodeId } }));
+  };
+
 
   let inputConnections: Record<string, ConnectionInfo[]> = {};
   $: if (nodeId) {
@@ -605,8 +643,8 @@
   class:group-frame={isGroupFrameNode}
   class:group-proxy-input={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection === 'input'}
   class:group-proxy-output={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection !== 'input'}
-  style:width
-  style:height
+  style:width={Number.isFinite(data.width) ? `${data.width}px` : undefined}
+  style:height={!isCollapsed && Number.isFinite(data.height) ? `${data.height}px` : undefined}
   data-testid="node"
   data-rete-node-id={data.id}
 >
@@ -635,6 +673,31 @@
       />
     {/if}
     <span class="title-label">{data.label}</span>
+    {#if isCustomNode}
+      {#if customRole === 'child'}
+        <button
+          type="button"
+          class="custom-node-uncouple"
+          aria-label="Uncoupled (fork)"
+          title="Uncoupled (fork into a new Custom Node)"
+          on:pointerdown|stopPropagation|preventDefault
+          on:click={requestCustomUncouple}
+        >
+          Uncoupled
+        </button>
+      {:else if customRole === 'mother'}
+        <button
+          type="button"
+          class="custom-node-expand"
+          aria-label="Expand node"
+          title="Expand"
+          on:pointerdown|stopPropagation|preventDefault
+          on:click={requestCustomExpand}
+        >
+          Expand
+        </button>
+      {/if}
+    {/if}
     {#if isGroupFrameNode}
       <button
         type="button"
@@ -851,7 +914,13 @@
       </div>
     {/if}
   {:else}
-    <div class="collapsed-sockets" aria-hidden="true">
+    <div
+      class="collapsed-sockets"
+      class:port-row={isGroupPortNode && instanceType === 'group-proxy'}
+      class:input={isGroupPortNode && instanceType === 'group-proxy'}
+      aria-hidden="true"
+      data-rete-node-id={data.id}
+    >
       {#each inputs as [key, input]}
         <div
           class="collapsed-socket input"
@@ -1044,6 +1113,25 @@
     pointer-events: auto;
   }
 
+  .node.group-port.group-proxy-input .collapsed-sockets,
+  .node.group-port.group-proxy-output .collapsed-sockets {
+    position: relative;
+    inset: auto;
+    pointer-events: auto;
+  }
+
+  .node.group-port.group-proxy-input .collapsed-socket,
+  .node.group-port.group-proxy-output .collapsed-socket {
+    position: static;
+    transform: none;
+  }
+
+  .node.group-port.group-proxy-input .collapsed-sockets :global(.socket),
+  .node.group-port.group-proxy-output .collapsed-sockets :global(.socket) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   /* When the Group frame is minimized, proxies should look like normal node ports:
      only expose the external socket (no "two-dot" proxy capsule). */
   .node.group-proxy-input.group-minimized .collapsed-socket.output {
@@ -1128,6 +1216,51 @@
   .group-frame-active-toggle.on .group-frame-active-thumb {
     transform: translate(16px, -50%);
   }
+
+  .custom-node-uncouple {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+  }
+
+  .custom-node-uncouple:hover {
+    background: rgba(2, 6, 23, 0.52);
+  }
+
+  .custom-node-expand {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.35);
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .custom-node-expand:hover {
+    background: rgba(2, 6, 23, 0.48);
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
 
   .group-frame-expand {
     appearance: none;
@@ -1339,15 +1472,6 @@
     flex: 0 0 auto;
   }
 
-  /* Group gate/proxy nodes render sockets without the full node chrome.
-     Avoid the standard port "outset" margins so wires attach straight. */
-  .node.group-port :global(.input-socket) {
-    margin-left: 0;
-  }
-
-  .node.group-port :global(.output-socket) {
-    margin-right: 0;
-  }
 
   :global(.output-socket.socket-disabled) {
     opacity: 0.35;

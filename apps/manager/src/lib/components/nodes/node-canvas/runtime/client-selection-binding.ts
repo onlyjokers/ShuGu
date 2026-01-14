@@ -63,6 +63,7 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
 
   const audienceClientIdsInOrder = () =>
     (get(managerState).clients ?? [])
+      .filter((c: any) => c?.connected !== false)
       .filter((c: any) => String(c?.group ?? '') !== 'display')
       .map((c: any) => String(c?.clientId ?? ''))
       .filter(Boolean);
@@ -263,13 +264,27 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
 
   const syncClientNodesFromInputs = () => {
     const clients = audienceClientIdsInOrder();
-    if (clients.length === 0) return;
-
     const engineState = get(graphStateStore);
     for (const node of engineState.nodes ?? []) {
       if (String((node as any).type) !== 'client-object') continue;
       const nodeId = String((node as any).id);
       const nodeInstance = nodeEngine.getNode(nodeId);
+      if (!nodeInstance) continue;
+
+      if (clients.length === 0) {
+        const configuredClientId =
+          typeof (nodeInstance?.config as any)?.clientId === 'string'
+            ? String((nodeInstance?.config as any).clientId)
+            : '';
+        if (configuredClientId) {
+          nodeEngine.updateNodeConfig(nodeId, { clientId: '' });
+        }
+        if (nodeInstance?.outputValues) {
+          (nodeInstance.outputValues as any).out = { clientId: '', sensors: null };
+          nodeEngine.tickTime.set(Date.now());
+        }
+        continue;
+      }
       const computed = nodeEngine.getLastComputedInputs(nodeId);
       const useComputedIndex = isInputConnected(nodeId, 'index');
       const useComputedRange = isInputConnected(nodeId, 'range');
@@ -298,4 +313,3 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
 
   return { applyClientNodeSelection, syncClientNodesFromInputs };
 }
-

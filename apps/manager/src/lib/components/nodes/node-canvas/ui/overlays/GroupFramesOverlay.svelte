@@ -11,9 +11,14 @@
   export let selectedGroupId: string | null = null;
   export let toast: { groupId: string; message: string } | null = null;
   export let gateModeGroupIds: Set<string> | null = null;
+  export let groupGateNodeIdByGroupId: Map<string, string> | null = null;
+  export let customNodeGroupIds: Set<string> | null = null;
   export let onToggleDisabled: (groupId: string) => void = () => undefined;
   export let onToggleMinimized: (groupId: string) => void = () => undefined;
   export let onToggleEditMode: (groupId: string) => void = () => undefined;
+  export let onNodalize: (groupId: string) => void = () => undefined;
+  export let onDenodalize: (groupId: string) => void = () => undefined;
+  export let onCollapseCustomNode: (groupId: string) => void = () => undefined;
   export let onDisassemble: (groupId: string) => void = () => undefined;
   export let onRename: (groupId: string, name: string) => void = () => undefined;
   export let onHeaderPointerDown: (groupId: string, event: PointerEvent) => void = () => undefined;
@@ -22,6 +27,7 @@
   let editingGroupId: string | null = null;
   let draftName = '';
   let nameInputEl: HTMLInputElement | null = null;
+  let actionCompactByGroupId: Record<string, boolean> = {};
   let k = 1;
   let tx = 0;
   let ty = 0;
@@ -64,6 +70,112 @@
     const delta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
     el.scrollLeft += delta;
   }
+
+  const mountGateSockets = (node: HTMLElement, nodeId: string | null) => {
+    let currentId = nodeId ? String(nodeId) : '';
+    let rafId = 0;
+    let retries = 0;
+    const maxRetries = 10;
+    let attached = false;
+
+    const attachSockets = () => {
+      if (!currentId) return;
+      const target = document.querySelector(
+        `.collapsed-sockets[data-rete-node-id="${currentId}"]`
+      ) as HTMLElement | null;
+      if (!target) return;
+      if (target.parentElement === node) return;
+      node.appendChild(target);
+      attached = true;
+    };
+
+    const scheduleAttach = () => {
+      if (!currentId || attached || retries >= maxRetries) return;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        retries += 1;
+        attachSockets();
+        scheduleAttach();
+      });
+    };
+
+    attachSockets();
+    scheduleAttach();
+
+    return {
+      update(nextId: string | null) {
+        currentId = nextId ? String(nextId) : '';
+        retries = 0;
+        attached = false;
+        attachSockets();
+        scheduleAttach();
+      },
+      destroy() {
+        if (rafId) cancelAnimationFrame(rafId);
+      },
+    };
+  };
+
+  const observeActionOverflow = (node: HTMLElement, groupId: string) => {
+    let currentId = String(groupId);
+    let ro: ResizeObserver | null = null;
+    let mo: MutationObserver | null = null;
+    let raf = 0;
+    const OVERFLOW_EPS = 2;
+    const EXPAND_EPS = 24;
+
+    const updateCompact = () => {
+      if (!currentId) return;
+      const hasOverflow = node.scrollWidth > node.clientWidth + OVERFLOW_EPS;
+      const current = Boolean(actionCompactByGroupId[currentId]);
+      let next = current;
+      if (!current && hasOverflow) next = true;
+      if (current && !hasOverflow && node.clientWidth - node.scrollWidth > EXPAND_EPS) next = false;
+      if (next !== current) {
+        actionCompactByGroupId = { ...actionCompactByGroupId, [currentId]: next };
+      }
+    };
+
+    const scheduleCheck = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        updateCompact();
+      });
+    };
+
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(scheduleCheck);
+      ro.observe(node);
+    }
+
+    if (typeof MutationObserver !== 'undefined') {
+      mo = new MutationObserver(scheduleCheck);
+      mo.observe(node, { childList: true, subtree: true, characterData: true });
+    }
+
+    scheduleCheck();
+
+    return {
+      update(nextId: string) {
+        if (currentId && currentId !== nextId) {
+          const { [currentId]: _removed, ...rest } = actionCompactByGroupId;
+          actionCompactByGroupId = rest;
+        }
+        currentId = String(nextId);
+        scheduleCheck();
+      },
+      destroy() {
+        if (raf) cancelAnimationFrame(raf);
+        ro?.disconnect();
+        mo?.disconnect();
+        if (currentId && currentId in actionCompactByGroupId) {
+          const { [currentId]: _removed, ...rest } = actionCompactByGroupId;
+          actionCompactByGroupId = rest;
+        }
+      },
+    };
+  };
 </script>
 
 {#if frames.length > 0}
@@ -72,11 +184,12 @@
       {@const group = frame.group}
       {@const isEditing = editModeGroupId === group.id}
       {@const toastMessage = toast?.groupId === group.id ? toast.message : ''}
-      {@const showCount = !isTiny}
       {@const runtimeGateClosed = group.runtimeActive === false}
       {@const gateClosed = !isRunning || frame.effectiveDisabled}
       {@const isGateMode = Boolean(gateModeGroupIds?.has?.(group.id))}
       {@const isMinimized = Boolean(group.minimized)}
+      {@const isCustomNodeGroup = Boolean(customNodeGroupIds?.has?.(group.id))}
+      {@const isActionsCompact = Boolean(actionCompactByGroupId[String(group.id)])}
       {@const highlightSide = edgeHighlight?.groupId === group.id ? edgeHighlight.side : null}
       {@const isSelected = selectedGroupId === group.id}
       {@const gateReason = !isRunning
@@ -88,18 +201,29 @@
               ? 'Input gate closed'
               : 'Parent gate closed'
           : 'Gate open'}
-	      {#if !isMinimized}
-	        <div
-	          class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''} {isSelected ? 'selected' : ''} {highlightSide === 'input' ? 'edge-highlight-input' : ''} {highlightSide === 'output' ? 'edge-highlight-output' : ''}"
-	          style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
-	        >
-	          <div class="group-frame-header">
-	            <div class="group-frame-title-row">
-	              <div
-	                class="group-frame-gate-port"
-	                title="Group gate input (boolean)"
-                aria-hidden="true"
-              />
+        {#if !isMinimized}
+          <div
+            class="group-frame {gateClosed ? 'disabled' : ''} {isEditing ? 'editing' : ''} {isSelected ? 'selected' : ''} {highlightSide === 'input' ? 'edge-highlight-input' : ''} {highlightSide === 'output' ? 'edge-highlight-output' : ''}"
+            style="left: {frame.left}px; top: {frame.top}px; width: {frame.width}px; height: {frame.height}px;"
+          >
+            <div
+              class="group-frame-header"
+            >
+              <div class="group-frame-title-row">
+                <div
+                  class="group-frame-gate-sockets"
+                  aria-hidden="true"
+                  use:mountGateSockets={groupGateNodeIdByGroupId?.get(String(group.id)) ?? null}
+                />
+                <button
+                  type="button"
+                  class="group-frame-drag-handle"
+                  title="Drag frame"
+                  aria-label="Drag frame"
+                  on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
+                >
+                  ::
+                </button>
             {#if editingGroupId === group.id}
               <div class="group-frame-title editing">
                 <input
@@ -114,49 +238,91 @@
                   on:blur={commitEdit}
                 />
               </div>
-	            {:else}
-	              <button
-	                type="button"
-	                class="group-frame-title"
-	                on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
-	                on:click={() => startEdit(group)}
-	                on:keydown={(e) => {
-	                  if (e.key === 'Enter' || e.key === ' ') startEdit(group);
-	                }}
+              {:else}
+                <button
+                  type="button"
+                  class="group-frame-title"
+                  on:pointerdown|stopPropagation={(event) => onHeaderPointerDown(String(group.id), event)}
+                  on:click={() => startEdit(group)}
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') startEdit(group);
+                  }}
                 title={gateReason}
               >
                 <span class="group-frame-title-name">{group.name ?? 'Group'}</span>
-                {#if showCount}
-                  <span class="group-frame-title-count">{group.nodeIds?.length ?? 0} nodes</span>
-                {/if}
-                {#if !isGateMode}
-                  <span class="group-frame-gate {gateClosed ? 'closed' : 'open'}">
-                    {gateClosed ? 'Gate: Closed' : 'Gate: Open'}
-                  </span>
-                {/if}
               </button>
             {/if}
             </div>
-            <div class="group-frame-actions" on:wheel={handleActionsWheel}>
-              <Button variant="ghost" size="sm" on:click={() => onToggleMinimized(group.id)}>
-                Minimize
-              </Button>
-              <Button
-                variant={isEditing ? 'primary' : 'ghost'}
-                size="sm"
-                on:click={() => onToggleEditMode(group.id)}
-              >
-                {isEditing ? 'Editing…' : 'Edit Group'}
-              </Button>
-              <Button variant="ghost" size="sm" on:click={() => onDisassemble(group.id)}>
-                Disassemble
-              </Button>
+            <div
+              class="group-frame-actions"
+              on:wheel={handleActionsWheel}
+              use:observeActionOverflow={String(group.id)}
+            >
+              {#if isCustomNodeGroup}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  ariaLabel="Collapse"
+                  title="Collapse"
+                  on:click={() => onCollapseCustomNode(group.id)}
+                >
+                  {#if isActionsCompact}▣{:else}Collapse{/if}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  ariaLabel="Denodalize"
+                  title="Denodalize"
+                  on:click={() => onDenodalize(group.id)}
+                >
+                  {#if isActionsCompact}↩{:else}Denodalize{/if}
+                </Button>
+              {:else}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  ariaLabel="Nodalization"
+                  title="Nodalization"
+                  on:click={() => onNodalize(group.id)}
+                >
+                  {#if isActionsCompact}⧉{:else}Nodalization{/if}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  ariaLabel="Minimize"
+                  title="Minimize"
+                  on:click={() => onToggleMinimized(group.id)}
+                >
+                  {#if isActionsCompact}▁{:else}Minimize{/if}
+                </Button>
+                <Button
+                  variant={isEditing ? 'primary' : 'ghost'}
+                  size="sm"
+                  ariaLabel={isEditing ? 'Editing' : 'Edit Group'}
+                  title={isEditing ? 'Editing' : 'Edit Group'}
+                  on:click={() => onToggleEditMode(group.id)}
+                >
+                  {#if isActionsCompact}✎{:else}{isEditing ? 'Editing…' : 'Edit Group'}{/if}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  ariaLabel="Disassemble"
+                  title="Disassemble"
+                  on:click={() => onDisassemble(group.id)}
+                >
+                  {#if isActionsCompact}✂{:else}Disassemble{/if}
+                </Button>
+              {/if}
               <Button
                 variant={group.disabled ? 'primary' : 'ghost'}
                 size="sm"
+                ariaLabel={group.disabled ? 'Activate group' : 'Deactivate group'}
+                title={group.disabled ? 'Activate group' : 'Deactivate group'}
                 on:click={() => onToggleDisabled(group.id)}
               >
-                {group.disabled ? 'Activate group' : 'Deactivate group'}
+                {#if isActionsCompact}⏻{:else}{group.disabled ? 'Activate group' : 'Deactivate group'}{/if}
               </Button>
             </div>
           </div>
@@ -237,22 +403,22 @@
     animation-name: group-frame-pulse-disabled;
   }
 
-	  .group-frame-header {
-	    position: absolute;
-	    top: 12px;
-	    left: 18px;
-	    right: 18px;
-	    display: flex;
-	    align-items: center;
-	    justify-content: space-between;
-	    gap: 14px;
-	    min-width: 0;
-	    overflow: hidden;
-	    pointer-events: none;
-	    user-select: none;
-	    -webkit-user-select: none;
-	    touch-action: none;
-	  }
+  .group-frame-header {
+    position: absolute;
+    top: 12px;
+    left: 18px;
+    right: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    min-width: 0;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
 
   .group-frame-title-row {
     display: flex;
@@ -263,18 +429,68 @@
     overflow: hidden;
   }
 
-  .group-frame-gate-port {
-    width: 14px;
-    height: 14px;
-    border-radius: 999px;
-    border: 2px solid rgba(255, 255, 255, 0.35);
-    background: rgba(245, 158, 11, 0.95);
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.22),
-      0 10px 24px rgba(0, 0, 0, 0.36);
-    pointer-events: none;
-    /* Keep spacing in the title row but avoid rendering a second "gate dot" (the actual socket is the dot). */
-    opacity: 0;
+  .group-frame-drag-handle {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    flex: 0 1 26px;
+    min-width: 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(2, 6, 23, 0.45);
+    color: rgba(148, 163, 184, 0.9);
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1;
+    letter-spacing: 1px;
+    pointer-events: auto;
+    cursor: grab;
+  }
+
+  .group-frame-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  .group-frame-gate-sockets {
+    display: inline-flex;
+    align-items: center;
+    pointer-events: auto;
+  }
+
+  .group-frame-gate-sockets :global(.collapsed-sockets) {
+    position: static;
+    inset: auto;
+    display: inline-flex;
+    align-items: center;
+    pointer-events: auto;
+  }
+
+  .group-frame-gate-sockets :global(.collapsed-socket) {
+    position: static;
+    transform: none;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  .group-frame-gate-sockets :global(.socket) {
+    width: 14px !important;
+    height: 14px !important;
+    margin: 0 !important;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .group-frame-gate-sockets :global(.input-socket),
+  .group-frame-gate-sockets :global(.output-socket) {
+    margin: 0 !important;
   }
 
   .group-frame-header:active,
@@ -287,7 +503,7 @@
     appearance: none;
     display: inline-flex;
     align-items: center;
-    height: 22px;
+    height: 26px;
     padding: 0 10px;
     border-radius: 999px;
     font-size: 11px;
@@ -299,10 +515,10 @@
     white-space: nowrap;
     gap: 8px;
     cursor: pointer;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
     max-width: 100%;
-    overflow: hidden;
+    pointer-events: auto;
   }
 
   .group-frame-title.editing {

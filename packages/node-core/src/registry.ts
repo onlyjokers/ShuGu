@@ -7,6 +7,10 @@ export class NodeRegistry {
     this.definitions.set(definition.type, definition);
   }
 
+  unregister(type: string): void {
+    this.definitions.delete(type);
+  }
+
   get(type: string): NodeDefinition | undefined {
     return this.definitions.get(type);
   }

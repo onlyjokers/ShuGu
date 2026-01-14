@@ -229,6 +229,10 @@ export class NodeRuntime {
     this.compile();
   }
 
+  step(): void {
+    this.tick();
+  }
+
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => this.tick(), this.tickIntervalMs);

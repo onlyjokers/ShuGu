@@ -23,8 +23,8 @@ Status: Draft
 - [x] Phase 1.5：Pre-Phase2 Gate（基线固化 / 架构地图 / 质量闸门）
 - [x] Phase 2：删除旧实现（只保留一套路径）+ 关键护栏落地（防止再变屎山）
 - [x] Phase 2.2：组织形式对齐（同层级能力统一入口与目录归属）
-- [ ] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
-- [ ] Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
+- [x] Phase 2.3：Server 语义收敛（Protocol / 最小认证 / Presence）
+- [x] Phase 2.5：Nodalization（自定义节点 / 母子节点 / Uncoupled / 循环嵌套防止）+ Group 持久化
 - [ ] Phase 3：Root/Manager 形态重构（同一 app：`/root` + `/manager`，强制 code-splitting）
 - [ ] Phase 4：ControlPlane v2（授权/转交/回溯/收回/终止；Server 仲裁可开关）
 - [ ] Phase 5：分布式执行器 v2（授权 client 运行子图并可控他端）
@@ -728,40 +728,143 @@ Graph 侧只看到：
 - 代码库中“同类能力两套通路并存”的核心历史包袱被清除（以依赖图与目录结构为证）。
 - `pnpm guard:deps` ✅，`pnpm lint` ✅（0 errors）。
 
-## Phase 2.5：Group UX 收尾（Gate 内建 + Proxy 边界端口 + Minimize）
+## Phase 2.5：Nodalization（自定义节点 / 母子节点 / Uncoupled / 循环嵌套防止）+ Group 持久化
 
-目标：在进入 Phase 3 引入新形态/新功能之前，先把 NodeCanvas 的 Group 语义与交互“收口成最终可维护形态”，避免继续把复杂度带入 Root/Manager 拆分与 ControlPlane v2。
+> 背景：此前尝试过“Group 最小化后伪装成 Node（但 ports/行为实际托管在别处）”的方案，属于双轨制伪 Node，复制/撤销/选中/连线等都会持续出 bug。
+> 本 Phase 选择把问题一次性做对：**让 Group 通过 Nodalization 生成真正注册到 node-picker 的自定义节点**，从根上消除伪 Node。
 
-范围（不引入 ControlPlane 新能力；只治理 NodeCanvas Group 的设计一致性与可读性）：
+目标（Phase 3 引入新能力前必须完成）：
 
-- **A) 移除 Activate 节点：把 Gate 变成 Group 的固有属性**
-  - Group Header 左侧提供一个可连线的 Gate 输入端口（boolean，未连线默认 `true`）。
-  - Group Header 保留手动开关（Active/Deactivate）；最终 gate = `manual AND wiredInput`。
-  - Gate 输入端口禁止来源于该 Group subtree（含子 Group），避免“连线到自己内部”的语义混乱。
-  - 旧项目自动迁移：历史 `group-activate`（可能多个）合并为 AND；若来源不是 boolean，自动插入数值阈值转换节点（见 D）。
+- 让 “用 Group 组装 → 一键变成真实 Node 类型（可复用/可复制/可导入导出）” 成为长期扩展机制。
+- 修复“刷新后 Group 消失”的持久化缺口，避免后续 Phase 3/4 再被历史 UI 元数据拖死。
+- 清晰冻结：Gate 语义、母/子节点、结构同步/参数独立、以及嵌套与循环限制。
 
-- **B) Group Minimize：frame ⇄ node 形态切换**
-  - Frame header 增加最小化按钮，最小化后 Group 显示为 node 形态（保留 Gate 端口 + 手动开关）。
-  - 最小化时隐藏 subtree 的内部节点与内部连线，仅保留边界代理端口与对外连线，保证阅读性。
-  - 允许随时展开恢复编辑。
+范围（本 Phase 不引入 ControlPlane 新能力；只治理 NodeCanvas + node-core 运行/导出链路的可维护形态）：
 
-- **C) Proxy 边界端口：跨边界连线必须挂在边界点上**
-  - 所有跨 Group 边界的连线自动变为“代理端口转发”，避免线条穿墙（含多层嵌套：每层边界都生成代理点）。
-  - 代理点既可自动生成（已有跨边界连线），也可手动预置（即使尚未连线）。
-  - 手动 UX：拖线靠近 Group 左边缘（输入）/右边缘（输出）时边缘高亮，松开创建代理点（线保持连着）。
-  - 输出代理点按“一条外连线一个点”建模（每个输出代理点仅允许 1 条外连线）。
-  - 自动生成的代理点：当其对应外连线被删除后自动消失；手动 pinned 的代理点保留。
+### 2.5.1 术语与数据模型（冻结）
 
-- **D) 新增节点：Number to Boolean**
-  - 新增 Logic 节点 `Number to Boolean`：输入 `number` 与 `trigger number`，当 `number >= trigger` 输出 `true` 否则 `false`。
-  - 用于旧 Activate 输入的数值/any 类型迁移为 boolean gate。
+- **Custom Node Definition**：一个可复用的子图模板（会出现在 node-picker）。
+- **Mother instance（母节点实例）**：definition 的唯一编辑入口（可 Expand / 可改结构）。
+  - 约束：复制母节点只会生成 **子节点实例**（避免出现多个母节点同时编辑同一个 definition）。
+  - node-picker 只展示“拥有母节点实例”的 definition（没有母节点则视为不存在）。
+- **Child instance（子节点实例 / coupled）**：从 node-picker 创建或复制产生；不能 Expand；拥有 `Uncoupled` 一次性按钮。
+- **Uncoupled**：子节点分叉为新 definition（新母节点定义）；该实例自身 **groupId 保持不变**，但 `definitionId` 切换为新的。
+- **ID 规则（你已确认）**：
+  - `groupId` 是**实例级唯一**（复制产生的新实例也必须生成新 groupId；全工程不能重复）。
+  - 母子共享结构靠 `definitionId` 关联；普通节点没有 groupId。
+  - 命名只有一层：`definitionName`（母节点改名会同步 node-picker 以及所有实例标题）。
+- **结构同步 vs 参数同步（你已确认）**：
+  - 母节点对已存在子节点：只同步 **结构（节点/连线/端口）**，不同步内部参数。
+  - 子节点内部参数是实例独立的；复制子节点实例时，内部参数状态完整复制。
+  - 默认参数（defaults）只在你点 `Update Defaults` 时更新；导出时读取 definition 存储的 defaults。
 
-验收：
+### 2.5.2 Gate 语义（替代 Activate 节点）
 
-- 不再出现 `Activate` 节点 UI；Gate 输入端口只存在于 Group header / minimized node 形态。
-- 任意跨边界连线都不再“穿墙”，且嵌套 Group 会在每一层边界生成代理点。
-- Minimize/Expand 不破坏功能：展开后内部节点/连线可恢复编辑；最小化后对外连线仍可正确工作。
-- 旧项目导入/打开自动迁移成功（含多 Activate 合并 AND、数值输入自动转换），不需要手工修图才能运行。
+- 移除 `Activate` 节点：Gate 变为 Custom Node 的固有属性。
+- Gate = `manualToggle AND wiredGateInput`：
+  - 折叠形态：Gate 输入作为普通 input port-row；并且母节点/子节点都显示手动 toggle。
+  - wired 未连线视为 `true`。
+- 旧项目迁移：历史 `group-activate`（可能多个）合并为 AND；若来源非 boolean，自动插入数值阈值转换节点（见 2.5.6）。
+
+### 2.5.3 Nodalization：Group → 真实自定义节点（核心）
+
+- 入口：在 Group frame actions 增加 `Nodalization`。
+- 点击 Nodalization 后：
+  - **真正封装**：把 Group 内部节点/连线从主 Graph 移走，存入新建 definition 的子图模板；主画布只剩一个 Custom Node（母节点实例）。
+  - 该母节点实例保留原 groupId（作为实例号），并成为唯一可 Expand 的编辑入口。
+  - node-picker 立即出现该 definition（因为母节点存在）。
+- 在“母节点 Expand 的内部编辑环境”里也允许 Nodalization：
+  - 新产生的母节点实例在内部原地出现（嵌套母节点）。
+  - 复制顶层母节点/从 node-picker 创建子节点实例时，内部嵌套母节点会在该实例里降级为子节点（仍引用各自 definition）。
+
+### 2.5.4 Expand（原地展开成 frame）与交互（冻结）
+
+- Expand 形态：原地展开为 frame（类似 Group frame），但本质是母节点的内部编辑视图。
+- **可同时展开多个母节点**；展开时 frame 外部画布保持可交互（不锁外部）。
+- 内部坐标系：内部节点坐标存为相对 frame；拖动母节点 frame 时内部节点整体跟着移动。
+- 对外端口呈现：Expand 后对外端口挂在 frame 左/右边缘（外部连线连接到边缘端口点）。
+- 允许通过拖拽跨边界改变归属：外部节点拖进 frame 变内部节点；内部节点拖出变外部节点；跨边界连线需自动改为边界端口代理（见 2.5.5）。
+- Gate 模式下：frame 形态不显示旧的 `group-frame-gate`（保留 Gate 语义即可）。
+
+### 2.5.5 边界端口代理（Proxy Ports）
+
+> 目的：彻底禁止“穿墙连线”，并为 Custom Node ports/compile 提供稳定映射。
+
+- 所有跨边界连线必须挂在边界代理点上（多层嵌套每层都生成代理）。
+- 代理点来源：自动生成（已有跨边界连线）+ 手动预置（即使尚未连线）。
+- 创建 UX（你已描述）：拖线靠近 frame 左边缘（输入）/右边缘（输出）边缘高亮，松开创建代理点（线保持连着）。
+- 连接约束：**输入最多 1 条连接；输出可多条**（与节点系统一致）。
+- 代理点行为：
+  - 自动生成的代理点：当其不再代理任何内部连线时自动消失。
+  - 手动 pinned 的代理点保留（即使暂时没被连线）。
+- 类型/命名（你已确认）：
+  - 代理点类型必须继承被代理端口类型（不允许显示成 any）。
+  - 端口 label 默认继承内部端口名，但允许手动重命名覆盖。
+- 布局与拖拽（你已确认）：
+  - 边缘代理点可沿边缘上下拖动（只能竖向），位置持久化。
+
+### 2.5.6 新增节点：Number to Boolean（并确保可在 node-picker 找到）
+
+- 新增 Logic 节点 `Number to Boolean`：
+  - 输入：`number` 与 `trigger number`
+  - 输出：`number >= trigger ? true : false`
+- 目标：作为旧 Activate 输入的“数值/any → boolean gate”迁移工具。
+- 验收：node-picker 可搜索到并可创建该节点（修复缺失注册的问题）。
+
+### 2.5.7 Uncoupled（子节点分叉）+ 循环嵌套防止
+
+- 子节点点击 `Uncoupled`：
+  - 生成新 definition（新 `definitionId`），该实例原地升级为新母节点实例（可 Expand）。
+  - 该实例 `groupId` 保持不变。
+  - `Uncoupled` 不递归：只作用于当前这个实例本身，不会联动其内部嵌套的子节点/母节点的耦合状态。
+- 禁止循环嵌套（你已确认）：包含“自己包含自己”以及 A 包含 B 且 B 包含 A。
+  - 一旦检测到会形成循环：直接阻止并提示原因（不创建/不导入/不粘贴）。
+
+### 2.5.8 导入/导出（跨项目复用）
+
+- 导出格式：单文件 `*.shugu-node.json`。
+- 导出内容：
+  - 递归打包依赖：若 definition 内包含其它 Custom Node 子节点，则必须连带其母节点 definitions 一并打包。
+  - defaults：导出使用 definition 存储的 defaults（不取母节点当前参数快照）。
+- 导入行为（你已确认）：
+  - 导入后：对文件内所有 definitions（含依赖）自动生成各自母节点实例，并出现在 node-picker。
+  - 导入冲突：视为“复制品导入”——生成新的 ids（避免覆盖）。
+  - 循环检测：若导入会造成循环嵌套，直接拒绝导入并提示。
+
+### 2.5.9 删除语义（母节点 / 子节点 / 嵌套母节点）
+
+- 删除母节点实例时弹确认：
+  - 确认后：删除该 definition 以及所有仍 coupled 的子节点实例；已经 Uncoupled 的分支不受影响。
+- 若母节点内部包含嵌套母节点：
+  - 删除时弹窗列出所有嵌套母节点，逐个选择：
+    - 随 A 级联删除（删除其 definition + coupled 子节点实例）
+    - 提升保留（把其母节点实例搬到外层画布，保持 node-picker 可见）
+
+### 2.5.10 Project 持久化补齐：Group/CustomNode 刷新后不丢
+
+现状问题：刷新后 Group 消失，说明当前 autosave/restore 没有把 Group 元数据纳入持久化。
+
+- 目标：至少持久化并恢复：
+  - Group：`id/parentId/name/nodeIds/disabled/minimized/runtimeActive`（以及边界端口/代理点的状态与布局）
+  - Custom Nodes：definitions（子图模板、ports、defaults、依赖信息）+ instances（type/definitionId/groupId/手动 gate 状态等）
+- 要求：`loadLocalProject()` 恢复时必须同时恢复 graph + groups + custom definitions，避免 group-port 清理逻辑把 gate/proxy/frame 当成“孤儿节点”删掉。
+
+### 2.5.11 deploy/patch：展开编译（flatten）为普通节点图
+
+- 你已确认：deploy 到 client 时自动展开编译为普通节点图，client 不需要认识 Custom Node 类型。
+- 约束：展开编译必须保证：
+  - 每个实例的内部节点拥有独立 id（避免实例之间状态串扰）。
+  - 子节点实例的内部参数状态正确随实例携带（复制=复制）。
+  - 结构变化后端口迁移规则按 stable portKey 尽量保留，匹配不到则断线。
+
+验收（Phase 2.5 结束门槛）：
+
+- **没有伪 Node**：Custom Node 是真实注册节点；复制/撤销/选择/连线行为与普通节点一致。
+- Gate 语义稳定：`manual AND wired`；所有实例都有 toggle；旧 Activate 迁移可用。
+- Expand/折叠/多重展开/跨边界拖拽都可用，且不会产生穿墙连线；边界代理点类型正确、可沿边缘拖动并持久化。
+- 导入/导出单文件可用：递归依赖打包；导入自动生成母节点并出现在 node-picker；循环嵌套会被阻止。
+- 刷新浏览器后 Group/Custom Nodes 不丢（autosave/restore OK）。
+- deploy/patch 在 client 端运行正确（flatten 后无 Custom Node 类型残留）。
 
 ---
 

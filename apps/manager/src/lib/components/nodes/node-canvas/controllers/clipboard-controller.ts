@@ -7,6 +7,12 @@ import type { Connection as EngineConnection, GraphState, NodeInstance } from '$
 import type { GraphViewAdapter } from '../adapters';
 import type { GroupController, NodeGroup } from './group-controller';
 import { groupIdFromNode, isGroupPortNodeType } from '../utils/group-port-utils';
+import {
+  cloneInternalGraphForNewInstance,
+  generateCustomNodeGroupId,
+  readCustomNodeState,
+  writeCustomNodeState,
+} from '$lib/nodes/custom-nodes/instance';
 
 export type ClipboardController = {
   copySelectedNodes: () => boolean;
@@ -49,6 +55,19 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
   let clipboardGroups: NodeGroup[] = [];
   let clipboardRootGroupId: string | null = null;
   let clipboardPasteIndex = 0;
+
+  const rewriteCustomNodeConfigForPaste = (config: Record<string, unknown>): Record<string, unknown> => {
+    const state = readCustomNodeState(config);
+    if (!state) return config;
+
+    const groupId = generateCustomNodeGroupId();
+    return writeCustomNodeState(config, {
+      ...state,
+      groupId,
+      role: 'child',
+      internal: cloneInternalGraphForNewInstance(state.internal, groupId),
+    });
+  };
 
   const cloneNodeInstance = (
     node: NodeInstance,
@@ -252,13 +271,15 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
       for (const node of clipboardNodes) {
         const newId = generateId();
         const position = { x: node.position.x + offsetX, y: node.position.y + offsetY };
-        const config: Record<string, unknown> = { ...(node.config ?? {}) };
+        let config: Record<string, unknown> = { ...(node.config ?? {}) };
 
         if (isGroupPortNodeType(String(node.type ?? ''))) {
           const oldGroupId = config.groupId ? String(config.groupId) : '';
           const mapped = oldGroupId ? groupIdMap.get(oldGroupId) : null;
           if (mapped) config.groupId = mapped;
         }
+
+        config = rewriteCustomNodeConfigForPaste(config);
 
         const newNode: NodeInstance = {
           id: newId,
@@ -362,11 +383,12 @@ export function createClipboardController(opts: CreateClipboardControllerOptions
     for (const node of clipboardNodes) {
       const newId = generateId();
       const position = { x: node.position.x + offsetX, y: node.position.y + offsetY };
+      const config = rewriteCustomNodeConfigForPaste({ ...(node.config ?? {}) });
       const newNode: NodeInstance = {
         id: newId,
         type: node.type,
         position,
-        config: { ...(node.config ?? {}) },
+        config,
         inputValues: { ...(node.inputValues ?? {}) },
         outputValues: { ...(node.outputValues ?? {}) },
       };

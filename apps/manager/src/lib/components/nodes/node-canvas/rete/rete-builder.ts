@@ -7,6 +7,8 @@ import type { AreaPlugin } from 'rete-area-plugin';
 import type { NodeInstance, NodePort, PortType, Connection as EngineConnection } from '$lib/nodes/types';
 import type { NodeRegistry } from '@shugu/node-core';
 import { audienceClients } from '$lib/stores/manager';
+import { CUSTOM_NODE_TYPE_PREFIX } from '$lib/nodes/custom-nodes/store';
+import { readCustomNodeState, writeCustomNodeState } from '$lib/nodes/custom-nodes/instance';
 import {
   BooleanControl,
   ClientPickerControl,
@@ -243,6 +245,15 @@ export function createReteBuilder(opts: ReteBuilderOptions): ReteBuilder {
               sendNodeOverride(instance.id, 'input', input.id, value);
               if (instance.type === 'client-object' && input.id === 'random') {
                 opts.onClientNodeRandom?.(instance.id, value);
+              }
+              if (String(instance.type).startsWith(CUSTOM_NODE_TYPE_PREFIX) && input.id === 'gate') {
+                const state = readCustomNodeState(instance.config ?? {});
+                if (state) {
+                  nodeEngine.updateNodeConfig(
+                    instance.id,
+                    writeCustomNodeState(instance.config ?? {}, { ...state, manualGate: Boolean(value) } as any)
+                  );
+                }
               }
             },
           });

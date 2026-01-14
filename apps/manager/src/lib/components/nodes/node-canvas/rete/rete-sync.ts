@@ -5,6 +5,7 @@ import { ClassicPreset, type NodeEditor } from 'rete';
 import type { AreaPlugin } from 'rete-area-plugin';
 import type { NodeRegistry } from '@shugu/node-core';
 import type { Connection as EngineConnection, GraphState, NodeInstance } from '$lib/nodes/types';
+import { CUSTOM_NODE_TYPE_PREFIX } from '$lib/nodes/custom-nodes/store';
 
 type AnyAreaPlugin = AreaPlugin<any, any>;
 
@@ -36,6 +37,25 @@ export type GraphSyncController = {
 export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
   let queuedGraphState: { nodes: NodeInstance[]; connections: EngineConnection[] } | null = null;
   let syncLoop: Promise<void> | null = null;
+
+  const setEquals = (a: Set<string>, b: Set<string>): boolean => {
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+      if (!b.has(value)) return false;
+    }
+    return true;
+  };
+
+  const shouldRebuildCustomNode = (instance: NodeInstance, reteNode: any): boolean => {
+    if (!String(instance.type ?? '').startsWith(CUSTOM_NODE_TYPE_PREFIX)) return false;
+    const def = opts.nodeRegistry.get(String(instance.type));
+    if (!def) return false;
+    const expectedInputs = new Set((def.inputs ?? []).map((p) => String(p.id ?? '')));
+    const expectedOutputs = new Set((def.outputs ?? []).map((p) => String(p.id ?? '')));
+    const actualInputs = new Set(Object.keys(reteNode?.inputs ?? {}));
+    const actualOutputs = new Set(Object.keys(reteNode?.outputs ?? {}));
+    return !setEquals(expectedInputs, actualInputs) || !setEquals(expectedOutputs, actualOutputs);
+  };
 
   const ensureCmdAggregatorInputs = async (
     instance: NodeInstance,
@@ -114,6 +134,15 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
 
       for (const n of state.nodes) {
         let reteNode = opts.nodeMap.get(n.id);
+        if (reteNode && shouldRebuildCustomNode(n, reteNode)) {
+          try {
+            await opts.editor.removeNode(n.id);
+          } catch {
+            // ignore
+          }
+          opts.nodeMap.delete(n.id);
+          reteNode = null;
+        }
         if (!reteNode) {
           const existing = opts.editor.getNode(n.id);
           if (existing) {

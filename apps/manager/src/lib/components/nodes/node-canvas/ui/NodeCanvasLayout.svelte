@@ -113,13 +113,19 @@
 
   :global(.node-canvas-container .node.group-port.group-proxy-input),
   :global(.node-canvas-container .node.group-port.group-proxy-output) {
-    width: 48px !important;
-    height: 20px !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
     box-sizing: border-box !important;
-    background: rgba(2, 6, 23, 0.52) !important;
-    border: 1px solid rgba(148, 163, 184, 0.28) !important;
-    border-radius: 999px !important;
-    cursor: ns-resize !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    cursor: pointer !important;
     z-index: 6 !important;
   }
 
@@ -198,11 +204,6 @@
     background: rgba(99, 102, 241, 0.95) !important;
   }
 
-  /* Group Port nodes use collapsed sockets; remove margins so wires attach straight to the edge sockets. */
-  :global(.node-canvas-container .node.group-port .socket) {
-    margin: 0 !important;
-  }
-
   :global(.node-canvas-container .socket[title='number']),
   :global(.node-canvas-container .socket.port-number) {
     background: rgba(34, 197, 94, 0.92) !important;
@@ -274,8 +275,4 @@
     margin: 0 !important;
   }
 
-  :global(.node-canvas-container .node.group-port .output-socket),
-  :global(.node-canvas-container .node.group-port .input-socket) {
-    margin: 0 !important;
-  }
 </style>

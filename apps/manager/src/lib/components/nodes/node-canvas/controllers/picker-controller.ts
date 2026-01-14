@@ -1,10 +1,12 @@
 /**
  * Purpose: Node picker controller (add/connect) for the node canvas.
  */
-import { derived, get, writable } from 'svelte/store';
+import { derived, get, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
 import type { NodeRegistry } from '@shugu/node-core';
-import type { Connection as EngineConnection, NodePort, PortType } from '$lib/nodes/types';
+import type { Connection as EngineConnection, GraphState, NodePort, PortType } from '$lib/nodes/types';
+import { CUSTOM_NODE_TYPE_PREFIX } from '$lib/nodes/custom-nodes/store';
+import { readCustomNodeState } from '$lib/nodes/custom-nodes/instance';
 
 export type PickerMode = 'add' | 'connect';
 export type SocketData = { nodeId: string; side: 'input' | 'output'; key: string };
@@ -28,9 +30,17 @@ type PickerControllerOptions = {
   bestMatchingPort: (ports: NodePort[], requiredType: PortType, side: 'input' | 'output') => NodePort | null;
   addNode: (type: string, position?: { x: number; y: number }) => string | undefined;
   addConnection: (conn: EngineConnection) => void;
+  graphStateStore: Readable<GraphState>;
 };
 
 const PICKER_HISTORY_KEY = 'shugu.nodePickerHistory.v1';
+
+const normalizeSearchQuery = (raw: string): string => {
+  const q = raw.trim().toLowerCase();
+  if (!q) return '';
+  // Common typos to make search forgiving (e.g. "Bollean" -> "Boolean").
+  return q.replace(/bollean/g, 'boolean').replace(/boolen/g, 'boolean').replace(/bolean/g, 'boolean');
+};
 
 const readUsageMap = (): UsageMap => {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined') return {};
@@ -67,9 +77,22 @@ export function createPickerController(opts: PickerControllerOptions) {
   let pickerElement: HTMLDivElement | null = null;
   let lastConnectPickerOpenedAt = 0;
 
-  const itemsByCategory = derived([mode, query, initialSocket], ([$mode, $query, $initialSocket]) => {
+  const itemsByCategory = derived(
+    [mode, query, initialSocket, opts.graphStateStore],
+    ([$mode, $query, $initialSocket, $graphState]) => {
     const map = new Map<string, PickerItem[]>();
-    const q = $query.trim().toLowerCase();
+    const q = normalizeSearchQuery($query);
+    const nodes = Array.isArray($graphState?.nodes) ? $graphState.nodes : [];
+    const motherDefinitions = new Set<string>();
+    for (const node of nodes) {
+      const state = readCustomNodeState((node as any)?.config ?? {});
+      if (state?.role === 'mother') motherDefinitions.add(String(state.definitionId));
+    }
+    const isCustomNodeAvailable = (type: string): boolean => {
+      if (!String(type).startsWith(CUSTOM_NODE_TYPE_PREFIX)) return true;
+      const defId = String(type).slice(CUSTOM_NODE_TYPE_PREFIX.length);
+      return Boolean(defId && motherDefinitions.has(defId));
+    };
 
     const addItem = (item: PickerItem) => {
       if (q) {
@@ -89,6 +112,7 @@ export function createPickerController(opts: PickerControllerOptions) {
 
       for (const def of opts.nodeRegistry.list()) {
         if (String(def.category ?? '') === 'Internal') continue;
+        if (!isCustomNodeAvailable(def.type)) continue;
         const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
         const match = opts.bestMatchingPort(ports, requiredType, neededSide);
         if (!match) continue;
@@ -108,6 +132,7 @@ export function createPickerController(opts: PickerControllerOptions) {
     } else {
       for (const def of opts.nodeRegistry.list()) {
         if (String(def.category ?? '') === 'Internal') continue;
+        if (!isCustomNodeAvailable(def.type)) continue;
         addItem({ type: def.type, label: def.label, category: def.category });
       }
     }

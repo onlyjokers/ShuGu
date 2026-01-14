@@ -36,6 +36,8 @@
   export let onMenuPick: (action: () => void) => void = (action) => action();
   export let onImportGraph: () => void = () => undefined;
   export let onExportGraph: () => void = () => undefined;
+  export let onImportCustomNode: () => void = () => undefined;
+  export let onExportCustomNode: () => void = () => undefined;
   export let onImportTemplates: () => void = () => undefined;
   export let onExportTemplates: () => void = () => undefined;
   export let onToggleExecutorLogs: () => void = () => undefined;
@@ -198,6 +200,21 @@
               on:click={() => onMenuPick(onExportGraph)}
             >
               ⬆ Export
+            </button>
+            <div class="toolbar-menu-sep" />
+            <button
+              type="button"
+              class="toolbar-menu-item"
+              on:click={() => onMenuPick(onImportCustomNode)}
+            >
+              ⬇ Import Custom Node
+            </button>
+            <button
+              type="button"
+              class="toolbar-menu-item"
+              on:click={() => onMenuPick(onExportCustomNode)}
+            >
+              ⬆ Export Custom Node
             </button>
             <div class="toolbar-menu-sep" />
             <button

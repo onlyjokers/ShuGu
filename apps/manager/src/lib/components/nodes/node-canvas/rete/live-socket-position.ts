@@ -100,4 +100,37 @@ export class LiveDOMSocketPosition extends DOMSocketPosition<any, any> {
       (this as any).emitter?.emit?.({ nodeId: String(nodeId) });
     }
   }
+
+  override async calculatePosition(
+    nodeId: string,
+    side: 'input' | 'output',
+    key: string,
+    element: HTMLElement
+  ) {
+    const area = (this as any).area;
+    const view = area?.nodeViews?.get?.(String(nodeId));
+    const nodeEl = view?.element as HTMLElement | undefined;
+    const isHeaderSocket = Boolean(element.closest?.('.group-frame-gate-sockets'));
+    const isGroupProxy = Boolean(
+      nodeEl?.classList?.contains('group-proxy-input') || nodeEl?.classList?.contains('group-proxy-output')
+    );
+
+    if (!nodeEl) return super.calculatePosition(nodeId, side, key, element);
+    if (!isHeaderSocket && !isGroupProxy) return super.calculatePosition(nodeId, side, key, element);
+
+    const target = (element.querySelector?.('.socket') as HTMLElement | null) ?? element;
+    const rect = target.getBoundingClientRect();
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const k = Number(area?.transform?.k ?? 1) || 1;
+
+    const local = {
+      x: (rect.left - nodeRect.left + rect.width / 2) / k,
+      y: (rect.top - nodeRect.top + rect.height / 2) / k,
+    };
+
+    const props = (this as any).props;
+    if (props?.offset) return props.offset(local, nodeId, side, key);
+
+    return { x: local.x, y: local.y };
+  }
 }

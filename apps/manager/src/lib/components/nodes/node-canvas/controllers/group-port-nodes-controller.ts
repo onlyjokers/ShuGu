@@ -286,9 +286,19 @@ export function createGroupPortNodesController(
       if (!groupIdSet.has(gid)) nodeEngine.removeNode(nodeId);
     }
 
+    // Remove Group Gate nodes whose group no longer exists.
+    for (const [gid, ids] of gateNodeIdsByGroupId.entries()) {
+      if (!gid || groupIdSet.has(gid)) continue;
+      for (const id of ids ?? []) {
+        if (!id) continue;
+        nodeEngine.removeNode(String(id));
+      }
+    }
+
     // Keep only one Group Gate node per group (dedupe stale historical nodes).
     for (const [gid, ids] of gateNodeIdsByGroupId.entries()) {
       const list = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+      if (!groupIdSet.has(gid)) continue;
       if (list.length <= 1) continue;
       const incomingCounts = new Map<string, number>();
       for (const c of connections) {
@@ -595,7 +605,6 @@ export function createGroupPortNodesController(
       const state = nodeEngine.exportGraph() as GraphState;
       const nodes = Array.isArray(state.nodes) ? state.nodes : [];
       const connections = Array.isArray(state.connections) ? state.connections : [];
-      if (connections.length === 0) return;
 
       const nodeById = new Map(nodes.map((n: any) => [String(n.id), n] as const));
 
@@ -846,115 +855,62 @@ export function createGroupPortNodesController(
         });
       }
 
-      if (toRewrite.length === 0) return;
+      if (toRewrite.length > 0) {
+        for (const entry of toRewrite) {
+          const conn = entry.conn;
+          const connId = String(conn.id ?? '');
+          if (!connId) continue;
+          const sourceNodeId = String(conn.sourceNodeId ?? '');
+          const sourcePortId = String(conn.sourcePortId ?? '');
+          const targetNodeId = String(conn.targetNodeId ?? '');
+          const targetPortId = String(conn.targetPortId ?? '');
+          if (!sourceNodeId || !sourcePortId || !targetNodeId || !targetPortId) continue;
 
-      for (const entry of toRewrite) {
-        const conn = entry.conn;
-        const connId = String(conn.id ?? '');
-        if (!connId) continue;
-        const sourceNodeId = String(conn.sourceNodeId ?? '');
-        const sourcePortId = String(conn.sourcePortId ?? '');
-        const targetNodeId = String(conn.targetNodeId ?? '');
-        const targetPortId = String(conn.targetPortId ?? '');
-        if (!sourceNodeId || !sourcePortId || !targetNodeId || !targetPortId) continue;
+          nodeEngine.removeConnection(connId);
 
-        nodeEngine.removeConnection(connId);
+          const sourceCtx: string[] = entry.sourceCtx ?? [];
+          const targetCtx: string[] = entry.targetCtx ?? [];
+          const wireType: string = validPortTypes.has(entry.wireType) ? entry.wireType : 'any';
 
-        const sourceCtx: string[] = entry.sourceCtx ?? [];
-        const targetCtx: string[] = entry.targetCtx ?? [];
-        const wireType: string = validPortTypes.has(entry.wireType) ? entry.wireType : 'any';
+          const prefixLen = commonPrefixLen(sourceCtx, targetCtx);
 
-        const prefixLen = commonPrefixLen(sourceCtx, targetCtx);
+          let currentNodeId = sourceNodeId;
+          let currentPortId = sourcePortId;
 
-        let currentNodeId = sourceNodeId;
-        let currentPortId = sourcePortId;
+          for (let i = sourceCtx.length - 1; i >= prefixLen; i -= 1) {
+            const gid = String(sourceCtx[i] ?? '');
+            if (!gid) continue;
+            const proxyId = addProxyNode(gid, 'output', wireType);
+            if (!proxyId) continue;
+            addConnection(currentNodeId, currentPortId, proxyId, 'in');
+            currentNodeId = proxyId;
+            currentPortId = 'out';
+          }
 
-        for (let i = sourceCtx.length - 1; i >= prefixLen; i -= 1) {
-          const gid = String(sourceCtx[i] ?? '');
-          if (!gid) continue;
-          const proxyId = addProxyNode(gid, 'output', wireType);
-          if (!proxyId) continue;
-          addConnection(currentNodeId, currentPortId, proxyId, 'in');
-          currentNodeId = proxyId;
-          currentPortId = 'out';
-        }
+          for (let i = prefixLen; i < targetCtx.length; i += 1) {
+            const gid = String(targetCtx[i] ?? '');
+            if (!gid) continue;
+            const proxyId = addProxyNode(gid, 'input', wireType);
+            if (!proxyId) continue;
+            addConnection(currentNodeId, currentPortId, proxyId, 'in');
+            currentNodeId = proxyId;
+            currentPortId = 'out';
+          }
 
-        for (let i = prefixLen; i < targetCtx.length; i += 1) {
-          const gid = String(targetCtx[i] ?? '');
-          if (!gid) continue;
-          const proxyId = addProxyNode(gid, 'input', wireType);
-          if (!proxyId) continue;
-          addConnection(currentNodeId, currentPortId, proxyId, 'in');
-          currentNodeId = proxyId;
-          currentPortId = 'out';
-        }
-
-        addConnection(currentNodeId, currentPortId, targetNodeId, targetPortId);
-      }
-
-      // Enforce "one external wire per output proxy dot" by splitting multi-out proxies.
-      const postRewriteState = nodeEngine.exportGraph();
-      const postNodes = Array.isArray(postRewriteState.nodes) ? postRewriteState.nodes : [];
-      const postConnections = Array.isArray(postRewriteState.connections) ? postRewriteState.connections : [];
-
-      const incomingToProxyIn = new Map<string, any>();
-      const outgoingFromProxyOut = new Map<string, any[]>();
-      for (const c of postConnections) {
-        if (String(c.targetPortId) === 'in') incomingToProxyIn.set(String(c.targetNodeId), c);
-        if (String(c.sourcePortId) === 'out') {
-          const list = outgoingFromProxyOut.get(String(c.sourceNodeId)) ?? [];
-          list.push(c);
-          outgoingFromProxyOut.set(String(c.sourceNodeId), list);
-        }
-      }
-
-      for (const node of postNodes) {
-        if (String(node.type) !== GROUP_PROXY_NODE_TYPE) continue;
-        const id = String(node.id ?? '');
-        if (!id) continue;
-        const direction = String((node as any)?.config?.direction ?? 'output');
-        if (direction !== 'output') continue;
-
-        const outgoing = outgoingFromProxyOut.get(id) ?? [];
-        if (outgoing.length <= 1) continue;
-
-        const incoming = incomingToProxyIn.get(id) ?? null;
-        if (!incoming) continue;
-
-        const groupId = groupIdFromNode(node as any);
-        if (!groupId) continue;
-        const portType = resolveProxyPortType(node);
-        const pinned = Boolean((node as any)?.config?.pinned);
-
-        for (const extra of outgoing.slice(1)) {
-          const connId = String(extra.id ?? '');
-          if (connId) nodeEngine.removeConnection(connId);
-
-          const proxyId = addNode(GROUP_PROXY_NODE_TYPE, proxyPosition(groupId, 'output'), {
-            groupId,
-            direction: 'output',
-            portType,
-            pinned,
-          });
-          if (!proxyId) continue;
-
-          addConnection(String(incoming.sourceNodeId), String(incoming.sourcePortId), proxyId, 'in');
-          addConnection(proxyId, 'out', String(extra.targetNodeId), String(extra.targetPortId));
+          addConnection(currentNodeId, currentPortId, targetNodeId, targetPortId);
         }
       }
 
       // Clean up proxies when they no longer represent a boundary crossing:
-      // - Auto proxies (pinned=false): require both internal + external wires.
-      // - Pinned proxies (pinned=true): allowed to be half-connected, but should not remain fully orphaned.
+      // - Require both internal + external wires, even for pinned proxies.
       const nextState = nodeEngine.exportGraph();
       const nextNodes = Array.isArray(nextState.nodes) ? nextState.nodes : [];
       const nextConnections = Array.isArray(nextState.connections) ? nextState.connections : [];
-
-      const incomingByTargetKey = new Set<string>();
-      const outgoingBySourceKey = new Set<string>();
-      for (const c of nextConnections) {
-        incomingByTargetKey.add(`${String(c.targetNodeId)}:${String(c.targetPortId)}`);
-        outgoingBySourceKey.add(`${String(c.sourceNodeId)}:${String(c.sourcePortId)}`);
+      const nextNodeById = new Map(nextNodes.map((n: any) => [String(n.id), n] as const));
+      for (const node of nextNodes) {
+        const id = String((node as any)?.id ?? '');
+        if (!id || nodeById.has(id)) continue;
+        nodeById.set(id, node);
       }
 
       const resolvePortTypeFromNodePort = (nodeId: string, side: 'input' | 'output', portId: string): string => {
@@ -972,20 +928,33 @@ export function createGroupPortNodesController(
         return validPortTypes.has(t) ? t : 'any';
       };
 
+      const nodePathForCleanup = (nodeId: string): string[] => {
+        const node = nextNodeById.get(String(nodeId));
+        if (!node) return [];
+        const type = String(node.type ?? '');
+        if (isGroupPortNodeType(type)) {
+          const gid = groupIdFromNode(node as any);
+          return gid ? getPath(gid) : [];
+        }
+        const primary = primaryGroupIdForNode(String(nodeId));
+        return primary ? getPath(primary) : [];
+      };
+
+      let removedProxy = false;
       for (const node of nextNodes) {
         if (String(node.type) !== GROUP_PROXY_NODE_TYPE) continue;
+        const id = String(node.id ?? '');
+        if (!id) continue;
         const pinned = Boolean((node as any)?.config?.pinned);
         const directionRaw = String((node as any)?.config?.direction ?? 'output');
         let direction: 'input' | 'output' = directionRaw === 'input' ? 'input' : 'output';
-        const id = String(node.id ?? '');
-        if (!id) continue;
-
-        const hasIn = incomingByTargetKey.has(`${id}:in`);
-        const hasOut = outgoingBySourceKey.has(`${id}:out`);
 
         const groupId = groupIdFromNode(node as any);
         const group = groupById.get(groupId);
         const nodeSet = group?.nodeSet ?? null;
+        const groupIdKey = String(groupId ?? '');
+        const isInsideGroup = (nodeId: string) =>
+          groupIdKey ? nodePathForCleanup(String(nodeId)).includes(groupIdKey) : false;
 
         // Robust internal/external detection: infer direction from actual wiring and group membership,
         // so stale configs can't leave orphaned proxy dots behind.
@@ -994,33 +963,28 @@ export function createGroupPortNodesController(
         let externalToProxyIn = false;
         let externalFromProxyOut = false;
 
-        if (nodeSet) {
-          for (const c of nextConnections) {
-            const sourceNodeId = String((c as any).sourceNodeId ?? '');
-            const sourcePortId = String((c as any).sourcePortId ?? '');
-            const targetNodeId = String((c as any).targetNodeId ?? '');
-            const targetPortId = String((c as any).targetPortId ?? '');
+        for (const c of nextConnections) {
+          const sourceNodeId = String((c as any).sourceNodeId ?? '');
+          const sourcePortId = String((c as any).sourcePortId ?? '');
+          const targetNodeId = String((c as any).targetNodeId ?? '');
+          const targetPortId = String((c as any).targetPortId ?? '');
 
-            if (!sourceNodeId || !sourcePortId || !targetNodeId || !targetPortId) continue;
+          if (!sourceNodeId || !sourcePortId || !targetNodeId || !targetPortId) continue;
 
-            if (targetNodeId === id && targetPortId === 'in') {
-              if (nodeSet.has(sourceNodeId)) internalToProxyIn = c;
-              else externalToProxyIn = true;
-            }
-
-            if (sourceNodeId === id && sourcePortId === 'out') {
-              if (nodeSet.has(targetNodeId)) internalFromProxyOut.push(c);
-              else externalFromProxyOut = true;
-            }
+          if (targetNodeId === id && targetPortId === 'in') {
+            const inside = isInsideGroup(sourceNodeId);
+            if (inside) internalToProxyIn = c;
+            else externalToProxyIn = true;
           }
-        } else {
-          // If the group vanished, treat all wires as external and let cleanup remove orphans.
-          externalToProxyIn = hasIn;
-          externalFromProxyOut = hasOut;
+
+          if (sourceNodeId === id && sourcePortId === 'out') {
+            const inside = isInsideGroup(targetNodeId);
+            if (inside) internalFromProxyOut.push(c);
+            else externalFromProxyOut = true;
+          }
         }
 
         const internalConnected = Boolean(internalToProxyIn) || internalFromProxyOut.length > 0;
-        const externalConnected = externalToProxyIn || externalFromProxyOut;
 
         const inferredDirection =
           internalFromProxyOut.length > 0 && !internalToProxyIn
@@ -1066,20 +1030,21 @@ export function createGroupPortNodesController(
           }
         }
 
-        // Requirement: if the internal wire is disconnected, the proxy no longer represents any
-        // boundary crossing and should be removed (even when pinned).
+        // If the internal wire is disconnected, the proxy no longer represents a boundary crossing.
         if (!internalConnected) {
           nodeEngine.removeNode(id);
+          removedProxy = true;
           continue;
         }
 
-        // Pinned proxies may remain half-connected so users can pre-expose ports (internal-only).
         if (pinned) continue;
-
-        if (!externalConnected) nodeEngine.removeNode(id);
       }
 
       scheduleAlign();
+      if (removedProxy) {
+        // Removing a proxy can orphan its neighbor proxy; run another pass to clean up.
+        scheduleNormalizeProxies();
+      }
     } finally {
       isNormalizing = false;
     }
