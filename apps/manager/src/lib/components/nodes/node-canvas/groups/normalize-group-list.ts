@@ -1,7 +1,7 @@
 /**
  * Purpose: Normalize group payloads from graph state into a stable, de-duplicated list.
  */
-import type { NodeGroup } from '../controllers/group-controller';
+import type { NodeGroup } from './types';
 
 export const normalizeGroupList = (groups: NodeGroup[]): NodeGroup[] => {
   const order: string[] = [];
@@ -15,10 +15,13 @@ export const normalizeGroupList = (groups: NodeGroup[]): NodeGroup[] => {
       id,
       parentId: group?.parentId ? String(group.parentId) : null,
       name: String(group?.name ?? ''),
-      nodeIds: Array.from(new Set((group?.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean))),
+      nodeIds: Array.from(
+        new Set((group?.nodeIds ?? []).map((nid) => String(nid)).filter(Boolean))
+      ),
       disabled: Boolean(group?.disabled),
       minimized: Boolean(group?.minimized),
-      runtimeActive: typeof group?.runtimeActive === 'boolean' ? Boolean(group.runtimeActive) : undefined,
+      runtimeActive:
+        typeof group?.runtimeActive === 'boolean' ? Boolean(group.runtimeActive) : undefined,
     };
 
     if (!byId.has(id)) order.push(id);

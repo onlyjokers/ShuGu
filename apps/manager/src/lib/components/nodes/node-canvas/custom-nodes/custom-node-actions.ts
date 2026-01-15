@@ -5,7 +5,8 @@ import type { CustomNodeDefinition, CustomNodePort } from '$lib/nodes/custom-nod
 import type { CustomNodeInstanceState } from '$lib/nodes/custom-nodes/instance';
 import type { NodeRegistry } from '@shugu/node-core';
 import { asRecord, getNumber, getString } from '../../../../utils/value-guards';
-import type { GroupFrame, NodeGroup } from '../controllers/group-controller';
+import type { GroupFrame } from '../controllers/group-controller';
+import type { NodeGroup } from '../groups/types';
 import { cloneGraphState } from './custom-node-graph';
 
 export type CustomNodeActions = {
@@ -203,9 +204,8 @@ export const createCustomNodeActions = (opts: CustomNodeActionsOptions): CustomN
 
     const instanceNodes = nodes
       .map((n) => ({ id: n.id, state: opts.readCustomNodeState(n.config ?? {}) }))
-      .filter(
-        (entry): entry is { id: string; state: CustomNodeInstanceState } =>
-          Boolean(entry.id && entry.state && entry.state.definitionId === state.definitionId)
+      .filter((entry): entry is { id: string; state: CustomNodeInstanceState } =>
+        Boolean(entry.id && entry.state && entry.state.definitionId === state.definitionId)
       );
     const instanceIds = instanceNodes.map((entry) => entry.id);
     const motherInstances = instanceNodes.filter((entry) => entry.state.role === 'mother');
@@ -394,7 +394,11 @@ export const createCustomNodeActions = (opts: CustomNodeActionsOptions): CustomN
         Boolean(String(conn.targetPortId ?? ''))
     );
 
-    const resolvePortLabel = (nodeType: string, side: 'input' | 'output', portId: string): string => {
+    const resolvePortLabel = (
+      nodeType: string,
+      side: 'input' | 'output',
+      portId: string
+    ): string => {
       const def = opts.nodeRegistry.get(String(nodeType ?? ''));
       const ports = side === 'input' ? def?.inputs : def?.outputs;
       const port = (ports ?? []).find((p) => String(p.id) === String(portId)) ?? null;
@@ -418,8 +422,7 @@ export const createCustomNodeActions = (opts: CustomNodeActionsOptions): CustomN
       const portKey = `p:${id}`;
       portKeyByProxyId.set(id, portKey);
 
-      const portTypeRaw =
-        typeof node.config?.portType === 'string' ? node.config.portType : 'any';
+      const portTypeRaw = typeof node.config?.portType === 'string' ? node.config.portType : 'any';
       const type = portTypeRaw ? portTypeRaw : 'any';
       const pinned = Boolean(node.config?.pinned);
 
@@ -538,16 +541,22 @@ export const createCustomNodeActions = (opts: CustomNodeActionsOptions): CustomN
     const motherType = opts.customNodeType(definitionId);
     const motherPos = frame ? { x: originX, y: originY } : { x: originX, y: originY };
 
-    const motherInternal = cloneGraphState({ nodes: templateNodes, connections: templateConnections });
+    const motherInternal = cloneGraphState({
+      nodes: templateNodes,
+      connections: templateConnections,
+    });
 
     const initialGate = !group.disabled;
-    const motherConfig = opts.writeCustomNodeState({}, {
-      definitionId,
-      groupId: rootId,
-      role: 'mother',
-      manualGate: initialGate,
-      internal: motherInternal,
-    });
+    const motherConfig = opts.writeCustomNodeState(
+      {},
+      {
+        definitionId,
+        groupId: rootId,
+        role: 'mother',
+        manualGate: initialGate,
+        internal: motherInternal,
+      }
+    );
 
     const motherNode: NodeInstance = {
       id: motherNodeId,

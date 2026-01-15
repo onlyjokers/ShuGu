@@ -48,7 +48,13 @@
   } from '$lib/nodes/custom-nodes/io';
   import { parameterRegistry } from '$lib/parameters/registry';
   import { nodeGroupsState } from '$lib/project/nodeGraphUiState';
-  import { displayTransport, getSDK, sensorData, state as managerState } from '$lib/stores/manager';
+  import {
+    audienceClients,
+    displayTransport,
+    getSDK,
+    sensorData,
+    state as managerState,
+  } from '$lib/stores/manager';
   import {
     displayBridgeState,
     ensureDisplayLocalFilesRegisteredFromValue,
@@ -61,7 +67,11 @@
   import { LiveDOMSocketPosition } from './node-canvas/rete/live-socket-position';
   import { createReteAdapter, type GraphViewAdapter } from './node-canvas/adapters';
   import { createMinimapController } from './node-canvas/controllers/minimap-controller';
-  import { createGroupController, type GroupFrame, type NodeGroup } from './node-canvas/controllers/group-controller';
+  import {
+    createGroupController,
+    type GroupFrame,
+  } from './node-canvas/controllers/group-controller';
+  import type { NodeGroup } from './node-canvas/groups/types';
   import { createFocusController } from './node-canvas/controllers/focus-controller';
   import { createGroupPortNodesController } from './node-canvas/controllers/group-port-nodes-controller';
   import { createClipboardController } from './node-canvas/controllers/clipboard-controller';
@@ -229,12 +239,12 @@
     await flushPendingCollapsedNodes();
   };
 
-  // Invariant: NodeCanvas is composition-only. Keep behavior unchanged; delegate logic to modules.
   const groupController = createGroupController({
     getContainer: () => container,
     getAdapter: () => viewAdapter,
     getGraphState: () => graphState,
     getForcedHiddenNodeIds: () => forcedHiddenNodeIds,
+    getOnlineAudienceClientCount: () => get(audienceClients).length,
     getLocalLoops: () => (loopController ? get(loopController.localLoops) : []),
     getLoopConstraintLoops: () => (loopController ? loopController.getEffectiveLoops() : []),
     getDeployedLoopIds: () => (loopController ? get(loopController.deployedLoopIds) : new Set()),
@@ -279,13 +289,8 @@
     },
   });
 
-  const {
-    loopFrames,
-    deployedLoopIds,
-    executorStatusByClient,
-    showExecutorLogs,
-    logsClientId,
-  } = loopController;
+  const { loopFrames, deployedLoopIds, executorStatusByClient, showExecutorLogs, logsClientId } =
+    loopController;
 
   const {
     nodeGroups,
@@ -612,7 +617,6 @@
     customNodeExpansion?.handleCollapseCustomNodeFrame(groupId);
   };
 
-
   const syncCoupledCustomNodesForDefinition = (definitionId: string) => {
     const id = String(definitionId ?? '');
     if (!id) return;
@@ -733,7 +737,6 @@
     setSelectedNode,
   });
 
-
   customNodeExpansion = createCustomNodeExpansion({
     expandedCustomByGroupId,
     onExpandedGroupIdsChange: (next) => {
@@ -763,7 +766,6 @@
     customNodeIdFromMaterializedNodeId,
   });
   expandedCustomGroupIds = customNodeExpansion.getExpandedGroupIds();
-
 
   function computeGraphPosition(clientX: number, clientY: number) {
     const pos = viewAdapter.clientToGraph(clientX, clientY);
@@ -1154,13 +1156,16 @@
           id: nodeId,
           type: customNodeType(did),
           position: pos,
-          config: writeCustomNodeState({}, {
-            definitionId: did,
-            groupId,
-            role: 'mother',
-            manualGate: true,
-            internal,
-          }),
+          config: writeCustomNodeState(
+            {},
+            {
+              definitionId: did,
+              groupId,
+              role: 'mother',
+              manualGate: true,
+              internal,
+            }
+          ),
           inputValues: {},
           outputValues: {},
         });
@@ -1631,9 +1636,7 @@
         .map((c) => String(c.id));
 
       const displayIdSet = new Set(
-        clientsWithGroups
-          .filter((c) => String(c.group) === 'display')
-          .map((c) => String(c.id))
+        clientsWithGroups.filter((c) => String(c.group) === 'display').map((c) => String(c.id))
       );
 
       const nextClientKey = clientsWithGroups.map((c) => `${c.id}:${c.group}`).join('|');
@@ -2222,10 +2225,7 @@
       const el = (event.target as HTMLElement | null) ?? document.activeElement;
       const tag = el?.tagName?.toLowerCase?.() ?? '';
       const isEditing =
-        tag === 'input' ||
-        tag === 'textarea' ||
-        tag === 'select' ||
-        Boolean(el?.isContentEditable);
+        tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(el?.isContentEditable);
       if (isEditing) return;
 
       if ((event.metaKey || event.ctrlKey) && lowerKey === 'c') {
@@ -2443,7 +2443,7 @@
       toast={$groupEditToast}
       edgeHighlight={groupEdgeHighlight}
       {gateModeGroupIds}
-      groupGateNodeIdByGroupId={groupGateNodeIdByGroupId}
+      {groupGateNodeIdByGroupId}
       customNodeGroupIds={expandedCustomGroupIds}
       onToggleDisabled={handleToggleGroupDisabled}
       onToggleMinimized={groupController.toggleGroupMinimized}
@@ -2632,5 +2632,4 @@
   :global(.node-canvas-container .input-socket) {
     margin-left: -10px !important;
   }
-
 </style>

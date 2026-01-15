@@ -5,7 +5,8 @@ import type { CustomNodeDefinition } from '$lib/nodes/custom-nodes/types';
 import type { CustomNodeInstanceState } from '$lib/nodes/custom-nodes/instance';
 import type { NodeRegistry } from '@shugu/node-core';
 import { asRecord, getBoolean, getNumber, getString } from '../../../../utils/value-guards';
-import type { GroupFrame, NodeGroup } from '../controllers/group-controller';
+import type { GroupFrame } from '../controllers/group-controller';
+import type { NodeGroup } from '../groups/types';
 
 export type ExpandedCustomNodeFrame = {
   groupId: string;
@@ -427,7 +428,11 @@ export const createCustomNodeExpansion = (opts: CustomNodeExpansionOptions) => {
       }));
 
     // Derive Custom Node ports from root-level group-proxy nodes.
-    const resolvePortLabel = (nodeType: string, side: 'input' | 'output', portId: string): string => {
+    const resolvePortLabel = (
+      nodeType: string,
+      side: 'input' | 'output',
+      portId: string
+    ): string => {
       const def = opts.nodeRegistry.get(String(nodeType ?? ''));
       const ports = side === 'input' ? def?.inputs : def?.outputs;
       const port = (ports ?? []).find((p) => String(p.id) === String(portId)) ?? null;
@@ -529,8 +534,10 @@ export const createCustomNodeExpansion = (opts: CustomNodeExpansionOptions) => {
       proxyPortKeyByMainId.set(pid, `p:${internalProxyId}`);
     }
 
-    const externalInputs: Array<{ sourceNodeId: string; sourcePortId: string; portKey: string }> = [];
-    const externalOutputs: Array<{ targetNodeId: string; targetPortId: string; portKey: string }> = [];
+    const externalInputs: Array<{ sourceNodeId: string; sourcePortId: string; portKey: string }> =
+      [];
+    const externalOutputs: Array<{ targetNodeId: string; targetPortId: string; portKey: string }> =
+      [];
 
     for (const c of connections) {
       const connId = String(c.id ?? '');

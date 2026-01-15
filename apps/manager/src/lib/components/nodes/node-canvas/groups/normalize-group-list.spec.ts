@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { NodeGroup } from '../controllers/group-controller';
+import type { NodeGroup } from './types';
 import { normalizeGroupList } from './normalize-group-list';
 
 test('normalizeGroupList preserves first-seen order and dedupes nodeIds', () => {

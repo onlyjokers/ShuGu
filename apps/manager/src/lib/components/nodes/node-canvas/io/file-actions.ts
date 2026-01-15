@@ -3,7 +3,7 @@
  */
 import { nodeRegistry } from '$lib/nodes';
 import type { Connection, GraphState, NodeInstance } from '$lib/nodes/types';
-import type { NodeGroup } from '../controllers/group-controller';
+import type { NodeGroup } from '../groups/types';
 import {
   exportMidiTemplateFile,
   instantiateMidiBindings,
@@ -151,7 +151,8 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
     });
   }
 
-  if (kept.length === 0) return { groups: [] as NodeGroup[], groupIdMap: new Map<string, string>() };
+  if (kept.length === 0)
+    return { groups: [] as NodeGroup[], groupIdMap: new Map<string, string>() };
 
   const groupIdMap = new Map<string, string>();
   for (const group of kept) groupIdMap.set(String(group.id), generateId('group:'));
@@ -364,7 +365,10 @@ export function createFileActions(opts: FileActionsOptions) {
       else skippedConnections += 1;
     }
 
-    const { groups: importedGroups, groupIdMap } = remapImportedGroups(parsedFile.groups, nodeIdMap);
+    const { groups: importedGroups, groupIdMap } = remapImportedGroups(
+      parsedFile.groups,
+      nodeIdMap
+    );
 
     // Keep Group port nodes wired to the remapped group IDs *before* appending groups, so the auto
     // "ensureGroupPortNodes" hook doesn't create duplicates.
@@ -439,9 +443,13 @@ export function createFileActions(opts: FileActionsOptions) {
       return;
     }
 
-    const created = instantiateMidiBindings(templates, { anchor: opts.getViewportCenterGraphPos() });
+    const created = instantiateMidiBindings(templates, {
+      anchor: opts.getViewportCenterGraphPos(),
+    });
     if (created.length > 0 && typeof opts.setNodeCollapsed === 'function') {
-      const templateById = new Map((templates.bindings ?? []).map((tpl) => [String(tpl.id), tpl] as const));
+      const templateById = new Map(
+        (templates.bindings ?? []).map((tpl) => [String(tpl.id), tpl] as const)
+      );
       for (const binding of created) {
         const tpl = templateById.get(String(binding.templateId));
         const collapsed = tpl?.ui?.collapsed;

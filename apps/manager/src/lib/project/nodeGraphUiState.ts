@@ -5,7 +5,6 @@
  * can persist/restore it without importing NodeCanvas runtime code.
  */
 import { writable, type Writable } from 'svelte/store';
-import type { NodeGroup } from '$lib/components/nodes/node-canvas/controllers/group-controller';
+import type { NodeGroup } from '$lib/components/nodes/node-canvas/groups/types';
 
 export const nodeGroupsState: Writable<NodeGroup[]> = writable([]);
-

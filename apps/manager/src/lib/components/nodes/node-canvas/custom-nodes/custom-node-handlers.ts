@@ -4,7 +4,7 @@ import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import type { CustomNodeDefinition } from '$lib/nodes/custom-nodes/types';
 import type { CustomNodeInstanceState } from '$lib/nodes/custom-nodes/instance';
 import { CUSTOM_NODE_TYPE_PREFIX } from '$lib/nodes/custom-nodes/store';
-import type { NodeGroup } from '../controllers/group-controller';
+import type { NodeGroup } from '../groups/types';
 import { asRecord } from '../../../../utils/value-guards';
 
 type GroupController = {
@@ -52,7 +52,8 @@ export const createCustomNodeHandlers = (opts: CustomNodeHandlersOptions) => {
     const state = node ? opts.readCustomNodeState(asRecord(node.config)) : null;
     if (!node || !state) return;
 
-    const group = get(opts.groupController.nodeGroups).find((g) => String(g.id ?? '') === id) ?? null;
+    const group =
+      get(opts.groupController.nodeGroups).find((g) => String(g.id ?? '') === id) ?? null;
     const manualGate = group ? !group.disabled : state.manualGate;
     opts.nodeEngine.updateNodeConfig(
       nodeId,
