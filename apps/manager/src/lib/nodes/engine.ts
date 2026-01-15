@@ -8,15 +8,16 @@
  */
 import { get, writable, type Writable } from 'svelte/store';
 import { PROTOCOL_VERSION } from '@shugu/protocol';
-import { NodeRuntime } from '@shugu/node-core';
+import { applyGraphChanges, NodeRuntime } from '@shugu/node-core';
 
-import type { Connection, GraphState, NodeInstance, PortType } from './types';
+import type { Connection, GraphChange, GraphState, NodeInstance, PortType } from './types';
 import { nodeRegistry } from './registry';
 import { getSelectOptionsForInput } from './selection-options';
 import { parameterRegistry } from '../parameters/registry';
 import { exportGraphForPatch } from './patch-export';
 import { customNodeDefinitions } from './custom-nodes/store';
 import { compileGraphForPatch } from './custom-nodes/flatten';
+import { diffGraphState } from './graph-changes';
 
 export type LocalLoop = {
   id: string;
@@ -115,6 +116,7 @@ class NodeEngineClass {
 
   // Stores for UI observation
   public graphState: Writable<GraphState> = writable({ nodes: [], connections: [] });
+  public graphChanges: Writable<GraphChange[]> = writable([]);
   public isRunning: Writable<boolean> = writable(false);
   public lastError: Writable<string | null> = writable(null);
   // Emits on every tick so the UI can render live values without forcing full graphState updates.
@@ -203,36 +205,28 @@ class NodeEngineClass {
     const config = { ...(node.config ?? {}) };
     const inputValues = { ...(node.inputValues ?? {}) };
     stripLegacyToneFields(String(node.type), config, inputValues);
-    const next: GraphState = {
-      nodes: [
-        ...snapshot.nodes,
-        {
-          ...node,
-          config,
-          inputValues,
-          outputValues: { ...(node.outputValues ?? {}) },
-        },
-      ],
-      connections: [...snapshot.connections],
+    const sanitizedNode: NodeInstance = {
+      ...node,
+      config,
+      inputValues,
+      outputValues: { ...(node.outputValues ?? {}) },
     };
+    const next = applyGraphChanges(snapshot, [{ type: 'add-node', node: sanitizedNode }]);
 
     this.runtime.loadGraph(next);
     this.syncGraphState();
+    this.emitGraphChanges(snapshot, next);
     this.updateLocalLoops();
   }
 
   removeNode(nodeId: string): void {
     const snapshot = this.runtime.exportGraph();
-    const next: GraphState = {
-      nodes: snapshot.nodes.filter((n) => n.id !== nodeId),
-      connections: snapshot.connections.filter(
-        (c) => c.sourceNodeId !== nodeId && c.targetNodeId !== nodeId
-      ),
-    };
+    const next = applyGraphChanges(snapshot, [{ type: 'remove-node', nodeId }]);
 
     this.cleanupGraphTransition(snapshot, next, { reason: 'removeNode' });
     this.runtime.loadGraph(next);
     this.syncGraphState();
+    this.emitGraphChanges(snapshot, next);
     this.updateLocalLoops();
 
     // Clear any modulation offsets contributed by this node
@@ -243,8 +237,10 @@ class NodeEngineClass {
   updateNodeConfig(nodeId: string, config: Record<string, unknown>): void {
     const node = this.runtime.getNode(nodeId);
     if (!node) return;
-    node.config = { ...node.config, ...config };
+    const nextConfig = { ...node.config, ...config };
+    node.config = nextConfig;
     this.syncGraphState();
+    this.graphChanges.set([{ type: 'update-node-config', nodeId, config: nextConfig }]);
   }
 
   updateNodeType(nodeId: string, type: string): void {
@@ -259,6 +255,7 @@ class NodeEngineClass {
     node.type = nextType;
     stripLegacyToneFields(nextType, node.config ?? {}, node.inputValues ?? {});
     this.syncGraphState();
+    this.graphChanges.set([{ type: 'update-node-type', nodeId, nodeType: nextType }]);
     this.updateLocalLoops();
   }
 
@@ -276,6 +273,7 @@ class NodeEngineClass {
     const node = this.runtime.getNode(nodeId);
     if (!node) return;
     node.position = position;
+    this.graphChanges.set([{ type: 'update-node-position', nodeId, position }]);
     // Don't sync graph state for position-only changes (performance)
   }
 
@@ -309,9 +307,9 @@ class NodeEngineClass {
     const nextNodes = nodes.map((node) => {
       const nextOptions = nextOptionsByNodeId.get(String(node.id));
       if (!nextOptions) return node;
-      const raw = Array.isArray((node.config as any)?.options)
-        ? ((node.config as any).options as unknown[])
-        : [];
+      const configRecord =
+        node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+      const raw = Array.isArray(configRecord?.options) ? configRecord.options : [];
       const currentOptions = raw.map((value) => String(value)).filter((value) => value !== '');
       if (optionsEqual(currentOptions, nextOptions)) return node;
       changed = true;
@@ -436,7 +434,11 @@ class NodeEngineClass {
     if (!sourceNode || !targetNode) return false;
 
     if (sourceNode.type === 'group-proxy' && connection.sourcePortId === 'out') {
-      const direction = String((sourceNode.config as any)?.direction ?? 'output');
+      const sourceConfig =
+        sourceNode.config && typeof sourceNode.config === 'object'
+          ? (sourceNode.config as Record<string, unknown>)
+          : null;
+      const direction = String(sourceConfig?.direction ?? 'output');
       if (direction === 'output') {
         const alreadyConnected = snapshot.connections.some(
           (c) => c.sourceNodeId === connection.sourceNodeId && c.sourcePortId === connection.sourcePortId
@@ -456,7 +458,9 @@ class NodeEngineClass {
     if (!sourcePort || !targetPort) return false;
 
     const resolveProxyPortType = (node: NodeInstance): PortType => {
-      const raw = (node.config as any)?.portType;
+      const configRecord =
+        node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+      const raw = configRecord?.portType;
       const t = typeof raw === 'string' ? raw : raw ? String(raw) : '';
       if (
         [
@@ -553,10 +557,9 @@ class NodeEngineClass {
       return false;
     }
 
-    const next: GraphState = this.applySelectionMapOptions({
-      nodes: snapshot.nodes,
-      connections: [...snapshot.connections, connection],
-    });
+    const next = this.applySelectionMapOptions(
+      applyGraphChanges(snapshot, [{ type: 'add-connection', connection }])
+    );
 
     const localOnlyNodeTypes = new Set([
       'load-audio-from-local',
@@ -713,20 +716,21 @@ class NodeEngineClass {
     this.runtime.compileNow();
     this.lastError.set(null);
     this.syncGraphState();
+    this.emitGraphChanges(snapshot, next);
     this.updateLocalLoops();
     return true;
   }
 
   removeConnection(connectionId: string): void {
     const snapshot = this.runtime.exportGraph();
-    const next: GraphState = this.applySelectionMapOptions({
-      nodes: snapshot.nodes,
-      connections: snapshot.connections.filter((c) => c.id !== connectionId),
-    });
+    const next = this.applySelectionMapOptions(
+      applyGraphChanges(snapshot, [{ type: 'remove-connection', connectionId }])
+    );
 
     this.cleanupGraphTransition(snapshot, next, { reason: 'removeConnection' });
     this.runtime.loadGraph(next);
     this.syncGraphState();
+    this.emitGraphChanges(snapshot, next);
     this.updateLocalLoops();
   }
 
@@ -757,12 +761,14 @@ class NodeEngineClass {
 
   clear(): void {
     this.stop();
+    const prev = this.runtime.exportGraph();
     this.runtime.clear();
     this.offloadedNodeIds.clear();
     this.offloadedPatchNodeIds.clear();
     this.deployedLoopIds.clear();
     this.disabledNodeIds.clear();
     this.syncGraphState();
+    this.emitGraphChanges(prev, this.runtime.exportGraph());
     this.updateLocalLoops();
 
     // Reset all node-origin modulation
@@ -775,6 +781,11 @@ class NodeEngineClass {
     this.graphState.set(this.runtime.getGraphRef());
   }
 
+  private emitGraphChanges(prev: GraphState, next: GraphState): void {
+    const changes = diffGraphState(prev, next);
+    if (changes.length > 0) this.graphChanges.set(changes);
+  }
+
   loadGraph(state: GraphState): void {
     const prev = this.runtime.exportGraph();
     const rawNodes = Array.isArray(state.nodes) ? state.nodes : [];
@@ -785,8 +796,8 @@ class NodeEngineClass {
     const keptNodeIds = new Set<string>();
     const nodes: GraphState['nodes'] = [];
     for (const node of rawNodes) {
-      const id = String((node as any)?.id ?? '');
-      const type = String((node as any)?.type ?? '');
+      const id = String(node.id ?? '');
+      const type = String(node.type ?? '');
       if (!id || !type) continue;
       if (!nodeRegistry.get(type)) continue;
       keptNodeIds.add(id);
@@ -806,8 +817,8 @@ class NodeEngineClass {
     const connections: GraphState['connections'] = [];
     const connectedInputs = new Set<string>();
     for (const c of rawConnections) {
-      const src = String((c as any)?.sourceNodeId ?? '');
-      const dst = String((c as any)?.targetNodeId ?? '');
+      const src = String(c.sourceNodeId ?? '');
+      const dst = String(c.targetNodeId ?? '');
       if (!src || !dst) continue;
       if (!keptNodeIds.has(src) || !keptNodeIds.has(dst)) continue;
       const key = `${String(c.targetNodeId)}:${String(c.targetPortId)}`;
@@ -844,7 +855,9 @@ class NodeEngineClass {
 
       for (const node of nodes) {
         if (String(node.type) !== 'cmd-aggregator') continue;
-        const raw = (node.config as any)?.inCount;
+        const configRecord =
+          node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+        const raw = configRecord?.inCount;
         const configured = typeof raw === 'number' ? raw : Number(raw);
         const configuredCount = Number.isFinite(configured)
           ? Math.max(1, Math.floor(configured))
@@ -867,6 +880,7 @@ class NodeEngineClass {
     this.deployedLoopIds.clear();
     this.disabledNodeIds.clear();
     this.syncGraphState();
+    this.emitGraphChanges(prev, prepared);
     this.updateLocalLoops();
 
     // Existing node modulations may no longer apply to new graph; clear them
@@ -1147,9 +1161,9 @@ class NodeEngineClass {
     const roots = ids.map((id) => {
       const node = nodeById.get(String(id)) ?? null;
       if (!node) throw new Error(`Invalid patch root id: ${String(id)}`);
-      const type = String((node as any)?.type ?? '');
+      const type = String(node.type ?? '');
       if (!patchRootTypes.has(type)) {
-        throw new Error(`Invalid patch root type: ${type}:${String((node as any)?.id ?? id)}`);
+        throw new Error(`Invalid patch root type: ${type}:${String(node.id ?? id)}`);
       }
       return node;
     });
@@ -1245,12 +1259,12 @@ class NodeEngineClass {
       .sort()
       .join(',');
     const rootList = roots
-      .map((n: any) => `${String(n.type)}:${String(n.id)}`)
+      .map((n) => `${String(n.type)}:${String(n.id)}`)
       .sort()
       .join(', ');
     const patchId =
       roots.length === 1
-        ? `patch:${String((roots[0] as any).type)}:${String((roots[0] as any).id)}:${hashString(nodeKey)}`
+        ? `patch:${String(roots[0]?.type)}:${String(roots[0]?.id)}:${hashString(nodeKey)}`
         : `patch:multi:${hashString(rootList)}:${hashString(nodeKey)}`;
 
     return {
@@ -1279,7 +1293,8 @@ class NodeEngineClass {
   } {
     const snapshot = this.runtime.exportGraph();
     const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out'] as const;
-    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypes.includes(n.type as any));
+    const patchRootTypeSet = new Set(patchRootTypes);
+    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypeSet.has(String(n.type) as (typeof patchRootTypes)[number]));
     if (roots.length === 0) {
       throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);
     }

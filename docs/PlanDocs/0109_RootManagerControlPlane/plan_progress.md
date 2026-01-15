@@ -198,6 +198,18 @@
     - `pnpm build:all` ✅（通过；vite/sass warnings 仍在）
   - [x] 5B 回归：Phase 1 checklist 全绿（用户手动验证）。
     - 结果（2026-01-10）：Registry MIDI 模板导入/导出 ✅；Node Graph 基本操作/Deploy ✅；控制链路 ✅。
+
+### 2026-01-15
+
+- [x] Node Graph 架构收敛（worktree：node-graph-architecture）：
+  - [x] 结构拆分：renderer registry、lifecycle cleanup、custom-node handlers、group domain handlers、runtime init（保持行为不变，仅拆分/集中 wiring）。
+  - [x] Server 修复以便回归：补 `@types/express`；`LocalMediaFile` 增补 `etag`；validate 返回补 `label`；assets auth HeaderRequest 类型修正。
+  - [x] 手动回归（用户验证）：
+    - add/connect/disconnect ✅
+    - group collapse/expand ✅
+    - nodalize/denodalize ✅
+    - loop deploy ✅
+    - display routing ✅
   - [x] 5C Console 功能拔除：移除 Console 卡片与相关状态（仅保留 Node Graph）。
     - 删除 `apps/manager/src/lib/features/**` 下 Console 卡片（Synth/Media/Flashlight/ScreenColor/Vibration/Scene）。
     - 删除 `apps/manager/src/lib/stores/controlState.ts`、`apps/manager/src/lib/streaming/streaming.ts`。
@@ -433,3 +445,9 @@
   - `apps/manager/src/lib/components/nodes/node-canvas/rete/rete-builder.ts`：自定义节点 `gate` 变化同步到 `manualGate`。
   - `apps/manager/src/lib/nodes/custom-nodes/store.ts`：Custom Node process 以 `inputs.gate` 作为唯一 gate（连线覆盖手动）。
   - `apps/manager/src/lib/components/nodes/NodeCanvas.svelte`：Nodalize/Collapse/Group toggle 时同步 `gate` 输入值，确保手动 gate 一致。
+
+- [x] Phase 2.X 节点图渐进式解耦回归（手动）：完成（2026-01-15）
+  - `pnpm lint` ✅
+  - `pnpm --filter @shugu/node-core test` ✅
+  - `pnpm test:node-canvas` ✅
+  - Phase 1 手动回归：已执行（按 `phase1_regression_playbook.md`）
