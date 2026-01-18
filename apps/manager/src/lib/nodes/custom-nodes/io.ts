@@ -9,7 +9,7 @@ import type { GraphState, NodeInstance, PortType } from '$lib/nodes/types';
 import { asRecord, getBoolean, getNumber, getString } from '$lib/utils/value-guards';
 import { generateCustomNodeGroupId, readCustomNodeState, writeCustomNodeState } from './instance';
 import type { CustomNodeInstanceState } from './instance';
-import type { CustomNodeDefinition } from './types';
+import type { CustomNodeDefinition, CustomNodePortSide } from './types';
 import { customNodeType } from './custom-node-type';
 import { dependenciesForDefinition } from './deps';
 
@@ -96,7 +96,10 @@ export function collectDefinitionClosure(
   return ordered;
 }
 
-export function buildCustomNodeFile(definitions: CustomNodeDefinition[], rootDefinitionId: string): CustomNodeFileV1 {
+export function buildCustomNodeFile(
+  definitions: CustomNodeDefinition[],
+  rootDefinitionId: string
+): CustomNodeFileV1 {
   const root = String(rootDefinitionId ?? '');
   const closure = collectDefinitionClosure(definitions, root);
 
@@ -130,7 +133,8 @@ export function parseCustomNodeFile(payload: unknown): CustomNodeFileV1 | null {
   if (payload.kind !== 'shugu-custom-node') return null;
   if (payload.version !== 1) return null;
 
-  const rootDefinitionId = typeof payload.rootDefinitionId === 'string' ? payload.rootDefinitionId : '';
+  const rootDefinitionId =
+    typeof payload.rootDefinitionId === 'string' ? payload.rootDefinitionId : '';
   const exportedAt = typeof payload.exportedAt === 'number' ? payload.exportedAt : 0;
   const definitionsRaw = Array.isArray(payload.definitions) ? payload.definitions : [];
   if (!rootDefinitionId || definitionsRaw.length === 0) return null;
@@ -190,18 +194,22 @@ export function parseCustomNodeFile(payload: unknown): CustomNodeFileV1 | null {
 
     const portsRaw = Array.isArray(item.ports) ? item.ports : [];
     const ports = portsRaw
-      .map((p) => ({
-        portKey: String(p?.portKey ?? ''),
-        side: String(p?.side) === 'input' ? 'input' : ('output' as const),
-        label: String(p?.label ?? ''),
-        type: getString(p?.type, 'any') as PortType,
-        pinned: getBoolean(p?.pinned, false),
-        y: typeof p?.y === 'number' ? p.y : Number(p?.y ?? 0),
-        binding: {
-          nodeId: String(p?.binding?.nodeId ?? ''),
-          portId: String(p?.binding?.portId ?? ''),
-        },
-      }))
+      .map((p) => {
+        const sideRaw = typeof p?.side === 'string' ? p.side : String(p?.side ?? '');
+        const side: CustomNodePortSide = sideRaw === 'input' ? 'input' : 'output';
+        return {
+          portKey: String(p?.portKey ?? ''),
+          side,
+          label: String(p?.label ?? ''),
+          type: getString(p?.type, 'any') as PortType,
+          pinned: getBoolean(p?.pinned, false),
+          y: getNumber(p?.y, 0),
+          binding: {
+            nodeId: String(p?.binding?.nodeId ?? ''),
+            portId: String(p?.binding?.portId ?? ''),
+          },
+        };
+      })
       .filter((p) => Boolean(p.portKey && p.binding?.nodeId && p.binding?.portId));
 
     defs.push({ definitionId, name, template, ports });
@@ -232,7 +240,9 @@ function rewriteGraphDeep(graph: GraphState, idMap: Map<string, string>): GraphS
 
     const mappedDefinitionId = idMap.get(String(state.definitionId)) ?? '';
     if (!mappedDefinitionId) {
-      throw new Error(`[custom-node-io] missing imported dependency definitionId: ${String(state.definitionId)}`);
+      throw new Error(
+        `[custom-node-io] missing imported dependency definitionId: ${String(state.definitionId)}`
+      );
     }
 
     const groupId = generateCustomNodeGroupId();

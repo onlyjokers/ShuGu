@@ -4,7 +4,11 @@
 import { get } from 'svelte/store';
 import type { GraphState } from '$lib/nodes/types';
 import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
-import { midiNodeBridge, midiSourceMatchesEvent } from '$lib/features/midi/midi-node-bridge';
+import {
+  midiNodeBridge,
+  midiSourceMatchesEvent,
+  type MidiSource,
+} from '$lib/features/midi/midi-node-bridge';
 import type { GraphViewAdapter } from '../adapters';
 import { computeMidiHighlightState } from './midi-highlight';
 import { nodeRegistry } from '$lib/nodes';
@@ -28,7 +32,31 @@ const MIDI_HIGHLIGHT_TTL_MS = 180;
 const midiSourceNodeTypes = new Set(['midi-fuzzy', 'midi-boolean']);
 const midiTraversalStopNodeTypes = new Set(['client-object']);
 
-export function createMidiHighlightController(opts: MidiHighlightControllerOptions): MidiHighlightController {
+const isMidiSource = (value: unknown): value is MidiSource => {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  const type = record.type;
+  const channel = record.channel;
+  if (type !== 'cc' && type !== 'note' && type !== 'pitchbend') return false;
+  if (typeof channel !== 'number' || !Number.isFinite(channel)) return false;
+  return true;
+};
+
+const midiSourceMatchesEventSafe = (
+  source: unknown,
+  event: unknown,
+  selectedInputId: string | null
+): boolean => {
+  return midiSourceMatchesEvent(
+    isMidiSource(source) ? source : null,
+    event as MidiEvent,
+    selectedInputId
+  );
+};
+
+export function createMidiHighlightController(
+  opts: MidiHighlightControllerOptions
+): MidiHighlightController {
   let midiUnsub: (() => void) | null = null;
   let midiHighlightTimeout: ReturnType<typeof setTimeout> | null = null;
   let rafId: number | null = null;
@@ -119,7 +147,7 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
           selectedInputId,
           sourceNodeTypes: midiSourceNodeTypes,
           traversalStopNodeTypes: midiTraversalStopNodeTypes,
-          midiSourceMatchesEvent,
+          midiSourceMatchesEvent: midiSourceMatchesEventSafe,
           nodeRegistry,
         });
 
@@ -192,7 +220,13 @@ export function createMidiHighlightController(opts: MidiHighlightControllerOptio
     const matched = (graph.nodes ?? [])
       .filter((n) => midiSourceNodeTypes.has(String(n.type)))
       .filter((n) => !disabledNodeIds.has(String(n.id)))
-      .some((n) => midiSourceMatchesEvent((n.config as Record<string, unknown>)?.source, event, selectedInputId));
+      .some((n) =>
+        midiSourceMatchesEventSafe(
+          (n.config as Record<string, unknown> | undefined)?.source,
+          event,
+          selectedInputId
+        )
+      );
 
     if (!matched) return;
 

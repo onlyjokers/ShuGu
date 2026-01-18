@@ -9,13 +9,15 @@ import type {
   ParsedLoop,
   ToneAdapterDeps,
   ToneEffectKind,
+  ToneConnectable,
   ToneEffectInstance,
+  ToneEffectLike,
   ToneGranularInstance,
   ToneLfoInstance,
   ToneOscInstance,
   TonePlayerInstance,
 } from './types.js';
-import type { LFOOptions, OscillatorType, PlayerOptions } from 'tone';
+import type { ToneOscillatorType } from 'tone';
 import {
   DEFAULT_RAMP_SECONDS,
   DEFAULT_STEP_SECONDS,
@@ -213,15 +215,14 @@ export function createOscInstance(
 ): ToneOscInstance {
   if (!toneModule) throw new Error('Tone module is not loaded');
 
-  const oscType = waveform as OscillatorType;
-  const osc = new toneModule.Oscillator({ frequency, type: oscType });
+  const osc = new toneModule.Oscillator(frequency, waveform as ToneOscillatorType);
   const gain = new toneModule.Gain({ gain: amplitude });
   osc.connect(gain);
   osc.start();
 
   const instance: ToneOscInstance = {
-    osc,
-    gain,
+    osc: osc as unknown as ToneOscInstance['osc'],
+    gain: gain as unknown as ToneOscInstance['gain'],
     loop: null,
     loopKey: null,
     loopDefaults: null,
@@ -244,23 +245,18 @@ export function createToneLfoInstance(
 
   const min = Math.min(params.min, params.max);
   const max = Math.max(params.min, params.max);
-  const lfoOptions: LFOOptions = {
+  const lfo = new toneModule.LFO({
     frequency: params.frequencyHz,
     min,
     max,
-    type: params.waveform as OscillatorType,
-  };
-  const lfo = new toneModule.LFO(lfoOptions);
-
-  try {
-    lfo.amplitude.value = params.amplitude;
-  } catch {
-    // ignore
-  }
+    type: params.waveform as ToneOscillatorType,
+    amplitude: params.amplitude,
+    units: 'number',
+  });
 
   const instance: ToneLfoInstance = {
     nodeId,
-    lfo,
+    lfo: lfo as unknown as ToneLfoInstance['lfo'],
     started: false,
     lastParams: { ...params, min, max },
   };
@@ -300,10 +296,10 @@ export function updateToneLfoInstance(
 
   if (instance.lastParams.frequencyHz !== params.frequencyHz) {
     try {
-      instance.lfo.frequency.rampTo(params.frequencyHz, DEFAULT_RAMP_SECONDS);
+      instance.lfo.frequency?.rampTo?.(params.frequencyHz, DEFAULT_RAMP_SECONDS);
     } catch {
       try {
-        instance.lfo.frequency.value = params.frequencyHz;
+        if (instance.lfo.frequency) instance.lfo.frequency.value = params.frequencyHz;
       } catch {
         // ignore
       }
@@ -328,10 +324,10 @@ export function updateToneLfoInstance(
 
   if (instance.lastParams.amplitude !== params.amplitude) {
     try {
-      instance.lfo.amplitude.rampTo(params.amplitude, DEFAULT_RAMP_SECONDS);
+      instance.lfo.amplitude?.rampTo?.(params.amplitude, DEFAULT_RAMP_SECONDS);
     } catch {
       try {
-        instance.lfo.amplitude.value = params.amplitude;
+        if (instance.lfo.amplitude) instance.lfo.amplitude.value = params.amplitude;
       } catch {
         // ignore
       }
@@ -340,7 +336,7 @@ export function updateToneLfoInstance(
 
   if (!instance.started) {
     try {
-      instance.lfo.start();
+      instance.lfo.start?.();
       instance.started = true;
       scheduleGraphWiring();
     } catch {
@@ -361,30 +357,32 @@ export function updateLoop(
 
   if (!instance.loop) {
     instance.loop = new toneModule.Part((time: number, event: LoopEvent) => {
-      if (!instance.osc || !instance.gain) return;
       if (typeof event.frequency === 'number' && Number.isFinite(event.frequency)) {
-        instance.osc.frequency.setValueAtTime(event.frequency, time);
+        instance.osc.frequency?.setValueAtTime?.(event.frequency, time);
       }
       if (typeof event.amplitude === 'number' && Number.isFinite(event.amplitude)) {
-        instance.gain.gain.setValueAtTime(event.amplitude, time);
+        instance.gain.gain?.setValueAtTime?.(event.amplitude, time);
       }
-    }, []);
-    instance.loop.loop = true;
+    }, []) as unknown as ToneOscInstance['loop'];
+    try {
+      instance.loop?.loop && (instance.loop.loop = true);
+    } catch {}
   }
 
   const loop = instance.loop;
-  loop.clear();
-  parsed.events.forEach((event) => loop.add(event.time, event));
-  loop.loopStart = 0;
-  loop.loopEnd = parsed.loopLengthSeconds;
+  if (!loop) return;
+  loop.clear?.();
+  parsed.events.forEach((event) => loop.add?.(event.time, event));
+  try {
+    loop.loopStart = 0;
+    loop.loopEnd = parsed.loopLengthSeconds;
+  } catch {}
   instance.lastLoopLength = parsed.loopLengthSeconds;
 
-  if (!loop.state || loop.state !== 'started') {
-    if (transportState.started) {
-      loop.start(toneModule.Transport.seconds);
-    } else {
-      loop.start(0);
-    }
+  const state = (loop as unknown as { state?: unknown }).state;
+  if (state !== 'started') {
+    const startAt = transportState.started ? toneModule.Transport.seconds : 0;
+    loop.start?.(startAt);
   }
 
   ensureTransportStart(deps, startAtServerTimeMs ?? parsed.startAtServerTimeMs);
@@ -393,8 +391,8 @@ export function updateLoop(
 export function disposeLoop(instance: ToneOscInstance): void {
   if (!instance.loop) return;
   try {
-    instance.loop.stop();
-    instance.loop.dispose();
+    instance.loop.stop?.();
+    instance.loop.dispose?.();
   } catch {
     // ignore dispose errors
   }
@@ -409,11 +407,12 @@ function createDelayEffect(time: number, feedback: number, wet: number): EffectW
     feedback,
     wet,
   });
-  const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
+  const setWet = (value: number) => effect.wet.rampTo?.(value, DEFAULT_RAMP_SECONDS);
+  const wrapped = effect as unknown as ToneEffectLike;
   return {
-    input: effect,
-    output: effect,
-    effect,
+    input: wrapped,
+    output: wrapped,
+    effect: wrapped,
     wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
@@ -421,12 +420,17 @@ function createDelayEffect(time: number, feedback: number, wet: number): EffectW
 }
 
 function createReverbEffect(decay: number, wet: number): EffectWrapper {
-  const effect = new toneModule!.Reverb({ decay, preDelay: FIXED_TONE_REVERB_PREDELAY_SECONDS, wet });
-  const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
+  const effect = new toneModule!.Reverb({
+    decay,
+    preDelay: FIXED_TONE_REVERB_PREDELAY_SECONDS,
+    wet,
+  });
+  const setWet = (value: number) => effect.wet.rampTo?.(value, DEFAULT_RAMP_SECONDS);
+  const wrapped = effect as unknown as ToneEffectLike;
   return {
-    input: effect,
-    output: effect,
-    effect,
+    input: wrapped,
+    output: wrapped,
+    effect: wrapped,
     wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
@@ -446,22 +450,19 @@ function createPitchEffect(
     feedback,
     wet,
   });
-  const setWet = (value: number) => effect.wet.rampTo(value, DEFAULT_RAMP_SECONDS);
+  const setWet = (value: number) => effect.wet.rampTo?.(value, DEFAULT_RAMP_SECONDS);
+  const wrapped = effect as unknown as ToneEffectLike;
   return {
-    input: effect,
-    output: effect,
-    effect,
+    input: wrapped,
+    output: wrapped,
+    effect: wrapped,
     wetParam: effect.wet,
     setWet,
     dispose: () => effect.dispose(),
   };
 }
 
-function createResonatorEffect(
-  resonance: number,
-  dampening: number,
-  wet: number
-): EffectWrapper {
+function createResonatorEffect(resonance: number, dampening: number, wet: number): EffectWrapper {
   const input = new toneModule!.Gain({ gain: 1 });
   const comb = new toneModule!.LowpassCombFilter({
     delayTime: FIXED_TONE_RESONATOR_DELAY_SECONDS,
@@ -473,10 +474,15 @@ function createResonatorEffect(
   input.connect(comb);
   comb.connect(crossfade.b);
   const setWet = (value: number) => crossfade.fade.rampTo(value, DEFAULT_RAMP_SECONDS);
+
+  const wrappedInput = input as unknown as ToneConnectable;
+  const wrappedOutput = crossfade as unknown as ToneConnectable;
+  const wrappedEffect = comb as unknown as ToneEffectLike;
+
   return {
-    input,
-    output: crossfade,
-    effect: comb,
+    input: wrappedInput,
+    output: wrappedOutput,
+    effect: wrappedEffect,
     wetParam: crossfade.fade,
     setWet,
     dispose: () => {
@@ -553,18 +559,15 @@ export function updateEffectInstance(
       const feedback = clamp(nextParams.feedback, 0, 1);
       const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.time !== time && !isToneLfoTargetActive(instance.nodeId, 'time')) {
-        effect.delayTime.rampTo(time, DEFAULT_RAMP_SECONDS);
+        effect.delayTime?.rampTo?.(time, DEFAULT_RAMP_SECONDS);
       }
       if (
         instance.lastParams.feedback !== feedback &&
         !isToneLfoTargetActive(instance.nodeId, 'feedback')
       ) {
-        effect.feedback.rampTo(feedback, DEFAULT_RAMP_SECONDS);
+        effect.feedback?.rampTo?.(feedback, DEFAULT_RAMP_SECONDS);
       }
-      if (
-        instance.lastParams.wet !== wet &&
-        !isToneLfoTargetActive(instance.nodeId, 'wet')
-      ) {
+      if (instance.lastParams.wet !== wet && !isToneLfoTargetActive(instance.nodeId, 'wet')) {
         applyWet(wet);
       }
       instance.lastParams = { ...instance.lastParams, ...nextParams, time, feedback, wet };
@@ -577,19 +580,21 @@ export function updateEffectInstance(
       if (instance.lastParams.decay !== decay) effect.decay = decay;
       if (!instance.pendingGenerate && instance.lastParams.decay !== decay) {
         instance.pendingGenerate = true;
-        void effect
-          .generate()
-          .catch((error: unknown) => {
-            console.warn('[tone-adapter] reverb generate failed', error);
-          })
-          .finally(() => {
-            instance.pendingGenerate = false;
-          });
+        const generate = effect.generate;
+        if (generate) {
+          void generate
+            .call(effect)
+            .catch((error: unknown) => {
+              console.warn('[tone-adapter] reverb generate failed', error);
+            })
+            .finally(() => {
+              instance.pendingGenerate = false;
+            });
+        } else {
+          instance.pendingGenerate = false;
+        }
       }
-      if (
-        instance.lastParams.wet !== wet &&
-        !isToneLfoTargetActive(instance.nodeId, 'wet')
-      ) {
+      if (instance.lastParams.wet !== wet && !isToneLfoTargetActive(instance.nodeId, 'wet')) {
         applyWet(wet);
       }
       instance.lastParams = { ...instance.lastParams, ...nextParams };
@@ -603,11 +608,13 @@ export function updateEffectInstance(
       const wet = FIXED_TONE_PITCH_WET;
       if (instance.lastParams.pitch !== pitch) effect.pitch = pitch;
       if (instance.lastParams.windowSize !== windowSize) effect.windowSize = windowSize;
-      if (instance.lastParams.feedback !== feedback) effect.feedback = feedback;
-      if (
-        instance.lastParams.wet !== wet &&
-        !isToneLfoTargetActive(instance.nodeId, 'wet')
-      ) {
+      if (instance.lastParams.feedback !== feedback) {
+        const feedbackParam = effect.feedback;
+        if (feedbackParam && typeof feedbackParam === 'object') {
+          (feedbackParam as unknown as { value?: number }).value = feedback;
+        }
+      }
+      if (instance.lastParams.wet !== wet && !isToneLfoTargetActive(instance.nodeId, 'wet')) {
         applyWet(wet);
       }
       instance.lastParams = { ...instance.lastParams, ...nextParams, feedback, wet };
@@ -620,10 +627,7 @@ export function updateEffectInstance(
       const wet = clamp(nextParams.wet, 0, 1);
       if (instance.lastParams.resonance !== resonance) comb.resonance = resonance;
       if (instance.lastParams.dampening !== dampening) comb.dampening = dampening;
-      if (
-        instance.lastParams.wet !== wet &&
-        !isToneLfoTargetActive(instance.nodeId, 'wet')
-      ) {
+      if (instance.lastParams.wet !== wet && !isToneLfoTargetActive(instance.nodeId, 'wet')) {
         applyWet(wet);
       }
       instance.lastParams = { ...instance.lastParams, ...nextParams };
@@ -649,19 +653,17 @@ export function createGranularInstance(
       if (granularInstances.get(nodeId)?.playing) {
         try {
           player.start();
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
     },
   });
 
-  player.connect(gain);
+  player.connect(gain as unknown as AudioNode);
 
   const instance: ToneGranularInstance = {
     nodeId,
-    player,
-    gain,
+    player: player as unknown as ToneGranularInstance['player'],
+    gain: gain as unknown as ToneGranularInstance['gain'],
     playing: Boolean(params.playing),
     lastUrl: url,
     lastParams: { ...params },
@@ -685,7 +687,8 @@ function isAbortError(error: unknown): boolean {
   if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
     return error.name === 'AbortError';
   }
-  if (error instanceof Error) return error.name === 'AbortError' || error.message.includes('AbortError');
+  if (error instanceof Error)
+    return error.name === 'AbortError' || error.message.includes('AbortError');
   return String(error).includes('AbortError');
 }
 
@@ -779,20 +782,23 @@ export function createPlayerInstance(
 ): TonePlayerInstance {
   const gain = new toneModule!.Gain({ gain: params.volume as number });
   const playbackRate = toNonNegativeNumber(params.playbackRate, 1);
-  const playerOptions: PlayerOptions = {
+  const player = new toneModule!.Player({
     loop: Boolean(params.loop),
     playbackRate,
-    detune: params.detune as number,
     autostart: false,
-  };
-  const player = new toneModule!.Player(playerOptions);
+  });
 
-  player.connect(gain);
+  const playerAny = player as unknown as { detune?: number };
+  if (typeof playerAny.detune === 'number' || playerAny.detune === undefined) {
+    playerAny.detune = Number(params.detune ?? 0);
+  }
+
+  player.connect(gain as unknown as AudioNode);
 
   const instance: TonePlayerInstance = {
     nodeId,
-    player,
-    gain,
+    player: player as unknown as TonePlayerInstance['player'],
+    gain: gain as unknown as TonePlayerInstance['gain'],
     playing: Boolean(params.playing),
     started: false,
     startedAt: 0,
@@ -904,8 +910,8 @@ export function createAudioDataInstance(
 
   const instance: AudioDataInstance = {
     nodeId,
-    input,
-    output,
+    input: input as unknown as ToneConnectable,
+    output: output as unknown as ToneConnectable,
     analyser,
     timeData: new Float32Array(analyser.fftSize) as unknown as Float32Array<ArrayBuffer>,
     freqData: new Uint8Array(analyser.frequencyBinCount),
@@ -931,7 +937,9 @@ export function updateAudioDataInstance(
   if (prev.fftSize !== config.fftSize) {
     try {
       instance.analyser.fftSize = config.fftSize;
-      instance.timeData = new Float32Array(instance.analyser.fftSize) as unknown as Float32Array<ArrayBuffer>;
+      instance.timeData = new Float32Array(
+        instance.analyser.fftSize
+      ) as unknown as Float32Array<ArrayBuffer>;
       instance.freqData = new Uint8Array(instance.analyser.frequencyBinCount);
     } catch {
       // ignore
@@ -997,7 +1005,7 @@ export function analyzeAudioDataInstance(
   let centroidHz = 0;
 
   try {
-    instance.analyser.getByteFrequencyData(instance.freqData);
+    instance.analyser.getByteFrequencyData(instance.freqData as unknown as Uint8Array<ArrayBuffer>);
     const binCount = instance.freqData.length;
     const sampleRate = instance.analyser.context?.sampleRate ?? 44100;
     const nyquist = sampleRate / 2;
@@ -1058,7 +1066,8 @@ export function analyzeAudioDataInstance(
 
     if (instance.energyHistory.length >= 10) {
       const avg =
-        instance.energyHistory.reduce((sum, item) => sum + item.e, 0) / instance.energyHistory.length;
+        instance.energyHistory.reduce((sum, item) => sum + item.e, 0) /
+        instance.energyHistory.length;
       const variance =
         instance.energyHistory.reduce((sum, item) => sum + (item.e - avg) ** 2, 0) /
         instance.energyHistory.length;
@@ -1099,17 +1108,17 @@ export function disposeOscInstance(nodeId: string): void {
   if (!inst) return;
   disposeLoop(inst);
   try {
-    inst.osc?.stop();
+    inst.osc?.stop?.();
   } catch {
     // ignore
   }
   try {
-    inst.osc?.dispose();
+    inst.osc?.dispose?.();
   } catch {
     // ignore
   }
   try {
-    inst.gain?.dispose();
+    inst.gain?.dispose?.();
   } catch {
     // ignore
   }
@@ -1132,17 +1141,17 @@ export function disposeGranularInstance(nodeId: string): void {
   const inst = granularInstances.get(nodeId);
   if (!inst) return;
   try {
-    inst.player?.stop();
+    inst.player?.stop?.();
   } catch {
     // ignore
   }
   try {
-    inst.player?.dispose();
+    inst.player?.dispose?.();
   } catch {
     // ignore
   }
   try {
-    inst.gain?.dispose();
+    inst.gain?.dispose?.();
   } catch {
     // ignore
   }
@@ -1160,17 +1169,17 @@ export function disposePlayerInstance(nodeId: string): void {
   inst.loadController = null;
   try {
     inst.manualStopPending = true;
-    inst.player?.stop();
+    inst.player?.stop?.();
   } catch {
     inst.manualStopPending = false;
   }
   try {
-    inst.player?.dispose();
+    inst.player?.dispose?.();
   } catch {
     // ignore
   }
   try {
-    inst.gain?.dispose();
+    inst.gain?.dispose?.();
   } catch {
     // ignore
   }
@@ -1181,12 +1190,12 @@ export function disposeToneLfoInstance(nodeId: string): void {
   const inst = lfoInstances.get(nodeId);
   if (!inst) return;
   try {
-    inst.lfo?.stop();
+    inst.lfo?.stop?.();
   } catch {
     // ignore
   }
   try {
-    inst.lfo?.dispose();
+    inst.lfo?.dispose?.();
   } catch {
     // ignore
   }
@@ -1198,27 +1207,27 @@ export function disposeAudioDataInstance(nodeId: string): void {
   const inst = audioDataInstances.get(nodeId);
   if (!inst) return;
   try {
-    inst.output?.disconnect();
+    inst.output?.disconnect?.();
   } catch {
     // ignore
   }
   try {
-    inst.input?.disconnect();
+    inst.input?.disconnect?.();
   } catch {
     // ignore
   }
   try {
-    inst.analyser?.disconnect();
+    inst.analyser?.disconnect?.();
   } catch {
     // ignore
   }
   try {
-    inst.output?.dispose();
+    inst.output?.dispose?.();
   } catch {
     // ignore
   }
   try {
-    inst.input?.dispose();
+    inst.input?.dispose?.();
   } catch {
     // ignore
   }

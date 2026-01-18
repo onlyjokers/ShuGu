@@ -48,9 +48,16 @@ export class LiveDOMSocketPosition extends DOMSocketPosition<BaseSchemes, unknow
 
     observeAll();
     area.addPipe((ctx) => {
-      if (ctx?.type === 'rendered' && ctx.data?.type === 'node') {
-        observeAll();
-      }
+      if (!ctx || typeof ctx !== 'object') return ctx;
+      const rec = ctx as Record<string, unknown>;
+      if (rec.type !== 'rendered') return ctx;
+
+      const data = rec.data;
+      if (!data || typeof data !== 'object') return ctx;
+      const dataRec = data as Record<string, unknown>;
+
+      if (dataRec.type === 'node') observeAll();
+
       return ctx;
     });
   }
@@ -113,24 +120,40 @@ export class LiveDOMSocketPosition extends DOMSocketPosition<BaseSchemes, unknow
     const nodeEl = view?.element as HTMLElement | undefined;
     const isHeaderSocket = Boolean(element.closest?.('.group-frame-gate-sockets'));
     const isGroupProxy = Boolean(
-      nodeEl?.classList?.contains('group-proxy-input') || nodeEl?.classList?.contains('group-proxy-output')
+      nodeEl?.classList?.contains('group-proxy-input') ||
+      nodeEl?.classList?.contains('group-proxy-output')
     );
 
     if (!nodeEl) return super.calculatePosition(nodeId, side, key, element);
-    if (!isHeaderSocket && !isGroupProxy) return super.calculatePosition(nodeId, side, key, element);
+    if (!isHeaderSocket && !isGroupProxy)
+      return super.calculatePosition(nodeId, side, key, element);
 
     const target = (element.querySelector?.('.socket') as HTMLElement | null) ?? element;
     const rect = target.getBoundingClientRect();
     const nodeRect = nodeEl.getBoundingClientRect();
-    const k = Number(area?.transform?.k ?? 1) || 1;
+
+    type AreaTransformLike = { transform?: { k?: number } };
+    const k = Number((area as unknown as AreaTransformLike).transform?.k ?? 1) || 1;
 
     const local = {
       x: (rect.left - nodeRect.left + rect.width / 2) / k,
       y: (rect.top - nodeRect.top + rect.height / 2) / k,
     };
 
-    const props = (this as { props?: { offset?: (pos: { x: number; y: number }, nodeId: string, side: string, key: string) => { x: number; y: number } } }).props;
-    if (props?.offset) return props.offset(local, nodeId, side, key);
+    type OffsetFn = (
+      pos: { x: number; y: number },
+      nodeId: string,
+      side: string,
+      key: string
+    ) => { x: number; y: number };
+
+    const rawProps = (this as unknown as Record<string, unknown>)['props'];
+    const offsetRaw =
+      rawProps && typeof rawProps === 'object'
+        ? (rawProps as Record<string, unknown>)['offset']
+        : undefined;
+
+    if (typeof offsetRaw === 'function') return (offsetRaw as OffsetFn)(local, nodeId, side, key);
 
     return { x: local.x, y: local.y };
   }

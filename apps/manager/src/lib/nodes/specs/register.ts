@@ -10,11 +10,7 @@
  * - For node-core node types, `runtime` is ignored and only overlay fields are applied.
  */
 import { get } from 'svelte/store';
-import {
-  targetClients,
-  type ControlAction,
-  type ControlPayload,
-} from '@shugu/protocol';
+import { targetClients, type ControlAction, type ControlPayload } from '@shugu/protocol';
 import {
   NodeRegistry as CoreNodeRegistry,
   registerDefaultNodeDefinitions,
@@ -24,13 +20,26 @@ import {
 import { nodeRegistry } from '../registry';
 import type { ConfigField, NodeDefinition, NodePort, ProcessContext } from '../types';
 import { parameterRegistry } from '$lib/parameters/registry';
-import { clientScreenshotUploads, displayTransport, getSDK, sensorData, state, selectClients } from '$lib/stores/manager';
+import {
+  clientScreenshotUploads,
+  displayTransport,
+  getSDK,
+  sensorData,
+  state,
+  selectClients,
+} from '$lib/stores/manager';
 import { midiNodeBridge, type MidiSource } from '$lib/features/midi/midi-node-bridge';
 import { mapRangeWithOptions } from '$lib/features/midi/midi-math';
+import { registerAssetsFallbackNodes } from './register-assets-fallback-nodes';
 
 type WhenOp = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte';
 type WhenSource = 'input' | 'config' | 'payload';
-type WhenCondition = { source: WhenSource; key: string; op: WhenOp; value: string | number | boolean };
+type WhenCondition = {
+  source: WhenSource;
+  key: string;
+  op: WhenOp;
+  value: string | number | boolean;
+};
 
 type ClampSpec = { min?: number; max?: number };
 
@@ -153,7 +162,16 @@ const coreRuntimeImplByKind: Map<string, CoreRuntimeImpl> = (() => {
     getClientId: () => null,
     getSensorForClientId: (clientId) => {
       if (!clientId) return null;
-      return get(sensorData).get(clientId) ?? null;
+      const msg = get(sensorData).get(clientId) ?? null;
+      if (!msg) return null;
+      const serverTimestamp = typeof msg.serverTimestamp === 'number' ? msg.serverTimestamp : 0;
+      const clientTimestamp = typeof msg.clientTimestamp === 'number' ? msg.clientTimestamp : 0;
+      return {
+        sensorType: msg.sensorType,
+        payload: msg.payload,
+        serverTimestamp,
+        clientTimestamp,
+      };
     },
     executeCommand: () => {
       // Manager always routes via executeCommandForClientId.
@@ -350,7 +368,9 @@ function applyClientSelectionFromInputs(nodeId: string, inputs: Record<string, u
   } else {
     next = buildAlternatingSelection(clients, start, rangeClamped);
   }
-  const current = get(state).selectedClientIds.map(String).filter((id) => clients.includes(id));
+  const current = get(state)
+    .selectedClientIds.map(String)
+    .filter((id) => clients.includes(id));
   const inputsChanged =
     prev.index !== start ||
     prev.range !== rangeClamped ||
@@ -430,7 +450,11 @@ function getEnumFromFuzzy(
   const options = Array.isArray(mapping.options) ? mapping.options : [];
   const fallback = mapping.configKey ? config[mapping.configKey] : undefined;
   const fallbackStr =
-    typeof fallback === 'string' && fallback ? fallback : typeof mapping.default === 'string' ? mapping.default : '';
+    typeof fallback === 'string' && fallback
+      ? fallback
+      : typeof mapping.default === 'string'
+        ? mapping.default
+        : '';
 
   const raw = inputs[mapping.inputKey];
   if (typeof raw === 'string' && raw) {
@@ -452,7 +476,8 @@ function getEnumFromThreshold(
   mapping: Extract<CommandFieldMapping, { kind: 'enumFromThreshold' }>
 ): string {
   const raw = inputs[mapping.inputKey];
-  if (isFiniteNumber(raw)) return raw >= Number(mapping.threshold ?? 0) ? mapping.whenTrue : mapping.whenFalse;
+  if (isFiniteNumber(raw))
+    return raw >= Number(mapping.threshold ?? 0) ? mapping.whenTrue : mapping.whenFalse;
 
   const fallback = mapping.configKey ? config[mapping.configKey] : undefined;
   if (typeof fallback === 'string' && fallback) return fallback;
@@ -594,7 +619,9 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         onSink: (inputs, config, context) => {
           applyClientSelectionFromInputs(context.nodeId, inputs);
 
-          const clients = (get(state).clients ?? []).map((c) => String(c.clientId ?? '')).filter(Boolean);
+          const clients = (get(state).clients ?? [])
+            .map((c) => String(c.clientId ?? ''))
+            .filter(Boolean);
           if (clients.length === 0) return;
 
           const selection = clientSelectionState.get(context.nodeId);
@@ -603,8 +630,10 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
               ? selection.selectedIds
               : get(state).selectedClientIds.map(String).filter(Boolean);
 
-          const fallbackClientId = typeof config.clientId === 'string' ? String(config.clientId) : '';
-          const targets = selectedIds.length > 0 ? selectedIds : fallbackClientId ? [fallbackClientId] : [];
+          const fallbackClientId =
+            typeof config.clientId === 'string' ? String(config.clientId) : '';
+          const targets =
+            selectedIds.length > 0 ? selectedIds : fallbackClientId ? [fallbackClientId] : [];
           if (targets.length === 0) return;
 
           const raw = inputs.in;
@@ -622,7 +651,8 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             const action = actionRaw as ControlAction;
             const payloadRecord = asRecord(cmdRecord.payload) ?? {};
             const payload = payloadRecord as ControlPayload;
-            const executeAt = typeof cmdRecord.executeAt === 'number' ? cmdRecord.executeAt : undefined;
+            const executeAt =
+              typeof cmdRecord.executeAt === 'number' ? cmdRecord.executeAt : undefined;
 
             for (const clientId of targets) {
               sdk.sendControl(targetClients([clientId]), action, payload, executeAt);
@@ -644,14 +674,20 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
           const availability = displayTransport.getAvailability();
           if (!availability.hasLocalSession && !sdk) return;
 
-          if (import.meta.env.DEV && !availability.hasLocalSession && !availability.hasRemoteDisplay) {
+          if (
+            import.meta.env.DEV &&
+            !availability.hasLocalSession &&
+            !availability.hasRemoteDisplay
+          ) {
             const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
             const warnKey = `warn:${nodeKey}`;
             const now = Date.now();
             const lastAt = displayObjectLogLastAt.get(warnKey) ?? 0;
             if (now - lastAt >= 1500) {
               displayObjectLogLastAt.set(warnKey, now);
-              console.warn('[Manager] display-object: no Display target (open Display app or pair local Display).');
+              console.warn(
+                '[Manager] display-object: no Display target (open Display app or pair local Display).'
+              );
             }
           }
 
@@ -663,12 +699,14 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             const action = actionRaw as ControlAction;
             const payloadRecord = asRecord(cmdRecord.payload) ?? {};
             const payload = payloadRecord as ControlPayload;
-            const executeAt = typeof cmdRecord.executeAt === 'number' ? cmdRecord.executeAt : undefined;
+            const executeAt =
+              typeof cmdRecord.executeAt === 'number' ? cmdRecord.executeAt : undefined;
 
             const sendResult = displayTransport.sendControl(action, payload, executeAt);
 
             if (import.meta.env.DEV && (action === 'showImage' || action === 'hideImage')) {
-              const nodeKey = typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
+              const nodeKey =
+                typeof context?.nodeId === 'string' ? context.nodeId : 'display-object';
               const now = Date.now();
               const lastAt = displayObjectLogLastAt.get(nodeKey) ?? 0;
               if (now - lastAt >= 500) {
@@ -735,8 +773,7 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
     case 'client-count':
     case 'array-filter':
     case 'tone-osc':
-    case 'play-media':
-    {
+    case 'play-media': {
       const impl = coreRuntimeImplByKind.get(spec.runtime.kind);
       if (!impl) {
         throw new Error(`[node-specs] missing core runtime kind: ${spec.runtime.kind}`);
@@ -788,7 +825,8 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
             typeof inputs.value === 'number' && Number.isFinite(inputs.value)
               ? inputs.value
               : Number(inputs.value ?? 0);
-          const bypass = typeof inputs.bypass === 'boolean' ? inputs.bypass : Boolean(inputs.bypass ?? false);
+          const bypass =
+            typeof inputs.bypass === 'boolean' ? inputs.bypass : Boolean(inputs.bypass ?? false);
 
           if (!path || bypass) return { value };
 
@@ -953,7 +991,12 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
         if (!isShort && !isFull) return null;
         if (!/^[0-9a-fA-F]+$/.test(hex)) return null;
 
-        const full = isShort ? hex.split('').map((c) => c + c).join('') : hex;
+        const full = isShort
+          ? hex
+              .split('')
+              .map((c) => c + c)
+              .join('')
+          : hex;
         const r = parseInt(full.slice(0, 2), 16);
         const g = parseInt(full.slice(2, 4), 16);
         const b = parseInt(full.slice(4, 6), 16);
@@ -983,13 +1026,23 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
 
           const fromInput = inputs.from;
           const toInput = inputs.to;
-          const fromRaw = typeof fromInput === 'string' && fromInput.trim() ? fromInput.trim() : (config.from ?? '#6366f1');
-          const toRaw = typeof toInput === 'string' && toInput.trim() ? toInput.trim() : (config.to ?? '#ffffff');
+          const fromRaw =
+            typeof fromInput === 'string' && fromInput.trim()
+              ? fromInput.trim()
+              : (config.from ?? '#6366f1');
+          const toRaw =
+            typeof toInput === 'string' && toInput.trim()
+              ? toInput.trim()
+              : (config.to ?? '#ffffff');
           const from = parseHexColor(fromRaw) ?? parseHexColor('#6366f1');
           const to = parseHexColor(toRaw) ?? parseHexColor('#ffffff');
           if (!from || !to) return { out: null };
 
-          const out: Rgb = { r: lerp(from.r, to.r, t), g: lerp(from.g, to.g, t), b: lerp(from.b, to.b, t) };
+          const out: Rgb = {
+            r: lerp(from.r, to.r, t),
+            g: lerp(from.g, to.g, t),
+            b: lerp(from.b, to.b, t),
+          };
           return { out: toHex(out) };
         },
       };
@@ -1004,9 +1057,12 @@ function createDefinition(spec: NodeSpec & { runtime: NodeRuntime }): NodeDefini
 }
 
 function applySpecOverlay(base: NodeDefinition, spec: NodeSpec): NodeDefinition {
-  const nextLabel = typeof spec.label === 'string' && spec.label.trim() ? spec.label.trim() : base.label;
+  const nextLabel =
+    typeof spec.label === 'string' && spec.label.trim() ? spec.label.trim() : base.label;
   const nextCategory =
-    typeof spec.category === 'string' && spec.category.trim() ? spec.category.trim() : base.category;
+    typeof spec.category === 'string' && spec.category.trim()
+      ? spec.category.trim()
+      : base.category;
 
   const mergeMin = (baseMin: number | undefined, overlayMin: unknown): number | undefined => {
     const ov = isFiniteNumber(overlayMin) ? overlayMin : undefined;
@@ -1047,7 +1103,9 @@ function applySpecOverlay(base: NodeDefinition, spec: NodeSpec): NodeDefinition 
       if (overlayType && overlayType !== String(port.type)) return port;
 
       const label =
-        typeof overlay.label === 'string' && overlay.label.trim() ? overlay.label.trim() : port.label;
+        typeof overlay.label === 'string' && overlay.label.trim()
+          ? overlay.label.trim()
+          : port.label;
 
       const min = mergeMin(port.min, overlay.min);
       const max = mergeMax(port.max, overlay.max);
@@ -1079,7 +1137,9 @@ function applySpecOverlay(base: NodeDefinition, spec: NodeSpec): NodeDefinition 
       if (overlayType && overlayType !== String(field.type)) return field;
 
       const label =
-        typeof overlay.label === 'string' && overlay.label.trim() ? overlay.label.trim() : field.label;
+        typeof overlay.label === 'string' && overlay.label.trim()
+          ? overlay.label.trim()
+          : field.label;
 
       const min = mergeMin(field.min, overlay.min);
       const max = mergeMax(field.max, overlay.max);
@@ -1103,13 +1163,17 @@ function applySpecOverlay(base: NodeDefinition, spec: NodeSpec): NodeDefinition 
 }
 
 function loadSpecs(): NodeSpec[] {
-  const modules = import.meta.glob('./**/*.json', { eager: true }) as Record<string, { default: unknown }>;
+  const modules = import.meta.glob('./**/*.json', { eager: true }) as Record<
+    string,
+    { default: unknown }
+  >;
   const specs: NodeSpec[] = [];
 
   for (const mod of Object.values(modules)) {
     const spec = mod?.default;
     if (!spec || typeof spec !== 'object') continue;
-    const type = typeof spec.type === 'string' ? spec.type.trim() : '';
+    const record = spec as Record<string, unknown>;
+    const type = typeof record.type === 'string' ? record.type.trim() : '';
     if (!type) continue;
     specs.push(spec as NodeSpec);
   }
@@ -1134,7 +1198,16 @@ registerDefaultNodeDefinitions(nodeRegistry, {
   getSelectedClientIds: () => [],
   getSensorForClientId: (clientId: string) => {
     if (!clientId) return null;
-    return get(sensorData).get(clientId) ?? null;
+    const msg = get(sensorData).get(clientId) ?? null;
+    if (!msg) return null;
+    const serverTimestamp = typeof msg.serverTimestamp === 'number' ? msg.serverTimestamp : 0;
+    const clientTimestamp = typeof msg.clientTimestamp === 'number' ? msg.clientTimestamp : 0;
+    return {
+      sensorType: msg.sensorType,
+      payload: msg.payload,
+      serverTimestamp,
+      clientTimestamp,
+    };
   },
   getImageForClientId: (clientId: string) => {
     if (!clientId) return null;
@@ -1151,208 +1224,7 @@ registerDefaultNodeDefinitions(nodeRegistry, {
   },
 });
 
-// Backward-compatible fallback: `load-audio-from-assets` is a newer convenience node.
-// If a dev environment is running with stale node-core builds, templates may fail to import.
-// Register a minimal definition here so graphs can still load (node-core remains the SOT when available).
-if (!nodeRegistry.get('load-audio-from-assets')) {
-  nodeRegistry.register({
-    type: 'load-audio-from-assets',
-    label: 'Load Audio From Remote',
-    category: 'Assets',
-    inputs: [
-      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
-      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
-      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
-      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
-      { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-    ],
-    outputs: [
-      { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
-      { id: 'ended', label: 'Finish', type: 'boolean' },
-    ],
-    configSchema: [
-      {
-        key: 'assetId',
-        label: 'Audio Asset',
-        type: 'asset-picker',
-        assetKind: 'audio',
-        defaultValue: '',
-      },
-      { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
-      { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      {
-        key: 'timeline',
-        label: 'Timeline',
-        type: 'time-range',
-        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
-        min: 0,
-        step: 0.01,
-      },
-    ],
-    process: (inputs, config) => {
-      const assetId = typeof config.assetId === 'string' ? String(config.assetId).trim() : '';
-      const playRaw = inputs.play;
-      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-      // Manager-side placeholder: the actual audio playback is implemented on the client runtime.
-      // Return a simple gate value so downstream nodes can reflect play/pause state.
-      return { ref: assetId && play ? 1 : 0, ended: false };
-    },
-  });
-}
-
-if (!nodeRegistry.get('load-image-from-assets')) {
-  nodeRegistry.register({
-    type: 'load-image-from-assets',
-    label: 'Load Image From Remote',
-    category: 'Assets',
-    inputs: [],
-    outputs: [{ id: 'ref', label: 'Image Out', type: 'image', kind: 'sink' }],
-    configSchema: [
-      {
-        key: 'assetId',
-        label: 'Image Asset',
-        type: 'asset-picker',
-        assetKind: 'image',
-        defaultValue: '',
-      },
-      {
-        key: 'fit',
-        label: 'Fit',
-        type: 'select',
-        defaultValue: 'contain',
-        options: [
-          { value: 'contain', label: 'Contain' },
-          { value: 'fit-screen', label: 'Fit Screen' },
-          { value: 'cover', label: 'Cover' },
-          { value: 'fill', label: 'Fill' },
-        ],
-      },
-    ],
-    process: (_inputs, config) => {
-      const assetId =
-        typeof config.assetId === 'string' ? String(config.assetId).trim() : '';
-      const fitRaw =
-        typeof config.fit === 'string'
-          ? String(config.fit).trim().toLowerCase()
-          : '';
-      const fit =
-        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
-      const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
-      return { ref: assetId ? `asset:${assetId}${fitHash}` : '' };
-    },
-  });
-}
-
-if (!nodeRegistry.get('load-video-from-assets')) {
-  nodeRegistry.register({
-    type: 'load-video-from-assets',
-    label: 'Load Video From Remote',
-    category: 'Assets',
-    inputs: [
-      { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
-      { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
-      { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
-      { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
-      { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
-    ],
-    outputs: [
-      { id: 'ref', label: 'Video Out', type: 'video', kind: 'sink' },
-      { id: 'ended', label: 'Finish', type: 'boolean' },
-    ],
-    configSchema: [
-      {
-        key: 'assetId',
-        label: 'Video Asset',
-        type: 'asset-picker',
-        assetKind: 'video',
-        defaultValue: '',
-      },
-      {
-        key: 'timeline',
-        label: 'Timeline',
-        type: 'time-range',
-        defaultValue: { startSec: 0, endSec: -1, cursorSec: -1 },
-        min: 0,
-        step: 0.01,
-      },
-      {
-        key: 'fit',
-        label: 'Fit',
-        type: 'select',
-        defaultValue: 'contain',
-        options: [
-          { value: 'contain', label: 'Contain' },
-          { value: 'fit-screen', label: 'Fit Screen' },
-          { value: 'cover', label: 'Cover' },
-          { value: 'fill', label: 'Fill' },
-        ],
-      },
-    ],
-    process: (inputs, config) => {
-      const assetId = typeof config.assetId === 'string' ? String(config.assetId).trim() : '';
-      const fitRaw = typeof config.fit === 'string' ? String(config.fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
-      const startSec =
-        typeof inputs.startSec === 'number' && Number.isFinite(inputs.startSec)
-          ? Number(inputs.startSec)
-          : 0;
-      const endSec =
-        typeof inputs.endSec === 'number' && Number.isFinite(inputs.endSec)
-          ? Number(inputs.endSec)
-          : -1;
-      const cursorSec =
-        typeof inputs.cursorSec === 'number' && Number.isFinite(inputs.cursorSec)
-          ? Number(inputs.cursorSec)
-          : -1;
-
-      const loopRaw = inputs.loop;
-      const playRaw = inputs.play;
-      const loop = typeof loopRaw === 'number' ? loopRaw >= 0.5 : Boolean(loopRaw);
-      const play = typeof playRaw === 'number' ? playRaw >= 0.5 : Boolean(playRaw);
-      const reverseRaw = inputs.reverse;
-      const reverse = typeof reverseRaw === 'number' ? reverseRaw >= 0.5 : Boolean(reverseRaw);
-      const mutedRaw = inputs.muted;
-      const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
-      const volumeRaw = inputs.volume;
-      const volumeParam = typeof volumeRaw === 'string' ? Number(volumeRaw) : Number(volumeRaw);
-      const volumeValue = Number.isFinite(volumeParam) ? Math.max(-1, Math.min(100, volumeParam)) : 0;
-      const volumeGain =
-        volumeValue <= -1
-          ? 0
-          : volumeValue < 0
-            ? 1 + volumeValue
-            : volumeValue <= 2
-              ? 1 + volumeValue / 2
-              : volumeValue;
-      const volumeRounded = Math.round(volumeGain * 100) / 100;
-      const mutedEffective = muted || volumeRounded <= 0;
-
-      const startClamped = Math.max(0, startSec);
-      const endClamped = endSec >= 0 ? Math.max(startClamped, endSec) : -1;
-      const tValue = endClamped >= 0 ? `${startClamped},${endClamped}` : `${startClamped},`;
-
-      const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
-      const positionParam =
-        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
-      const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
-
-      return {
-        ref: assetId
-          ? `asset:${assetId}#t=${tValue}&loop=${loop ? 1 : 0}&play=${play ? 1 : 0}&rev=${reverse ? 1 : 0}&vol=${volumeRounded}&muted=${mutedEffective ? 1 : 0}${positionParam}${fitParam}`
-          : '',
-        ended: false,
-      };
-    },
-  });
-}
+registerAssetsFallbackNodes(nodeRegistry);
 
 const ensureLocalMediaKindQuery = (ref: string, kind: 'audio' | 'image' | 'video'): string => {
   const hashIndex = ref.indexOf('#');
@@ -1414,13 +1286,28 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
       { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        id: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
     ],
     outputs: [
       { id: 'ref', label: 'Audio Out', type: 'audio', kind: 'sink' },
@@ -1436,7 +1323,15 @@ if (!nodeRegistry.get('load-audio-from-local')) {
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        key: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
       {
         key: 'timeline',
         label: 'Timeline',
@@ -1496,10 +1391,7 @@ if (!nodeRegistry.get('load-image-from-local')) {
             ? String(config.assetPath).trim()
             : '';
       const baseRef = baseUrl ? normalizeLocalMediaRef(baseUrl, 'image') : '';
-      const fitRaw =
-        typeof config.fit === 'string'
-          ? String(config.fit).trim().toLowerCase()
-          : '';
+      const fitRaw = typeof config.fit === 'string' ? String(config.fit).trim().toLowerCase() : '';
       const fit =
         fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
       const fitHash = fit !== 'contain' ? `#fit=${fit}` : '';
@@ -1524,11 +1416,26 @@ if (!nodeRegistry.get('load-video-from-local')) {
       { id: 'asset', label: 'Asset', type: 'string', defaultValue: '' },
       { id: 'startSec', label: 'Start (s)', type: 'number', defaultValue: 0, min: 0, step: 0.01 },
       { id: 'endSec', label: 'End (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
-      { id: 'cursorSec', label: 'Cursor (s)', type: 'number', defaultValue: -1, min: -1, step: 0.01 },
+      {
+        id: 'cursorSec',
+        label: 'Cursor (s)',
+        type: 'number',
+        defaultValue: -1,
+        min: -1,
+        step: 0.01,
+      },
       { id: 'loop', label: 'Loop', type: 'boolean', defaultValue: false },
       { id: 'play', label: 'Play', type: 'boolean', defaultValue: true },
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        id: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
       { id: 'muted', label: 'Mute', type: 'boolean', defaultValue: true },
     ],
     outputs: [
@@ -1573,7 +1480,8 @@ if (!nodeRegistry.get('load-video-from-local')) {
             : '';
       const localRef = assetUrl ? normalizeLocalMediaRef(assetUrl, 'video') : '';
       const fitRaw = typeof config.fit === 'string' ? String(config.fit).trim().toLowerCase() : '';
-      const fit = fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
+      const fit =
+        fitRaw === 'cover' || fitRaw === 'fill' || fitRaw === 'fit-screen' ? fitRaw : 'contain';
 
       const startSec =
         typeof inputs.startSec === 'number' && Number.isFinite(inputs.startSec)
@@ -1598,7 +1506,9 @@ if (!nodeRegistry.get('load-video-from-local')) {
       const muted = typeof mutedRaw === 'number' ? mutedRaw >= 0.5 : Boolean(mutedRaw);
       const volumeRaw = inputs.volume;
       const volumeParam = typeof volumeRaw === 'string' ? Number(volumeRaw) : Number(volumeRaw);
-      const volumeValue = Number.isFinite(volumeParam) ? Math.max(-1, Math.min(100, volumeParam)) : 0;
+      const volumeValue = Number.isFinite(volumeParam)
+        ? Math.max(-1, Math.min(100, volumeParam))
+        : 0;
       const volumeGain =
         volumeValue <= -1
           ? 0
@@ -1616,8 +1526,12 @@ if (!nodeRegistry.get('load-video-from-local')) {
 
       const cursorClamped = cursorSec >= 0 ? Math.max(startClamped, cursorSec) : -1;
       const positionParam =
-        cursorClamped >= 0 ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}` : '';
-      const nodeParam = context?.nodeId ? `&node=${encodeURIComponent(String(context.nodeId))}` : '';
+        cursorClamped >= 0
+          ? `&p=${endClamped >= 0 ? Math.min(endClamped, cursorClamped) : cursorClamped}`
+          : '';
+      const nodeParam = context?.nodeId
+        ? `&node=${encodeURIComponent(String(context.nodeId))}`
+        : '';
       const fitParam = fit !== 'contain' ? `&fit=${fit}` : '';
 
       const baseUrl = (() => {

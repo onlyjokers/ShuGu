@@ -20,33 +20,52 @@
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import type { ClientInfo } from '@shugu/protocol';
   import { midiService, type MidiEvent } from '$lib/features/midi/midi-service';
-  import { midiNodeBridge, formatMidiSource, type MidiSource } from '$lib/features/midi/midi-node-bridge';
+  import {
+    midiNodeBridge,
+    formatMidiSource,
+    type MidiSource,
+  } from '$lib/features/midi/midi-node-bridge';
   import type { Connection, NodeInstance } from '$lib/nodes/types';
   import {
     getAudioSpectrogramDataUrl,
     getMediaDurationSec,
   } from '$lib/features/assets/media-timeline-preview';
   import { renderMarkdownToHtml } from '../utils/markdown';
+  import { asRecord } from '$lib/utils/value-guards';
   import CurveEditor from '../ui/CurveEditor.svelte';
 
   type AnyRecord = Record<string, unknown>;
 
+  type WithSetValue = { setValue: (value: unknown) => void };
+  const hasSetValue = (value: unknown): value is WithSetValue =>
+    typeof asRecord(value).setValue === 'function';
+
   export let data: AnyRecord;
-  $: isInline = Boolean((data as AnyRecord)?.inline);
+  $: dataRecord = asRecord(data);
+  $: isInline = Boolean(dataRecord.inline);
   $: inputControlLabel =
-    data instanceof ClassicPreset.InputControl ? (data as AnyRecord).controlLabel : undefined;
+    data instanceof ClassicPreset.InputControl
+      ? (asRecord(data).controlLabel as string | undefined)
+      : undefined;
+
   type NumberBounds = { min?: number; max?: number; step?: number };
   const resolveNumberBounds = (ctrl: unknown): NumberBounds => {
     if (!(ctrl instanceof ClassicPreset.InputControl)) return {};
-    if ((ctrl as AnyRecord).type !== 'number') return {};
+
+    const ctrlRecord = asRecord(ctrl as unknown);
+    if (ctrlRecord.type !== 'number') return {};
 
     const isFiniteNumber = (value: unknown): value is number =>
       typeof value === 'number' && Number.isFinite(value);
 
+    const minRaw = ctrlRecord.min;
+    const maxRaw = ctrlRecord.max;
+    const stepRaw = ctrlRecord.step;
+
     const fromControl: NumberBounds = {
-      min: isFiniteNumber((ctrl as AnyRecord).min) ? (ctrl as AnyRecord).min : undefined,
-      max: isFiniteNumber((ctrl as AnyRecord).max) ? (ctrl as AnyRecord).max : undefined,
-      step: isFiniteNumber((ctrl as AnyRecord).step) ? (ctrl as AnyRecord).step : undefined,
+      min: isFiniteNumber(minRaw) ? minRaw : undefined,
+      max: isFiniteNumber(maxRaw) ? maxRaw : undefined,
+      step: isFiniteNumber(stepRaw) ? stepRaw : undefined,
     };
     if (
       fromControl.min !== undefined ||
@@ -58,11 +77,9 @@
 
     // Safety: some legacy graphs/controls may miss `min/max` hints. Resolve them from the node registry so
     // critical constraints (e.g. non-negative playback rate) still apply at the UI layer.
-    const nodeType =
-      typeof (ctrl as AnyRecord).nodeType === 'string' ? String((ctrl as AnyRecord).nodeType) : '';
-    const portId = typeof (ctrl as AnyRecord).portId === 'string' ? String((ctrl as AnyRecord).portId) : '';
-    const configKey =
-      typeof (ctrl as AnyRecord).configKey === 'string' ? String((ctrl as AnyRecord).configKey) : '';
+    const nodeType = typeof ctrlRecord.nodeType === 'string' ? ctrlRecord.nodeType : '';
+    const portId = typeof ctrlRecord.portId === 'string' ? ctrlRecord.portId : '';
+    const configKey = typeof ctrlRecord.configKey === 'string' ? ctrlRecord.configKey : '';
     const key = portId || configKey;
     if (!nodeType || !key) return {};
 
@@ -89,15 +106,23 @@
     return { min, max, step };
   };
 
+  const emptyNumberBounds: NumberBounds = {};
+
+  const coerceStep = (value: unknown): string | number => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) return value;
+    return 'any';
+  };
+
   $: numberBounds =
     data instanceof ClassicPreset.InputControl && data.type === 'number'
       ? resolveNumberBounds(data)
-      : {};
+      : emptyNumberBounds;
   $: numberInputMin = numberBounds.min;
   $: numberInputMax = numberBounds.max;
   $: numberInputStep =
     data instanceof ClassicPreset.InputControl && data.type === 'number'
-      ? (numberBounds.step ?? (data as AnyRecord).step ?? 'any')
+      ? (numberBounds.step ?? coerceStep((data as AnyRecord).step))
       : undefined;
   $: isMomentaryButton =
     data instanceof ClassicPreset.InputControl && Boolean((data as AnyRecord).button);
@@ -132,14 +157,14 @@
   function normalizeNumberInput(event: Event) {
     if (!(data instanceof ClassicPreset.InputControl)) return;
     if (data.type !== 'number') return;
-    if ((data as AnyRecord).readonly) return;
+    if (readonlyFlag) return;
 
     const target = event.target as HTMLInputElement;
     const raw = target.value;
     if (raw === '') return;
 
     const num = Number(raw);
-    const current = typeof (data as AnyRecord).value === 'number' ? (data as AnyRecord).value : 0;
+    const current = typeof dataRecord.value === 'number' ? dataRecord.value : 0;
 
     if (!Number.isFinite(num)) {
       target.value = String(current);
@@ -165,8 +190,8 @@
 
   function pressMomentaryInput(): void {
     if (!(data instanceof ClassicPreset.InputControl)) return;
-    if (!(data as AnyRecord).button) return;
-    if ((data as AnyRecord).readonly) return;
+    if (!Boolean(dataRecord.button)) return;
+    if (readonlyFlag) return;
 
     if (momentaryInputResetTimer) clearTimeout(momentaryInputResetTimer);
     data.setValue(1);
@@ -178,35 +203,37 @@
   }
 
   function pressMomentaryBooleanInput(): void {
-    if (!data || data.controlType !== 'boolean') return;
-    if (!data.button) return;
-    if (data.readonly) return;
+    const record = asRecord(data);
+    if (!record || record.controlType !== 'boolean') return;
+    if (!record.button) return;
+    if (record.readonly) return;
+    if (!hasSetValue(data)) return;
 
     if (momentaryBooleanResetTimer) clearTimeout(momentaryBooleanResetTimer);
     data.setValue(true);
     // Keep the trigger high long enough for at least one graph tick to observe it.
     momentaryBooleanResetTimer = setTimeout(() => {
       momentaryBooleanResetTimer = null;
-      data.setValue(false);
+      if (hasSetValue(data)) data.setValue(false);
     }, 120);
   }
 
   function changeSelect(event: Event) {
     const target = event.target as HTMLSelectElement;
-    data?.setValue?.(target.value);
+    if (hasSetValue(data)) data.setValue(target.value);
   }
 
   function changeBoolean(event: Event) {
     const target = event.target as HTMLInputElement;
-    data?.setValue?.(Boolean(target.checked));
+    if (hasSetValue(data)) data.setValue(Boolean(target.checked));
   }
 
   function changeNote(event: Event) {
     const target = event.target as HTMLTextAreaElement;
     const next = target.value;
-    data?.setValue?.(next);
+    if (hasSetValue(data)) data.setValue(next);
     // `data.setValue` mutates an object field (no Svelte invalidation), so keep the preview in sync here.
-    if (data?.controlType === 'note') noteHtml = renderMarkdownToHtml(next);
+    if (dataRecord.controlType === 'note') noteHtml = renderMarkdownToHtml(next);
   }
 
   type NoteViewMode = 'edit' | 'preview' | 'split';
@@ -218,21 +245,20 @@
   let noteNodeId = '';
   let noteHtml = '';
 
-  $: if (data?.controlType === 'note') {
-    const raw = typeof data?.value === 'string' ? data.value : String(data?.value ?? '');
+  $: if (dataRecord.controlType === 'note') {
+    const raw =
+      typeof dataRecord.value === 'string' ? dataRecord.value : String(dataRecord.value ?? '');
     noteHtml = renderMarkdownToHtml(raw);
   } else {
     noteHtml = '';
   }
 
-  $: if (data?.controlType === 'note') {
-    const nextNodeId = typeof data?.nodeId === 'string' ? data.nodeId : '';
+  $: if (dataRecord.controlType === 'note') {
+    const nextNodeId = typeof dataRecord.nodeId === 'string' ? dataRecord.nodeId : '';
     if (nextNodeId !== noteNodeId) {
       noteNodeId = nextNodeId;
       const stored = nextNodeId
-        ? (nodeEngine.getNode(nextNodeId)?.config as Record<string, unknown> | undefined)?.[
-            noteViewModeKey
-          ]
+        ? asRecord(asRecord(nodeEngine.getNode(nextNodeId)).config)[noteViewModeKey]
         : undefined;
       noteViewMode = resolveNoteViewMode(stored);
     }
@@ -244,17 +270,17 @@
   function setNoteViewMode(next: NoteViewMode) {
     if (noteViewMode === next) return;
     noteViewMode = next;
-    const nodeId = typeof data?.nodeId === 'string' ? data.nodeId : '';
+    const nodeId = typeof dataRecord.nodeId === 'string' ? dataRecord.nodeId : '';
     if (!nodeId) return;
     nodeEngine.updateNodeConfig(nodeId, { [noteViewModeKey]: next });
   }
 
   function pickClient(clientId: string) {
-    data?.setValue?.(clientId);
+    if (hasSetValue(data)) data.setValue(clientId);
   }
 
   let didRefreshAssets = false;
-  $: if (data?.controlType === 'asset-picker' && !didRefreshAssets) {
+  $: if (dataRecord.controlType === 'asset-picker' && !didRefreshAssets) {
     didRefreshAssets = true;
     void assetsStore.refresh();
   }
@@ -315,8 +341,8 @@
   let lastServerLocalAssetPath = '';
   let lastDisplayFileRef = '';
 
-  $: if (data?.controlType === 'local-asset-picker') {
-    const current = typeof data?.value === 'string' ? String(data.value) : '';
+  $: if (dataRecord.controlType === 'local-asset-picker') {
+    const current = typeof dataRecord.value === 'string' ? dataRecord.value : '';
     const currentTrimmed = current.trim();
     localAssetPickerKind = localAssetKindFromControl((data as AnyRecord)?.assetKind, '') ?? null;
 
@@ -346,7 +372,7 @@
       localAssetDraft = isDisplayFileRef(currentTrimmed) ? '' : currentTrimmed;
   }
 
-  $: if (data?.controlType === 'local-asset-picker' && localAssetSourceInitialized) {
+  $: if (dataRecord.controlType === 'local-asset-picker' && localAssetSourceInitialized) {
     if (localAssetSource === 'server') {
       if (!didRefreshLocalMedia) {
         didRefreshLocalMedia = true;
@@ -384,13 +410,13 @@
   }
 
   const switchLocalAssetSource = (next: 'display' | 'server') => {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     localAssetSource = next;
     localAssetSourcePinned = true;
     displayLocalError = null;
     localAssetError = null;
 
-    const current = typeof data?.value === 'string' ? String(data.value).trim() : '';
+    const current = typeof dataRecord.value === 'string' ? dataRecord.value.trim() : '';
     if (isDisplayFileRef(current)) lastDisplayFileRef = current;
     else if (current) lastServerLocalAssetPath = current;
 
@@ -399,7 +425,7 @@
       localAssetDraft = lastServerLocalAssetPath;
       if (!isDisplayFileRef(current)) {
         // Switching to Display-local mode: stop using server-local paths and restore the last picked file (if any).
-        data?.setValue?.(lastDisplayFileRef || '');
+        if (hasSetValue(data)) data.setValue(lastDisplayFileRef || '');
       }
       return;
     }
@@ -408,12 +434,12 @@
     localAssetDraftDirty = false;
     localAssetDraft = lastServerLocalAssetPath;
     if (isDisplayFileRef(current) || !current) {
-      data?.setValue?.(lastServerLocalAssetPath || '');
+      if (hasSetValue(data)) data.setValue(lastServerLocalAssetPath || '');
     }
   };
 
   const openDisplayLocalFilePicker = () => {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     displayLocalError = null;
     displayLocalFileInput?.click();
   };
@@ -427,18 +453,19 @@
     localAssetDraft = '';
     localAssetSource = 'display';
     localAssetSourcePinned = true;
-    data?.setValue?.(next);
+    if (hasSetValue(data)) data.setValue(next);
   };
 
   const onDisplayLocalFileChange = (event: Event) => {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     const target = event.target as HTMLInputElement;
     const file = target.files?.[0] ?? null;
     target.value = '';
     if (!file) return;
 
     const fallbackKind = inferLocalKindFromPath(file.name);
-    const kind = localAssetKindFromControl((data as AnyRecord)?.assetKind, file.name) ?? fallbackKind;
+    const kind =
+      localAssetKindFromControl((data as AnyRecord)?.assetKind, file.name) ?? fallbackKind;
     if (!kind) {
       displayLocalError = 'Unsupported file type for this node.';
       return;
@@ -451,7 +478,7 @@
     localAssetDraft = '';
     localAssetSource = 'display';
     localAssetSourcePinned = true;
-    data?.setValue?.(buildDisplayFileRef(entry.id));
+    if (hasSetValue(data)) data.setValue(buildDisplayFileRef(entry.id));
   };
 
   const changeLocalAssetSelect = (event: Event) => {
@@ -462,7 +489,7 @@
     localAssetError = null;
     localAssetSource = 'server';
     localAssetSourcePinned = true;
-    data?.setValue?.(next);
+    if (hasSetValue(data)) data.setValue(next);
   };
 
   const onLocalAssetDraftInput = (event: Event) => {
@@ -473,14 +500,14 @@
   };
 
   const validateLocalAssetDraft = async () => {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     const draft = localAssetDraft.trim();
     if (!draft) {
       localAssetDraftDirty = false;
       localAssetError = null;
       localAssetSourcePinned = true;
       localAssetSource = 'server';
-      data?.setValue?.('');
+      if (hasSetValue(data)) data.setValue('');
       return;
     }
 
@@ -499,7 +526,7 @@
       localAssetDraft = validated.path;
       localAssetSourcePinned = true;
       localAssetSource = 'server';
-      data?.setValue?.(validated.path);
+      if (hasSetValue(data)) data.setValue(validated.path);
     } catch (err) {
       localAssetError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -526,7 +553,7 @@
   }
 
   function clientLabel(c: ClientInfo): string {
-    return String((c as AnyRecord).clientId ?? '');
+    return c.clientId;
   }
 
   function readinessClass(clientId: string, connected?: boolean): string {
@@ -539,8 +566,65 @@
     return 'connected';
   }
 
-  $: hasLabel = Boolean(data?.label) && !isInline;
+  $: readonlyFlag = Boolean(dataRecord.readonly);
+
+  $: hasLabel = Boolean(dataRecord.label) && !isInline;
   $: showInputControlLabel = Boolean(inputControlLabel) && !isInline;
+
+  const asSelectOptionArray = (value: unknown): { value: string; label: string }[] => {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((opt) => {
+      const rec = asRecord(opt);
+      const v = rec.value;
+      const l = rec.label;
+      if (typeof v !== 'string') return [];
+      return [{ value: v, label: typeof l === 'string' ? l : v }];
+    });
+  };
+
+  $: selectOptions =
+    dataRecord.controlType === 'select' ? asSelectOptionArray(dataRecord.options) : [];
+  $: selectValue = typeof dataRecord.value === 'string' ? dataRecord.value : '';
+  $: selectPlaceholder = typeof dataRecord.placeholder === 'string' ? dataRecord.placeholder : '';
+
+  $: noteValue = typeof dataRecord.value === 'string' ? dataRecord.value : '';
+  $: notePlaceholder = typeof dataRecord.placeholder === 'string' ? dataRecord.placeholder : '';
+
+  $: fileAccept = typeof dataRecord.accept === 'string' ? dataRecord.accept : undefined;
+  $: assetKind = typeof dataRecord.assetKind === 'string' ? dataRecord.assetKind : 'any';
+
+  const coerceBezier = (value: unknown): [number, number, number, number] => {
+    if (Array.isArray(value) && value.length === 4) {
+      const n0 = typeof value[0] === 'number' && Number.isFinite(value[0]) ? value[0] : 0.25;
+      const n1 = typeof value[1] === 'number' && Number.isFinite(value[1]) ? value[1] : 0.1;
+      const n2 = typeof value[2] === 'number' && Number.isFinite(value[2]) ? value[2] : 0.25;
+      const n3 = typeof value[3] === 'number' && Number.isFinite(value[3]) ? value[3] : 1.0;
+      return [n0, n1, n2, n3];
+    }
+    return [0.25, 0.1, 0.25, 1.0];
+  };
+
+  $: curveNodeId = typeof dataRecord.nodeId === 'string' ? dataRecord.nodeId : '';
+  $: curveValue = coerceBezier(dataRecord.value);
+  $: curveLabel = typeof dataRecord.label === 'string' ? dataRecord.label : '';
+  $: curveNode = curveNodeId ? nodeEngine.getNode(curveNodeId) : null;
+  $: curveOutputValues = asRecord(asRecord(curveNode).outputValues);
+  $: curveRunning = Boolean(curveOutputValues.running);
+  $: curveOutputRaw = curveOutputValues.value;
+  $: curveOutput = typeof curveOutputRaw === 'number' ? curveOutputRaw : 0;
+  $: curveConfig = asRecord(asRecord(curveNode).config);
+  $: curveStart = typeof curveConfig.start === 'number' ? curveConfig.start : 0;
+  $: curveEnd = typeof curveConfig.end === 'number' ? curveConfig.end : 1;
+  $: curveProgress =
+    curveRunning && curveEnd !== curveStart
+      ? (curveOutput - curveStart) / (curveEnd - curveStart)
+      : 0;
+
+  const setCurveValue = (next: [number, number, number, number]) => {
+    if (dataRecord.controlType !== 'curve') return;
+    if (readonlyFlag) return;
+    if (hasSetValue(data)) data.setValue(next);
+  };
 
   const clampInt = (value: number, min: number, max: number) => {
     const next = Math.floor(value);
@@ -573,7 +657,7 @@
   };
 
   $: clientPickerInputLocked = (() => {
-    if (data?.controlType !== 'client-picker') return false;
+    if (dataRecord.controlType !== 'client-picker') return false;
     const nodeId = String(data?.nodeId ?? '');
     if (!nodeId) return false;
     return ($graphStateStore?.connections ?? []).some(
@@ -586,21 +670,21 @@
   })();
 
   $: clientPickerView = (() => {
-    if (data?.controlType !== 'client-picker') return [];
+    if (dataRecord.controlType !== 'client-picker') return [];
     const _tick = $tickTimeStore;
     void _tick;
 
     const nodeId = String(data?.nodeId ?? '');
     if (!nodeId) return [];
 
-    const rawClients = ($audienceClients ?? []) as AnyRecord[];
-    const clients = rawClients.map((c) => String(c?.clientId ?? '')).filter(Boolean);
+    const rawClients = $audienceClients ?? [];
+    const clients = rawClients.map((c) => c.clientId).filter(Boolean);
     if (clients.length === 0) return [];
     const clientById = new Map<string, ClientInfo>();
     for (const c of rawClients) {
-      const id = String((c as AnyRecord)?.clientId ?? '');
+      const id = c.clientId;
       if (!id) continue;
-      clientById.set(id, c as ClientInfo);
+      clientById.set(id, c);
     }
 
     const node = nodeEngine.getNode(nodeId);
@@ -640,8 +724,8 @@
     const orderedClients = ordered.map((id) => clientById.get(id)).filter(Boolean) as ClientInfo[];
     return orderedClients.map((c) => ({
       client: c,
-      selected: selectedIdSet.has(String((c as AnyRecord)?.clientId ?? '')),
-      primary: String((c as AnyRecord)?.clientId ?? '') === selectedFirstId,
+      selected: selectedIdSet.has(c.clientId),
+      primary: c.clientId === selectedFirstId,
     }));
   })();
 
@@ -693,7 +777,7 @@
     return fallbackNumber;
   }
 
-  $: if (data?.controlType === 'client-sensor-value') {
+  $: if (dataRecord.controlType === 'client-sensor-value') {
     const nodeId = String(data?.nodeId ?? '');
     const portId = String(data?.portId ?? '');
     const conn = ($graphStateStore.connections ?? []).find(
@@ -703,7 +787,9 @@
       ? ($graphStateStore.nodes ?? []).find((n: NodeInstance) => n.id === conn.sourceNodeId)
       : null;
     sensorsClientId = srcNode?.config?.clientId ? String(srcNode.config.clientId) : '';
-    sensorsData = sensorsClientId ? (($sensorData.get(sensorsClientId) as AnyRecord) ?? null) : null;
+    sensorsData = sensorsClientId
+      ? (asRecord($sensorData.get(sensorsClientId)) as AnyRecord)
+      : null;
     const nextPayload =
       sensorsData && typeof sensorsData.payload === 'object'
         ? (sensorsData.payload as AnyRecord)
@@ -726,7 +812,7 @@
     typeof value === 'number' && Number.isFinite(value);
 
   function openFilePicker() {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     if (fileIsUploading) return;
     fileInput?.click?.();
   }
@@ -794,8 +880,9 @@
       return null;
     }
 
-    const json = (await res.json().catch(() => null)) as AnyRecord;
-    const assetId = String(json?.asset?.id ?? '');
+    const json = asRecord(await res.json().catch(() => null));
+    const asset = asRecord(json.asset);
+    const assetId = typeof asset.id === 'string' ? asset.id : '';
     if (!assetId) {
       fileUploadError = 'Upload failed: invalid response (missing asset.id)';
       return null;
@@ -817,7 +904,7 @@
     try {
       const uploaded = await uploadFileToAssetService(file);
       if (!uploaded) return;
-      data?.setValue?.(`asset:${uploaded.assetId}`);
+      if (hasSetValue(data)) data.setValue(`asset:${uploaded.assetId}`);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         fileUploadError = 'Upload timed out. Please retry.';
@@ -841,22 +928,37 @@
     return `${event.type} ${num} • ${channel} • ${suffix}`;
   }
 
-  $: if (data?.controlType === 'midi-learn') {
+  const isMidiSource = (value: unknown): value is MidiSource => {
+    const rec = asRecord(value);
+    const type = rec.type;
+    if (type !== 'cc' && type !== 'note' && type !== 'pitchbend') return false;
+    const channel = rec.channel;
+    if (typeof channel !== 'number' || !Number.isFinite(channel)) return false;
+    const inputId = rec.inputId;
+    if (inputId !== undefined && typeof inputId !== 'string') return false;
+    const number = rec.number;
+    if (type !== 'pitchbend' && number !== undefined && typeof number !== 'number') return false;
+    return true;
+  };
+
+  $: if (dataRecord.controlType === 'midi-learn') {
     midiNodeId = String(data?.nodeId ?? '');
     const node = ($graphStateStore.nodes ?? []).find(
       (n: NodeInstance) => String(n.id) === midiNodeId
     );
-    midiSource = node?.config?.source ?? null;
+    const rawSource = asRecord(node?.config).source;
+    midiSource = isMidiSource(rawSource) ? rawSource : null;
     midiIsLearning = Boolean(
       $midiLearnModeStore.active && $midiLearnModeStore.nodeId === midiNodeId
     );
   }
 
   $: fileDisplayLabel =
-    data?.controlType === 'file-picker'
+    dataRecord.controlType === 'file-picker'
       ? fileIsUploading
         ? 'Uploading…'
-        : fileName || (typeof data?.value === 'string' && data.value ? 'Loaded' : 'No file')
+        : fileName ||
+          (typeof dataRecord.value === 'string' && dataRecord.value ? 'Loaded' : 'No file')
       : '';
 
   function toggleMidiLearn(nodeId: string) {
@@ -874,7 +976,7 @@
 
   // ===== time-range control (dual cursor timeline) =====
   let didRefreshAssetsForTimeRange = false;
-  $: if (data?.controlType === 'time-range' && !didRefreshAssetsForTimeRange) {
+  $: if (dataRecord.controlType === 'time-range' && !didRefreshAssetsForTimeRange) {
     didRefreshAssetsForTimeRange = true;
     void assetsStore.refresh();
   }
@@ -1048,7 +1150,9 @@
     timeRangeCursorSec = values.cursorSec;
 
     const maxFromAsset = timeRangeDurationSec;
-    const maxFromField = isFiniteNumber((data as AnyRecord).max) ? Number((data as AnyRecord).max) : null;
+    const maxFromField = isFiniteNumber((data as AnyRecord).max)
+      ? Number((data as AnyRecord).max)
+      : null;
     const maxFallback = Math.max(
       10,
       timeRangeStartSec,
@@ -1080,7 +1184,6 @@
     timeRangeStartFrac = span > 0 ? (timeRangeSliderStart - timeRangeMin) / span : 0;
     timeRangeEndFrac = span > 0 ? (timeRangeSliderEnd - timeRangeMin) / span : 1;
     timeRangeCursorFrac = span > 0 ? (timeRangeSliderCursor - timeRangeMin) / span : 0;
-
   };
 
   function stopTimeRangePlayback(): void {
@@ -1157,7 +1260,7 @@
     }
   });
 
-  $: if (data?.controlType === 'time-range') {
+  $: if (dataRecord.controlType === 'time-range') {
     // Read tickTime so this block re-runs when node state changes (input edits, runtime ticks, etc.).
     // (We don't use the value; it's purely an invalidation dependency.)
     const _tick = $tickTimeStore;
@@ -1179,19 +1282,20 @@
     const { startSec, endSec, cursorSec } = computeEffectiveRange(timeRangeNodeId);
 
     timeRangeMin = isFiniteNumber((data as AnyRecord).min) ? Number((data as AnyRecord).min) : 0;
-    timeRangeStep = isFiniteNumber((data as AnyRecord).step) ? Number((data as AnyRecord).step) : 0.01;
+    timeRangeStep = isFiniteNumber((data as AnyRecord).step)
+      ? Number((data as AnyRecord).step)
+      : 0.01;
 
     const runtimeNode = timeRangeNodeId ? nodeEngine.getNode(timeRangeNodeId) : null;
-    const assetIdRaw =
-      typeof (runtimeNode as AnyRecord)?.config?.assetId === 'string'
-        ? String((runtimeNode as AnyRecord).config.assetId)
-        : '';
+    const runtimeNodeRecord = asRecord(runtimeNode as unknown);
+    const configRecord = asRecord(runtimeNodeRecord.config);
+    const inputValuesRecord = asRecord(runtimeNodeRecord.inputValues);
+
+    const assetIdRaw = typeof configRecord.assetId === 'string' ? configRecord.assetId : '';
     const assetId = assetIdRaw.trim();
 
     const localAssetPathRaw =
-      typeof (runtimeNode as AnyRecord)?.config?.assetPath === 'string'
-        ? String((runtimeNode as AnyRecord).config.assetPath)
-        : '';
+      typeof configRecord.assetPath === 'string' ? configRecord.assetPath : '';
     const localAssetPath = localAssetPathRaw.trim();
 
     // Refresh duration/backdrop when the asset changes.
@@ -1298,7 +1402,7 @@
     const playRaw =
       resolveConnectedBoolean(timeRangeNodeId, 'play') ??
       (() => {
-        const raw = (runtimeNode as AnyRecord)?.inputValues?.play;
+        const raw = inputValuesRecord.play;
         if (typeof raw === 'boolean') return raw;
         const num = typeof raw === 'number' ? raw : Number(raw);
         return Number.isFinite(num) ? num >= 0.5 : false;
@@ -1306,7 +1410,7 @@
     const loopRaw =
       resolveConnectedBoolean(timeRangeNodeId, 'loop') ??
       (() => {
-        const raw = (runtimeNode as AnyRecord)?.inputValues?.loop;
+        const raw = inputValuesRecord.loop;
         if (typeof raw === 'boolean') return raw;
         const num = typeof raw === 'number' ? raw : Number(raw);
         return Number.isFinite(num) ? num >= 0.5 : false;
@@ -1314,7 +1418,7 @@
     const reverseRaw =
       resolveConnectedBoolean(timeRangeNodeId, 'reverse') ??
       (() => {
-        const raw = (runtimeNode as AnyRecord)?.inputValues?.reverse;
+        const raw = inputValuesRecord.reverse;
         if (typeof raw === 'boolean') return raw;
         const num = typeof raw === 'number' ? raw : Number(raw);
         return Number.isFinite(num) ? num >= 0.5 : false;
@@ -1334,9 +1438,7 @@
           String(c.targetNodeId) === timeRangeNodeId && String(c.targetPortId) === 'asset'
       );
       const localInputValue =
-        typeof (runtimeNode as AnyRecord)?.inputValues?.asset === 'string'
-          ? String((runtimeNode as AnyRecord).inputValues.asset).trim()
-          : '';
+        typeof inputValuesRecord.asset === 'string' ? inputValuesRecord.asset.trim() : '';
 
       const hasAsset =
         timeRangeNodeType === 'load-audio-from-assets' ||
@@ -1369,7 +1471,7 @@
     syncTimeRangeUi({ startSec, endSec, cursorSec });
   }
 
-  $: if (data?.controlType === 'time-range') {
+  $: if (dataRecord.controlType === 'time-range') {
     if (timeRangeIsPlaying) {
       if (timeRangePlaybackRaf === null) startTimeRangePlayback();
     } else {
@@ -1380,11 +1482,11 @@
   }
 
   const setTimeRange = (startSec: number, endSec: number, cursorSec: number) => {
-    if (data?.readonly) return;
+    if (readonlyFlag) return;
     const start = Math.max(timeRangeMin, startSec);
     const end = endSec >= 0 ? Math.max(start, endSec) : -1;
     const cursor = cursorSec >= 0 ? Math.max(start, cursorSec) : -1;
-    (data as AnyRecord)?.setValue?.({ startSec: start, endSec: end, cursorSec: cursor });
+    if (hasSetValue(data)) data.setValue({ startSec: start, endSec: end, cursorSec: cursor });
   };
 
   const handleTimeRangeStartSlider = (event: Event) => {
@@ -1440,7 +1542,7 @@
       <button
         type="button"
         class="control-btn {isInline ? 'inline' : ''}"
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:pointerdown|stopPropagation
         on:click|stopPropagation={pressMomentaryInput}
       >
@@ -1450,49 +1552,51 @@
       <input
         class="control-input {isInline ? 'inline' : ''}"
         type={data.type}
-        value={data.value}
+        value={noteValue}
         min={numberInputMin}
         max={numberInputMax}
         step={numberInputStep}
-        readonly={data.readonly}
-        disabled={data.readonly}
+        readonly={readonlyFlag}
+        disabled={readonlyFlag}
         on:pointerdown|stopPropagation
         on:input={changeInput}
         on:blur={normalizeNumberInput}
       />
     {/if}
   </div>
-{:else if data?.controlType === 'select'}
+{:else if dataRecord.controlType === 'select'}
   <div class="control-field {isInline ? 'inline' : ''}">
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">
+        {selectPlaceholder ? selectPlaceholder : String(dataRecord.label ?? '')}
+      </div>
     {/if}
     <select
       class="control-input {isInline ? 'inline' : ''}"
-      value={data.value}
-      disabled={data.readonly}
+      value={selectValue}
+      disabled={readonlyFlag}
       on:pointerdown|stopPropagation
       on:change={changeSelect}
     >
-      {#if data.placeholder}
-        <option value="">{data.placeholder}</option>
+      {#if selectPlaceholder}
+        <option value="">{selectPlaceholder}</option>
       {/if}
-      {#each data.options ?? [] as opt (opt.value)}
+      {#each selectOptions as opt (opt.value)}
         <option value={opt.value}>{opt.label}</option>
       {/each}
     </select>
   </div>
-{:else if data?.controlType === 'boolean'}
-  {#if Boolean(data.button)}
+{:else if dataRecord.controlType === 'boolean'}
+  {#if Boolean(dataRecord.button)}
     <div class="control-field {isInline ? 'inline' : ''}">
       <button
         type="button"
         class="control-btn {isInline ? 'inline' : ''}"
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:pointerdown|stopPropagation
         on:click|stopPropagation={pressMomentaryBooleanInput}
       >
-        {data.buttonLabel ?? data.label ?? 'Push'}
+        {String(dataRecord.buttonLabel ?? dataRecord.label ?? 'Push')}
       </button>
     </div>
   {:else}
@@ -1500,23 +1604,23 @@
       <label class="toggle {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
         <input
           type="checkbox"
-          checked={Boolean(data.value)}
-          disabled={data.readonly}
+          checked={Boolean(dataRecord.value)}
+          disabled={readonlyFlag}
           on:change={changeBoolean}
         />
         <span class="toggle-track">
           <span class="toggle-thumb"></span>
         </span>
         {#if hasLabel}
-          <span class="toggle-label">{data.label}</span>
+          <span class="toggle-label">{String(dataRecord.label ?? '')}</span>
         {/if}
       </label>
     </div>
   {/if}
-{:else if data?.controlType === 'note'}
+{:else if dataRecord.controlType === 'note'}
   <div class="control-field note-field {isInline ? 'inline' : ''}">
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">{String(dataRecord.label ?? '')}</div>
     {/if}
     <div class="note-toolbar" on:pointerdown|stopPropagation>
       <button
@@ -1549,10 +1653,10 @@
     {:else if noteViewMode === 'split'}
       <textarea
         class="control-input note-textarea {isInline ? 'inline' : ''}"
-        value={data.value}
-        placeholder={data.placeholder ?? ''}
-        readonly={data.readonly}
-        disabled={data.readonly}
+        value={noteValue}
+        placeholder={notePlaceholder}
+        readonly={readonlyFlag}
+        disabled={readonlyFlag}
         rows="6"
         on:pointerdown|stopPropagation
         on:input={changeNote}
@@ -1563,48 +1667,32 @@
     {:else}
       <textarea
         class="control-input note-textarea {isInline ? 'inline' : ''}"
-        value={data.value}
-        placeholder={data.placeholder ?? ''}
-        readonly={data.readonly}
-        disabled={data.readonly}
+        value={noteValue}
+        placeholder={notePlaceholder}
+        readonly={readonlyFlag}
+        disabled={readonlyFlag}
         rows="6"
         on:pointerdown|stopPropagation
         on:input={changeNote}
       />
     {/if}
   </div>
-{:else if data?.controlType === 'curve'}
-  {@const curveNodeId = data?.nodeId ?? ''}
-  {@const curveNode = curveNodeId ? nodeEngine.getNode(curveNodeId) : null}
-  {@const curveRunning = Boolean(curveNode?.outputValues?.running)}
-  {@const curveOutput =
-    typeof curveNode?.outputValues?.value === 'number' ? curveNode.outputValues.value : 0}
-  {@const curveStart = typeof curveNode?.config?.start === 'number' ? curveNode.config.start : 0}
-  {@const curveEnd = typeof curveNode?.config?.end === 'number' ? curveNode.config.end : 1}
-  {@const curveProgress =
-    curveRunning && curveEnd !== curveStart
-      ? (curveOutput - curveStart) / (curveEnd - curveStart)
-      : 0}
+{:else if dataRecord.controlType === 'curve'}
   <div class="control-field curve-field {isInline ? 'inline' : ''}" on:pointerdown|stopPropagation>
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">{curveLabel}</div>
     {/if}
     <CurveEditor
-      value={data.value}
-      readonly={Boolean(data.readonly)}
+      value={curveValue}
+      readonly={readonlyFlag}
       progress={curveProgress}
-      on:change={(e) => {
-        if (data?.setValue) {
-          data.value = e.detail;
-          data.setValue(e.detail);
-        }
-      }}
+      on:change={(e) => setCurveValue(e.detail)}
     />
   </div>
-{:else if data?.controlType === 'time-range'}
+{:else if dataRecord.controlType === 'time-range'}
   <div class="time-range {isInline ? 'inline' : ''}">
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">{String(dataRecord.label ?? '')}</div>
     {/if}
 
     <div class="time-range-row">
@@ -1667,7 +1755,7 @@
         max={timeRangeMax}
         step={timeRangeStep}
         value={timeRangeSliderStart}
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:input={handleTimeRangeStartSlider}
       />
       <input
@@ -1677,7 +1765,7 @@
         max={timeRangeMax}
         step={timeRangeStep}
         value={timeRangeSliderEnd}
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:input={handleTimeRangeEndSlider}
       />
       <input
@@ -1687,25 +1775,25 @@
         max={timeRangeMax}
         step={timeRangeStep}
         value={timeRangeSliderCursor}
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:input={handleTimeRangeCursorSlider}
       />
     </div>
   </div>
-{:else if data?.controlType === 'file-picker'}
+{:else if dataRecord.controlType === 'file-picker'}
   <div class="file-picker {isInline ? 'inline' : ''}">
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">{String(dataRecord.label ?? '')}</div>
     {/if}
     <div class="file-row">
       <button
         type="button"
         class="file-btn"
-        disabled={data.readonly || fileIsUploading}
+        disabled={readonlyFlag || fileIsUploading}
         on:pointerdown|stopPropagation
         on:click|stopPropagation={openFilePicker}
       >
-        {data.buttonLabel || 'Choose file'}
+        {String(dataRecord.buttonLabel ?? 'Choose file')}
       </button>
       <div class="file-name">{fileDisplayLabel}</div>
     </div>
@@ -1715,14 +1803,14 @@
     <input
       class="file-input"
       type="file"
-      accept={data.accept}
+      accept={fileAccept}
       bind:this={fileInput}
-      disabled={data.readonly || fileIsUploading}
+      disabled={readonlyFlag || fileIsUploading}
       on:pointerdown|stopPropagation
       on:change={handleFileChange}
     />
   </div>
-{:else if data?.controlType === 'client-picker'}
+{:else if dataRecord.controlType === 'client-picker'}
   <div class="client-picker">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
@@ -1738,35 +1826,36 @@
             title={clientLabel(item.client)}
             aria-label={clientLabel(item.client)}
             aria-pressed={item.selected}
-            disabled={data.readonly || clientPickerInputLocked}
+            disabled={readonlyFlag || clientPickerInputLocked}
             on:pointerdown|stopPropagation
             on:click|stopPropagation={() => pickClient(item.client.clientId)}
           >
-            <span class="client-dot {readinessClass(item.client.clientId, item.client.connected)}"></span>
+            <span class="client-dot {readinessClass(item.client.clientId, item.client.connected)}"
+            ></span>
           </button>
         {/each}
       </div>
     {/if}
   </div>
-{:else if data?.controlType === 'asset-picker'}
+{:else if dataRecord.controlType === 'asset-picker'}
   <div class="control-field {isInline ? 'inline' : ''}">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
     {/if}
     <select
       class="control-input {isInline ? 'inline' : ''}"
-      value={data.value}
-      disabled={data.readonly}
+      value={selectValue}
+      disabled={readonlyFlag}
       on:pointerdown|stopPropagation
       on:change={changeSelect}
     >
       <option value="">(select asset)</option>
-      {#each buildAssetOptions(data.assetKind) as opt (opt.value)}
+      {#each buildAssetOptions(assetKind) as opt (opt.value)}
         <option value={opt.value}>{opt.label}</option>
       {/each}
     </select>
   </div>
-{:else if data?.controlType === 'local-asset-picker'}
+{:else if dataRecord.controlType === 'local-asset-picker'}
   <div class="local-asset-picker {isInline ? 'inline' : ''}">
     {#if hasLabel}
       <div class="control-label">{data.label}</div>
@@ -1776,7 +1865,7 @@
       <button
         type="button"
         class="local-asset-source-btn {localAssetSource === 'display' ? 'active' : ''}"
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:click|stopPropagation={() => switchLocalAssetSource('display')}
       >
         Display
@@ -1784,7 +1873,7 @@
       <button
         type="button"
         class="local-asset-source-btn {localAssetSource === 'server' ? 'active' : ''}"
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:click|stopPropagation={() => switchLocalAssetSource('server')}
       >
         Server
@@ -1796,15 +1885,15 @@
         <button
           type="button"
           class="file-btn"
-          disabled={data.readonly}
+          disabled={readonlyFlag}
           on:pointerdown|stopPropagation
           on:click|stopPropagation={openDisplayLocalFilePicker}
         >
           Choose file
         </button>
         <div class="file-name">
-          {#if isDisplayFileRef(data.value)}
-            {displayLocalSelectedName(data.value) || String(data.value)}
+          {#if isDisplayFileRef(selectValue)}
+            {displayLocalSelectedName(selectValue) || String(selectValue)}
           {:else}
             No file selected
           {/if}
@@ -1816,20 +1905,20 @@
         type="file"
         accept={acceptForLocalKind(localAssetPickerKind)}
         bind:this={displayLocalFileInput}
-        disabled={data.readonly}
+        disabled={readonlyFlag}
         on:pointerdown|stopPropagation
         on:change={onDisplayLocalFileChange}
       />
 
       <select
         class="control-input {isInline ? 'inline' : ''}"
-        value={isDisplayFileRef(data.value) ? data.value : ''}
-        disabled={data.readonly}
+        value={isDisplayFileRef(selectValue) ? selectValue : ''}
+        disabled={readonlyFlag}
         on:pointerdown|stopPropagation
         on:change={changeDisplayLocalSelect}
       >
         <option value="">(picked files)</option>
-        {#each buildDisplayLocalMediaOptions(data.assetKind) as opt (opt.value)}
+        {#each buildDisplayLocalMediaOptions(assetKind) as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
         {/each}
       </select>
@@ -1850,13 +1939,13 @@
     {:else}
       <select
         class="control-input {isInline ? 'inline' : ''}"
-        value={typeof data.value === 'string' && !isDisplayFileRef(data.value) ? data.value : ''}
-        disabled={data.readonly || localAssetValidating}
+        value={typeof selectValue === 'string' && !isDisplayFileRef(selectValue) ? selectValue : ''}
+        disabled={readonlyFlag || localAssetValidating}
         on:pointerdown|stopPropagation
         on:change={changeLocalAssetSelect}
       >
         <option value="">(select server-local file)</option>
-        {#each buildLocalMediaOptions(data.assetKind) as opt (opt.value)}
+        {#each buildLocalMediaOptions(assetKind) as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
         {/each}
       </select>
@@ -1866,7 +1955,7 @@
           class="control-input local-asset-path"
           value={localAssetDraft}
           placeholder="/Users/.../file.mp4"
-          disabled={data.readonly || localAssetValidating}
+          disabled={readonlyFlag || localAssetValidating}
           on:pointerdown|stopPropagation
           on:input={onLocalAssetDraftInput}
           on:keydown={onLocalAssetDraftKeyDown}
@@ -1875,7 +1964,7 @@
         <button
           type="button"
           class="local-asset-btn"
-          disabled={data.readonly || localAssetValidating}
+          disabled={readonlyFlag || localAssetValidating}
           on:pointerdown|stopPropagation
           on:click|stopPropagation={() => validateLocalAssetDraft()}
         >
@@ -1891,12 +1980,12 @@
       {/if}
     {/if}
   </div>
-{:else if data?.controlType === 'client-sensor-value'}
+{:else if dataRecord.controlType === 'client-sensor-value'}
   <div class="sensor-inline-value">{sensorValueText}</div>
-{:else if data?.controlType === 'midi-learn'}
+{:else if dataRecord.controlType === 'midi-learn'}
   <div class="midi-learn">
     {#if hasLabel}
-      <div class="control-label">{data.label}</div>
+      <div class="control-label">{String(dataRecord.label ?? '')}</div>
     {/if}
     <div class="midi-row">
       <div class="midi-binding">{formatMidiSource(midiSource)}</div>

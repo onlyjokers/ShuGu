@@ -1,19 +1,28 @@
 <script lang="ts">
   import { sensorData, state } from '$lib/stores/manager';
 
-  type SensorPayload = Record<string, number | null | undefined>;
+  type SensorPayload = Record<string, unknown>;
   type SensorClientData = { sensorType: string; payload?: SensorPayload };
 
   let clientData: SensorClientData | null = null;
   let payload: SensorPayload = {};
 
-  $: selectedClientId = $state.selectedClientIds[0] ?? null;
-  $: clientData = selectedClientId ? $sensorData.get(selectedClientId) : null;
-  $: payload = clientData?.payload ?? {};
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
 
-  function formatValue(val: number | null | undefined): string {
+  $: selectedClientId = $state.selectedClientIds[0] ?? null;
+  $: clientData = (
+    selectedClientId ? ($sensorData.get(selectedClientId) as unknown) : null
+  ) as SensorClientData | null;
+  $: payload = asRecord(clientData?.payload);
+
+  function formatValue(val: unknown): string {
     if (val === null || val === undefined) return '--';
-    return Number(val).toFixed(2);
+    const n = typeof val === 'number' ? val : Number(val);
+    if (!Number.isFinite(n)) return '--';
+    return n.toFixed(2);
   }
 </script>
 

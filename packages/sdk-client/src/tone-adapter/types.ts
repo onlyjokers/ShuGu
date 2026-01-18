@@ -54,8 +54,9 @@ export type ToneParamLike = {
 };
 
 export type ToneConnectable = {
-  connect?: (destination: unknown) => void;
-  disconnect?: (...args: unknown[]) => void;
+  connect: (destination: unknown, outputNum?: number, inputNum?: number) => unknown;
+  disconnect?: (destination?: unknown, outputNum?: number, inputNum?: number) => unknown;
+  dispose?: () => unknown;
 };
 
 export type ToneGainLike = ToneConnectable & {
@@ -66,9 +67,8 @@ export type ToneGainLike = ToneConnectable & {
 export type ToneOscillatorLike = ToneConnectable & {
   frequency?: ToneParamLike;
   type?: string;
-  start?: (...args: unknown[]) => void;
-  stop?: (...args: unknown[]) => void;
-  dispose?: () => void;
+  start?: (...args: unknown[]) => unknown;
+  stop?: (...args: unknown[]) => unknown;
 };
 
 export type TonePlayerLike = ToneConnectable & {
@@ -76,10 +76,15 @@ export type TonePlayerLike = ToneConnectable & {
   loop?: boolean;
   playbackRate?: number;
   detune?: number;
-  start?: (...args: unknown[]) => void;
-  stop?: (...args: unknown[]) => void;
-  dispose?: () => void;
+  start?: (...args: unknown[]) => unknown;
+  stop?: (...args: unknown[]) => unknown;
   onstop?: (() => void) | null;
+  reverse?: boolean;
+  loopStart?: number;
+  loopEnd?: number;
+  state?: unknown;
+  grainSize?: number;
+  overlap?: number;
 };
 
 export type ToneLfoLike = ToneConnectable & {
@@ -88,15 +93,31 @@ export type ToneLfoLike = ToneConnectable & {
   min?: number;
   max?: number;
   type?: string;
-  start?: (...args: unknown[]) => void;
-  stop?: (...args: unknown[]) => void;
-  dispose?: () => void;
+  start?: (...args: unknown[]) => unknown;
+  stop?: (...args: unknown[]) => unknown;
+};
+
+export type ToneLoopLike = ToneConnectable & {
+  loop?: boolean | number;
+  loopStart?: number;
+  loopEnd?: number;
+  state?: unknown;
+  clear?: () => unknown;
+  add?: (...args: unknown[]) => unknown;
+  start?: (...args: unknown[]) => unknown;
+  stop?: (...args: unknown[]) => unknown;
 };
 
 export type ToneEffectLike = ToneConnectable & {
   delayTime?: ToneParamLike;
   feedback?: ToneParamLike;
   wet?: ToneParamLike;
+  decay?: number;
+  generate?: () => Promise<unknown>;
+  pitch?: number;
+  windowSize?: number;
+  resonance?: number;
+  dampening?: number;
 };
 
 export type EffectWrapper = {
@@ -128,7 +149,7 @@ export type ToneEffectInstance = {
 export type ToneOscInstance = {
   osc: ToneOscillatorLike;
   gain: ToneGainLike;
-  loop: ToneConnectable | null;
+  loop: ToneLoopLike | null;
   loopKey: string | null;
   loopDefaults: { frequency: number; amplitude: number } | null;
   lastFrequency: number | null;

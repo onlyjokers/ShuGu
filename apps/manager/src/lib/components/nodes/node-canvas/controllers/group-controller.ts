@@ -6,6 +6,8 @@ import type { LocalLoop } from '$lib/nodes';
 import type { GraphState, NodeInstance } from '$lib/nodes/types';
 import { nodeRegistry } from '$lib/nodes';
 import type { NodeGroup } from '../groups/types';
+
+export type { NodeGroup };
 import type { GraphViewAdapter, NodeBounds } from '../adapters';
 import { normalizeGroupList } from '../groups/normalize-group-list';
 import { isGroupDecorationNodeType } from '../groups/group-node-types';

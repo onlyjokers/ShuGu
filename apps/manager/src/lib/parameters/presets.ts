@@ -1,7 +1,9 @@
 import { parameterRegistry } from './registry';
 import type { Parameter } from './parameter';
 
-type ParameterMap = Record<string, Parameter<unknown>>;
+type AnyParameter = Parameter<number> | Parameter<boolean> | Parameter<string>;
+
+type ParameterMap = Record<string, AnyParameter>;
 
 /**
  * Register a minimal set of control-surface parameters so the UI factory can render them.
@@ -83,7 +85,13 @@ export function registerDefaultControlParameters(): ParameterMap {
     defaultValue: 1,
     min: 0.2,
     max: 10,
-    metadata: { label: 'Frequency', group: 'Flashlight', step: 0.2, unit: 'Hz', widgetType: 'slider' },
+    metadata: {
+      label: 'Frequency',
+      group: 'Flashlight',
+      step: 0.2,
+      unit: 'Hz',
+      widgetType: 'slider',
+    },
   });
 
   params['controls/flashlight/dutyCycle'] = parameterRegistry.register<number>({
@@ -101,7 +109,13 @@ export function registerDefaultControlParameters(): ParameterMap {
     defaultValue: 2000,
     min: 0,
     max: 8000,
-    metadata: { label: 'Dur (ms)', group: 'Flashlight', step: 50, unit: 'ms', widgetType: 'slider' },
+    metadata: {
+      label: 'Dur (ms)',
+      group: 'Flashlight',
+      step: 50,
+      unit: 'ms',
+      widgetType: 'slider',
+    },
   });
 
   // --- Screen Color ---
@@ -143,7 +157,13 @@ export function registerDefaultControlParameters(): ParameterMap {
     defaultValue: 1.5,
     min: 0.2,
     max: 20,
-    metadata: { label: 'Frequency', group: 'Screen Color', step: 0.1, unit: 'Hz', widgetType: 'slider' },
+    metadata: {
+      label: 'Frequency',
+      group: 'Screen Color',
+      step: 0.1,
+      unit: 'Hz',
+      widgetType: 'slider',
+    },
   });
 
   params['controls/screenColor/durationMs'] = parameterRegistry.register<number>({
@@ -152,7 +172,13 @@ export function registerDefaultControlParameters(): ParameterMap {
     defaultValue: 2000,
     min: 0,
     max: 8000,
-    metadata: { label: 'Dur (ms)', group: 'Screen Color', step: 50, unit: 'ms', widgetType: 'slider' },
+    metadata: {
+      label: 'Dur (ms)',
+      group: 'Screen Color',
+      step: 50,
+      unit: 'ms',
+      widgetType: 'slider',
+    },
   });
 
   params['controls/screenColor/waveform'] = parameterRegistry.register<string>({

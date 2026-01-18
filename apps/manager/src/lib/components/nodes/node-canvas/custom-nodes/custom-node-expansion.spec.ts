@@ -50,7 +50,7 @@ test('handleExpandCustomNode skips non-object internal entries', () => {
     ports: [],
   };
 
-  const groupStore = writable([]);
+  const groupStore = writable([] as import('../groups/types').NodeGroup[]);
   const framesStore = writable([]);
 
   const expansion = createCustomNodeExpansion({
@@ -82,7 +82,7 @@ test('handleExpandCustomNode skips non-object internal entries', () => {
       scheduleNormalizeProxies: () => {},
     },
     groupFrames: framesStore,
-    nodeRegistry: { get: () => null } as NodeRegistry,
+    nodeRegistry: { get: () => null } as unknown as NodeRegistry,
     requestFramesUpdate: () => {},
     readCustomNodeState: () => state,
     writeCustomNodeState: (config) => config,
@@ -132,8 +132,15 @@ test('handleDenodalizeGroup ignores non-object graph nodes', () => {
   };
 
   const groupStore = writable([
-    { id: 'group-1', parentId: null, name: 'Group', nodeIds: [] },
-  ]);
+    {
+      id: 'group-1',
+      parentId: null,
+      name: 'Group',
+      nodeIds: [],
+      disabled: false,
+      minimized: false,
+    },
+  ] as import('../groups/types').NodeGroup[]);
 
   const originalConfirm = globalThis.confirm;
   (globalThis as typeof globalThis & { confirm?: () => boolean }).confirm = () => true;
@@ -154,7 +161,7 @@ test('handleDenodalizeGroup ignores non-object graph nodes', () => {
       addConnection: () => {},
       removeConnection: () => {},
     },
-    nodeRegistry: { get: () => null } as NodeRegistry,
+    nodeRegistry: { get: () => null } as unknown as NodeRegistry,
     groupController: {
       nodeGroups: groupStore,
       setGroups: (groups) => groupStore.set(groups),
@@ -195,6 +202,6 @@ test('handleDenodalizeGroup ignores non-object graph nodes', () => {
   if (originalConfirm) {
     globalThis.confirm = originalConfirm;
   } else {
-    delete (globalThis as typeof globalThis & { confirm?: () => boolean }).confirm;
+    Reflect.deleteProperty(globalThis, 'confirm');
   }
 });

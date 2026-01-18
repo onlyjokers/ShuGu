@@ -11,7 +11,13 @@
  */
 
 import { get, type Readable } from 'svelte/store';
-import { targetGroup, type ControlAction, type ControlPayload, type TargetSelector } from '@shugu/protocol';
+import {
+  targetGroup,
+  type ControlAction,
+  type ControlPayload,
+  type PluginCommand,
+  type TargetSelector,
+} from '@shugu/protocol';
 import type { ManagerState } from '@shugu/sdk-manager';
 import type { DisplayBridgeState } from '$lib/display/display-bridge';
 
@@ -47,14 +53,18 @@ export type DisplayTransportSdk = {
   sendPluginControl: (
     target: TargetSelector,
     pluginId: string,
-    command: string,
+    command: PluginCommand,
     payload?: Record<string, unknown>
   ) => void;
 };
 
 export type DisplayTransportLocalSender = {
   sendControl: (action: ControlAction, payload: ControlPayload, executeAtLocal?: number) => void;
-  sendPlugin?: (pluginId: string, command: string, payload?: Record<string, unknown>) => void;
+  sendPlugin?: (
+    pluginId: string,
+    command: PluginCommand,
+    payload?: Record<string, unknown>
+  ) => void;
 };
 
 export type DisplayTransportDeps = {
@@ -68,7 +78,10 @@ function hasRemoteDisplayClients(manager: ManagerState): boolean {
   return (manager.clients ?? []).some((c) => c.group === 'display');
 }
 
-function getLocalRouteInfo(bridge: DisplayBridgeState): { hasLocalSession: boolean; hasLocalReady: boolean } {
+function getLocalRouteInfo(bridge: DisplayBridgeState): {
+  hasLocalSession: boolean;
+  hasLocalReady: boolean;
+} {
   const hasLocalSession = bridge.status === 'connected';
   return { hasLocalSession, hasLocalReady: hasLocalSession && bridge.ready === true };
 }
@@ -83,7 +96,7 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
   ) => DisplayTransportAvailability;
   sendPlugin: (
     pluginId: string,
-    command: string,
+    command: PluginCommand,
     payload?: Record<string, unknown>,
     options?: DisplayTransportSendOptions
   ) => DisplayTransportAvailability;
@@ -125,11 +138,14 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
     }
 
     if (options?.localOnly) {
-      if (!hasLocalSession) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+      if (!hasLocalSession)
+        return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
 
       const offset = typeof manager.timeSync?.offset === 'number' ? manager.timeSync.offset : 0;
       const executeAtLocal =
-        typeof executeAtServer === 'number' && Number.isFinite(executeAtServer) ? executeAtServer - offset : undefined;
+        typeof executeAtServer === 'number' && Number.isFinite(executeAtServer)
+          ? executeAtServer - offset
+          : undefined;
       deps.local.sendControl(action, payload, executeAtLocal);
       return { route: 'local', hasLocalSession, hasLocalReady, hasRemoteDisplay };
     }
@@ -138,7 +154,9 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
 
     if (hasLocalSession) {
       const executeAtLocal =
-        typeof executeAtServer === 'number' && Number.isFinite(executeAtServer) ? executeAtServer - offset : undefined;
+        typeof executeAtServer === 'number' && Number.isFinite(executeAtServer)
+          ? executeAtServer - offset
+          : undefined;
       deps.local.sendControl(action, payload, executeAtLocal);
       if (hasLocalReady && options?.forceServer !== true) {
         return { route: 'local', hasLocalSession, hasLocalReady, hasRemoteDisplay };
@@ -155,7 +173,7 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
 
   const sendPlugin = (
     pluginId: string,
-    command: string,
+    command: PluginCommand,
     payload?: Record<string, unknown>,
     options?: DisplayTransportSendOptions
   ): DisplayTransportAvailability => {
@@ -175,8 +193,10 @@ export function createDisplayTransport(deps: DisplayTransportDeps): {
     }
 
     if (options?.localOnly) {
-      if (!hasLocalSession) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
-      if (!deps.local.sendPlugin) return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+      if (!hasLocalSession)
+        return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
+      if (!deps.local.sendPlugin)
+        return { route: 'none', hasLocalSession, hasLocalReady, hasRemoteDisplay };
       deps.local.sendPlugin(pluginId, command, payload);
       return { route: 'local', hasLocalSession, hasLocalReady, hasRemoteDisplay };
     }

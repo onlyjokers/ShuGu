@@ -17,11 +17,12 @@ import { normalizeAreaTransform } from '../utils/view-utils';
 
 type AnyAreaPlugin = AreaPlugin<BaseSchemes, unknown>;
 type AnyRecord = Record<string, unknown>;
+type AnyNodeRef = AnyRecord & { id?: string };
 
 export interface ReteAdapterOptions {
   getContainer: () => HTMLDivElement | null;
   getAreaPlugin: () => AnyAreaPlugin | null;
-  getNodeMap: () => Map<string, AnyRecord>;
+  getNodeMap: () => Map<string, AnyNodeRef>;
   getConnectionMap: () => Map<string, AnyRecord>;
   requestFramesUpdate: () => void;
 }
@@ -61,7 +62,7 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     if (!area) return;
     area.transform = { k: transform.k, x: transform.tx, y: transform.ty };
     // Force area update (update() is private in Rete types)
-    (area as { update?: () => void }).update?.();
+    (area as unknown as { update?: () => void }).update?.();
     requestFramesUpdate();
   };
 
@@ -69,13 +70,17 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     const areaPlugin = getAreaPlugin();
     if (!areaPlugin) return;
     const nodeMap = getNodeMap();
-    const nodes = nodeIds.map((id) => nodeMap.get(id)).filter(Boolean);
+    const nodes = nodeIds.map((id) => nodeMap.get(id)).filter((n): n is AnyNodeRef => Boolean(n));
     if (nodes.length === 0) return;
 
     // Use Rete's zoomAt extension if available
     try {
       const { AreaExtensions } = await import('rete-area-plugin');
-      await AreaExtensions.zoomAt(areaPlugin, nodes);
+      const nodesWithId = nodes.filter(
+        (n): n is AnyRecord & { id: string } => typeof n.id === 'string' && n.id.length > 0
+      );
+      if (nodesWithId.length === 0) return;
+      await AreaExtensions.zoomAt(areaPlugin, nodesWithId);
       requestFramesUpdate();
     } catch {
       // Fallback: do nothing
@@ -153,7 +158,10 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
     };
   };
 
-  const setNodeVisualState = async (nodeId: string, patch: Partial<NodeVisualState>): Promise<void> => {
+  const setNodeVisualState = async (
+    nodeId: string,
+    patch: Partial<NodeVisualState>
+  ): Promise<void> => {
     const areaPlugin = getAreaPlugin();
     if (!areaPlugin) return;
 
@@ -344,7 +352,10 @@ export function createReteAdapter(opts: ReteAdapterOptions): GraphViewAdapter {
 
       // Check intersection
       const intersects =
-        bounds.left < rect.right && bounds.right > rect.left && bounds.top < rect.bottom && bounds.bottom > rect.top;
+        bounds.left < rect.right &&
+        bounds.right > rect.left &&
+        bounds.top < rect.bottom &&
+        bounds.bottom > rect.top;
 
       if (intersects) {
         result.push(nodeId);

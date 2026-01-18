@@ -5,7 +5,7 @@ import { parameterRegistry } from '$lib/parameters/registry';
 import { minimapPreferences, type MinimapPreferences } from './uiState';
 import { nodeGroupsState } from './nodeGraphUiState';
 import { customNodeDefinitions, replaceCustomNodeDefinitions } from '$lib/nodes/custom-nodes/store';
-import type { CustomNodeDefinition } from '$lib/nodes/custom-nodes/types';
+import type { CustomNodeDefinition, CustomNodePortSide } from '$lib/nodes/custom-nodes/types';
 import { definitionsInCycles } from '$lib/nodes/custom-nodes/deps';
 import { get } from 'svelte/store';
 
@@ -118,7 +118,8 @@ export function loadLocalProject(): boolean {
       const nodeIds = nodeIdsRaw.map((v) => String(v)).filter(Boolean);
       const disabled = Boolean(item.disabled);
       const minimized = Boolean(item.minimized);
-      const runtimeActive = typeof item.runtimeActive === 'boolean' ? item.runtimeActive : undefined;
+      const runtimeActive =
+        typeof item.runtimeActive === 'boolean' ? item.runtimeActive : undefined;
       groups.push({ id, parentId, name, nodeIds, disabled, minimized, runtimeActive });
     }
     return groups;
@@ -135,7 +136,9 @@ export function loadLocalProject(): boolean {
 
       const templateRaw = isRecord(item.template) ? item.template : null;
       const nodesRaw = Array.isArray(templateRaw?.nodes) ? templateRaw?.nodes : [];
-      const connectionsRaw = Array.isArray(templateRaw?.connections) ? templateRaw?.connections : [];
+      const connectionsRaw = Array.isArray(templateRaw?.connections)
+        ? templateRaw?.connections
+        : [];
 
       const template: GraphState = {
         nodes: nodesRaw
@@ -149,8 +152,14 @@ export function loadLocalProject(): boolean {
               id: String(nodeRecord?.id ?? ''),
               type: String(nodeRecord?.type ?? ''),
               position: {
-                x: typeof positionRecord?.x === 'number' ? positionRecord.x : Number(positionRecord?.x ?? 0),
-                y: typeof positionRecord?.y === 'number' ? positionRecord.y : Number(positionRecord?.y ?? 0),
+                x:
+                  typeof positionRecord?.x === 'number'
+                    ? positionRecord.x
+                    : Number(positionRecord?.x ?? 0),
+                y:
+                  typeof positionRecord?.y === 'number'
+                    ? positionRecord.y
+                    : Number(positionRecord?.y ?? 0),
               },
               config,
               inputValues,
@@ -170,7 +179,9 @@ export function loadLocalProject(): boolean {
               targetPortId: String(connectionRecord?.targetPortId ?? ''),
             };
           })
-          .filter((c) => Boolean(c.id && c.sourceNodeId && c.targetNodeId && c.sourcePortId && c.targetPortId)),
+          .filter((c) =>
+            Boolean(c.id && c.sourceNodeId && c.targetNodeId && c.sourcePortId && c.targetPortId)
+          ),
       };
 
       const portsRaw = Array.isArray(item.ports) ? item.ports : [];
@@ -178,9 +189,12 @@ export function loadLocalProject(): boolean {
         .map((p) => {
           const portRecord = isRecord(p) ? p : null;
           const bindingRecord = isRecord(portRecord?.binding) ? portRecord?.binding : null;
+          const sideRaw =
+            typeof portRecord?.side === 'string' ? portRecord.side : String(portRecord?.side ?? '');
+          const side: CustomNodePortSide = sideRaw === 'input' ? 'input' : 'output';
           return {
             portKey: String(portRecord?.portKey ?? ''),
-            side: String(portRecord?.side) === 'input' ? 'input' : ('output' as const),
+            side,
             label: String(portRecord?.label ?? ''),
             type: String(portRecord?.type ?? 'any') as PortType,
             pinned: Boolean(portRecord?.pinned),
@@ -207,7 +221,10 @@ export function loadLocalProject(): boolean {
       const defs = parseCustomNodes(snapshot?.customNodes);
       const inCycle = definitionsInCycles(defs);
       if (inCycle.size > 0) {
-        console.warn('[ProjectManager] Dropping cyclic custom node definitions:', Array.from(inCycle));
+        console.warn(
+          '[ProjectManager] Dropping cyclic custom node definitions:',
+          Array.from(inCycle)
+        );
       }
       replaceCustomNodeDefinitions(defs.filter((d) => !inCycle.has(String(d.definitionId))));
     }

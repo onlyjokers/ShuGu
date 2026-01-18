@@ -4,7 +4,13 @@
 import { derived, get, writable, type Readable } from 'svelte/store';
 import { tick } from 'svelte';
 import type { NodeRegistry } from '@shugu/node-core';
-import type { Connection as EngineConnection, GraphState, NodeInstance, NodePort, PortType } from '$lib/nodes/types';
+import type {
+  Connection as EngineConnection,
+  GraphState,
+  NodeInstance,
+  NodePort,
+  PortType,
+} from '$lib/nodes/types';
 import { CUSTOM_NODE_TYPE_PREFIX } from '$lib/nodes/custom-nodes/store';
 import { readCustomNodeState } from '$lib/nodes/custom-nodes/instance';
 
@@ -27,7 +33,11 @@ type PickerControllerOptions = {
   computeGraphPosition: (clientX: number, clientY: number) => { x: number; y: number };
   getLastPointerClient: () => { x: number; y: number };
   getPortDefForSocket: (socket: SocketData) => NodePort | null;
-  bestMatchingPort: (ports: NodePort[], requiredType: PortType, side: 'input' | 'output') => NodePort | null;
+  bestMatchingPort: (
+    ports: NodePort[],
+    requiredType: PortType,
+    side: 'input' | 'output'
+  ) => NodePort | null;
   addNode: (type: string, position?: { x: number; y: number }) => string | undefined;
   addConnection: (conn: EngineConnection) => void;
   graphStateStore: Readable<GraphState>;
@@ -39,7 +49,10 @@ const normalizeSearchQuery = (raw: string): string => {
   const q = raw.trim().toLowerCase();
   if (!q) return '';
   // Common typos to make search forgiving (e.g. "Bollean" -> "Boolean").
-  return q.replace(/bollean/g, 'boolean').replace(/boolen/g, 'boolean').replace(/bolean/g, 'boolean');
+  return q
+    .replace(/bollean/g, 'boolean')
+    .replace(/boolen/g, 'boolean')
+    .replace(/bolean/g, 'boolean');
 };
 
 const readUsageMap = (): UsageMap => {
@@ -80,70 +93,71 @@ export function createPickerController(opts: PickerControllerOptions) {
   const itemsByCategory = derived(
     [mode, query, initialSocket, opts.graphStateStore],
     ([$mode, $query, $initialSocket, $graphState]) => {
-    const map = new Map<string, PickerItem[]>();
-    const q = normalizeSearchQuery($query);
-    const nodes = Array.isArray($graphState?.nodes) ? ($graphState.nodes as NodeInstance[]) : [];
-    const motherDefinitions = new Set<string>();
-    for (const node of nodes) {
-      const state = readCustomNodeState(node?.config ?? {});
-      if (state?.role === 'mother') motherDefinitions.add(String(state.definitionId));
-    }
-    const isCustomNodeAvailable = (type: string): boolean => {
-      if (!String(type).startsWith(CUSTOM_NODE_TYPE_PREFIX)) return true;
-      const defId = String(type).slice(CUSTOM_NODE_TYPE_PREFIX.length);
-      return Boolean(defId && motherDefinitions.has(defId));
-    };
-
-    const addItem = (item: PickerItem) => {
-      if (q) {
-        const hay = `${item.label} ${item.type} ${item.category}`.toLowerCase();
-        if (!hay.includes(q)) return;
+      const map = new Map<string, PickerItem[]>();
+      const q = normalizeSearchQuery($query);
+      const nodes = Array.isArray($graphState?.nodes) ? ($graphState.nodes as NodeInstance[]) : [];
+      const motherDefinitions = new Set<string>();
+      for (const node of nodes) {
+        const state = readCustomNodeState(node?.config ?? {});
+        if (state?.role === 'mother') motherDefinitions.add(String(state.definitionId));
       }
-      const list = map.get(item.category) ?? [];
-      list.push(item);
-      map.set(item.category, list);
-    };
+      const isCustomNodeAvailable = (type: string): boolean => {
+        if (!String(type).startsWith(CUSTOM_NODE_TYPE_PREFIX)) return true;
+        const defId = String(type).slice(CUSTOM_NODE_TYPE_PREFIX.length);
+        return Boolean(defId && motherDefinitions.has(defId));
+      };
 
-    if ($mode === 'connect' && $initialSocket) {
-      const initial = $initialSocket;
-      const initialPort = opts.getPortDefForSocket(initial);
-      const requiredType = (initialPort?.type ?? 'any') as PortType;
-      const neededSide: 'input' | 'output' = initial.side === 'output' ? 'input' : 'output';
+      const addItem = (item: PickerItem) => {
+        if (q) {
+          const hay = `${item.label} ${item.type} ${item.category}`.toLowerCase();
+          if (!hay.includes(q)) return;
+        }
+        const list = map.get(item.category) ?? [];
+        list.push(item);
+        map.set(item.category, list);
+      };
 
-      for (const def of opts.nodeRegistry.list()) {
-        if (String(def.category ?? '') === 'Internal') continue;
-        if (!isCustomNodeAvailable(def.type)) continue;
-        const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
-        const match = opts.bestMatchingPort(ports, requiredType, neededSide);
-        if (!match) continue;
+      if ($mode === 'connect' && $initialSocket) {
+        const initial = $initialSocket;
+        const initialPort = opts.getPortDefForSocket(initial);
+        const requiredType = (initialPort?.type ?? 'any') as PortType;
+        const neededSide: 'input' | 'output' = initial.side === 'output' ? 'input' : 'output';
 
-        addItem({
-          type: def.type,
-          label: def.label,
-          category: def.category,
-          matchPort: {
-            id: match.id,
-            label: match.label ?? match.id,
-            side: neededSide,
-            type: (match.type ?? 'any') as PortType,
-          },
-        });
+        for (const def of opts.nodeRegistry.list()) {
+          if (String(def.category ?? '') === 'Internal') continue;
+          if (!isCustomNodeAvailable(def.type)) continue;
+          const ports = (neededSide === 'input' ? def.inputs : def.outputs) ?? [];
+          const match = opts.bestMatchingPort(ports, requiredType, neededSide);
+          if (!match) continue;
+
+          addItem({
+            type: def.type,
+            label: def.label,
+            category: def.category,
+            matchPort: {
+              id: match.id,
+              label: match.label ?? match.id,
+              side: neededSide,
+              type: (match.type ?? 'any') as PortType,
+            },
+          });
+        }
+      } else {
+        for (const def of opts.nodeRegistry.list()) {
+          if (String(def.category ?? '') === 'Internal') continue;
+          if (!isCustomNodeAvailable(def.type)) continue;
+          addItem({ type: def.type, label: def.label, category: def.category });
+        }
       }
-    } else {
-      for (const def of opts.nodeRegistry.list()) {
-        if (String(def.category ?? '') === 'Internal') continue;
-        if (!isCustomNodeAvailable(def.type)) continue;
-        addItem({ type: def.type, label: def.label, category: def.category });
+
+      for (const [cat, list] of map) {
+        list.sort((a, b) => a.label.localeCompare(b.label));
+        map.set(cat, list);
       }
-    }
 
-    for (const [cat, list] of map) {
-      list.sort((a, b) => a.label.localeCompare(b.label));
-      map.set(cat, list);
+      return map;
     }
-
-    return map;
-  });
+  );
 
   const CATEGORY_ORDER = [
     'Objects',
@@ -164,10 +178,13 @@ export function createPickerController(opts: PickerControllerOptions) {
 
   const categories = derived(itemsByCategory, ($itemsByCategory) => {
     const cats = Array.from($itemsByCategory.keys());
-    const normalized = cats.filter((c) => c && typeof c === 'string');
+    const normalized = cats.filter((c): c is (typeof CATEGORY_ORDER)[number] =>
+      (CATEGORY_ORDER as readonly string[]).includes(String(c))
+    );
     const ordered = CATEGORY_ORDER.filter((c) => normalized.includes(c));
-    const rest = normalized
-      .filter((c) => !ordered.includes(c))
+    const rest = cats
+      .filter((c): c is string => typeof c === 'string' && c.length > 0)
+      .filter((c) => !(CATEGORY_ORDER as readonly string[]).includes(c))
       .sort((a, b) => a.localeCompare(b));
     return [...ordered, ...rest];
   });

@@ -45,13 +45,14 @@ export const registerGroupFrameTranslatePipe = (opts: GroupFrameTranslateOptions
   let translateDepth = 0;
 
   // Dragging the minimized Group node should move the entire group (incl. nested frames/ports).
-  areaPlugin.addPipe(async (ctx: { type?: string; data?: unknown }) => {
-    if (ctx?.type !== 'nodetranslated') return ctx;
+  areaPlugin.addPipe(async (ctx: unknown) => {
+    const record = asRecord(ctx);
+    if (getString(record.type, '') !== 'nodetranslated') return ctx;
     if (isSyncing()) return ctx;
     if (groupController.isProgrammaticTranslate()) return ctx;
     if (translateDepth > 0) return ctx;
 
-    const data = asRecord(ctx.data);
+    const data = asRecord(record.data);
     const nodeId = getString(data.id, '');
     const posRecord = asRecord(data.position);
     const prevRecord = asRecord(data.previous);

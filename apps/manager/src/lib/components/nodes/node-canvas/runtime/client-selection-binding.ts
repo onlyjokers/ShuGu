@@ -55,7 +55,9 @@ export interface CreateClientSelectionBindingOptions {
   sendNodeOverride: SendNodeOverrideFn;
 }
 
-export function createClientSelectionBinding(opts: CreateClientSelectionBindingOptions): ClientSelectionBinding {
+export function createClientSelectionBinding(
+  opts: CreateClientSelectionBindingOptions
+): ClientSelectionBinding {
   const {
     nodeEngine,
     graphStateStore,
@@ -89,7 +91,12 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
         String(c.targetNodeId) === String(nodeId) && String(c.targetPortId) === String(portId)
     );
 
-  const computeClientSlice = (nodeId: string, indexRaw: number, rangeRaw: number, randomRaw: unknown) => {
+  const computeClientSlice = (
+    nodeId: string,
+    indexRaw: number,
+    rangeRaw: number,
+    randomRaw: unknown
+  ) => {
     const clients = audienceClientIdsInOrder();
     if (clients.length === 0) return null;
 
@@ -134,8 +141,10 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
 
     // Clamp + persist unconnected inputs (connected inputs are driven by upstream nodes).
     if (updateInputs) {
-      if (!isInputConnected(nodeId, 'index')) nodeEngine.updateNodeInputValue(nodeId, 'index', slice.index);
-      if (!isInputConnected(nodeId, 'range')) nodeEngine.updateNodeInputValue(nodeId, 'range', slice.range);
+      if (!isInputConnected(nodeId, 'index'))
+        nodeEngine.updateNodeInputValue(nodeId, 'index', slice.index);
+      if (!isInputConnected(nodeId, 'range'))
+        nodeEngine.updateNodeInputValue(nodeId, 'range', slice.range);
     }
 
     // Keep live display outputs usable even when the engine is stopped.
@@ -144,7 +153,7 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
     outputValues.out = {
       clientId: slice.firstId,
       sensors: (() => {
-        const latest = slice.firstId ? get(sensorData)?.get?.(slice.firstId) ?? null : null;
+        const latest = slice.firstId ? (get(sensorData)?.get?.(slice.firstId) ?? null) : null;
         if (!latest) return null;
         const record = asRecord(latest);
         return record
@@ -164,8 +173,13 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
     const reteNode = getNodeMap().get(String(nodeId));
     if (!reteNode || !areaPlugin) return;
 
-    const indexCtrl = asRecord((reteNode as AnyRecord)?.inputs?.index?.control) as InputControlLike | null;
-    const rangeCtrl = asRecord((reteNode as AnyRecord)?.inputs?.range?.control) as InputControlLike | null;
+    const nodeRecord = asRecord(reteNode);
+    const inputsRecord = asRecord(nodeRecord?.inputs);
+    const indexInput = asRecord(inputsRecord?.index);
+    const rangeInput = asRecord(inputsRecord?.range);
+
+    const indexCtrl = asRecord(indexInput?.control) as InputControlLike | null;
+    const rangeCtrl = asRecord(rangeInput?.control) as InputControlLike | null;
 
     if (indexCtrl && updateControls) {
       indexCtrl.min = 1;
@@ -204,7 +218,8 @@ export function createClientSelectionBinding(opts: CreateClientSelectionBindingO
     const currentRangeRaw = toFiniteNumber(getEffectiveInput('range'), 1);
     const currentRandomRaw = getEffectiveInput('random');
 
-    const desiredRandom = typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
+    const desiredRandom =
+      typeof next.random === 'boolean' ? next.random : coerceBoolean(currentRandomRaw, false);
 
     let desiredIndex =
       typeof next.index === 'number' && Number.isFinite(next.index) ? next.index : currentIndexRaw;

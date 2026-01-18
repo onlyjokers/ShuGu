@@ -100,5 +100,5 @@ export function ensureMasterGain(): void {
   if (!toneModule || masterGain) return;
   const gain = new toneModule.Gain({ gain: 1 });
   gain.connect(toneModule.Destination);
-  masterGain = gain;
+  masterGain = gain as unknown as ToneGainLike;
 }

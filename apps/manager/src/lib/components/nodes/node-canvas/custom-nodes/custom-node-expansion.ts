@@ -1,6 +1,6 @@
 // Purpose: Custom node expansion/collapse logic for Group Frames.
 import { get, type Readable } from 'svelte/store';
-import type { Connection, GraphState, NodeInstance } from '$lib/nodes/types';
+import type { Connection, GraphState, NodeInstance, PortType } from '$lib/nodes/types';
 import type { CustomNodeDefinition } from '$lib/nodes/custom-nodes/types';
 import type { CustomNodeInstanceState } from '$lib/nodes/custom-nodes/instance';
 import type { NodeRegistry } from '@shugu/node-core';
@@ -197,7 +197,7 @@ export const createCustomNodeExpansion = (opts: CustomNodeExpansionOptions) => {
 
       opts.nodeEngine.addNode(nextNode);
 
-      if (!decorationTypes.has(type)) materializedIdsInGroup.push(matId);
+      if (!decorationTypes.has(type) && matId !== id) materializedIdsInGroup.push(matId);
     }
 
     for (const entry of internalConnections) {
@@ -439,7 +439,7 @@ export const createCustomNodeExpansion = (opts: CustomNodeExpansionOptions) => {
       return String(port?.label ?? portId);
     };
 
-    const validPortTypes = new Set([
+    const validPortTypes = new Set<PortType>([
       'number',
       'boolean',
       'string',
@@ -481,8 +481,8 @@ export const createCustomNodeExpansion = (opts: CustomNodeExpansionOptions) => {
       const bindingPortId = side === 'input' ? 'in' : 'out';
       const portKey = `p:${internalProxyId}`;
 
-      const portTypeRaw = getString(config.portType, 'any');
-      const type = validPortTypes.has(portTypeRaw) ? portTypeRaw : 'any';
+      const portTypeRaw = getString(config.portType, 'any') as PortType;
+      const type: PortType = validPortTypes.has(portTypeRaw) ? portTypeRaw : 'any';
       const pinned = getBoolean(config.pinned, false);
 
       const pos = proxy.position ?? { x: 0, y: 0 };

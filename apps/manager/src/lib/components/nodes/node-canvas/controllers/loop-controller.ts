@@ -17,7 +17,13 @@ import {
   type ManagerSdkLike,
 } from './loop-helpers';
 
-export type LoopFrame = { loop: LocalLoop; left: number; top: number; width: number; height: number };
+export type LoopFrame = {
+  loop: LocalLoop;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
 
 type LoopControllerOptions = {
   nodeEngine: Pick<
@@ -267,7 +273,9 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     const gy = Number(dropGraphPos?.y);
     if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
 
-    const candidates = get(localLoops).filter((l) => (l.nodeIds ?? []).some((id) => String(id) === initialId));
+    const candidates = get(localLoops).filter((l) =>
+      (l.nodeIds ?? []).some((id) => String(id) === initialId)
+    );
     if (candidates.length === 0) return;
 
     const paddingX = 56;
@@ -345,7 +353,8 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
     showExecutorLogs.set(true);
   };
 
-  const loopHasDisabledNodesForLoop = (loop: LocalLoop) => loopHasDisabledNodes(loop, opts.getGroupDisabledNodeIds());
+  const loopHasDisabledNodesForLoop = (loop: LocalLoop) =>
+    loopHasDisabledNodes(loop, opts.getGroupDisabledNodeIds());
 
   loopsUnsub = opts.nodeEngine.localLoops.subscribe((loops) => {
     const nextLoops = Array.isArray(loops) ? loops : [];
@@ -392,7 +401,7 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
 
   sensorUnsub = sensorData.subscribe((map) => {
     for (const [clientId, msg] of map.entries()) {
-      const m = msg as Record<string, unknown>;
+      const m = msg as unknown as Record<string, unknown>;
       if (!m || m.sensorType !== 'custom') continue;
       const payload = (m.payload ?? {}) as Record<string, unknown>;
       if (payload?.kind !== 'node-executor') continue;
@@ -469,7 +478,8 @@ export function createLoopController(opts: LoopControllerOptions): LoopControlle
       for (const entry of deployPendingByLoopId.values()) {
         if (entry.timeoutId) clearTimeout(entry.timeoutId);
       }
-      if (loopFramesRaf && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(loopFramesRaf);
+      if (loopFramesRaf && typeof cancelAnimationFrame !== 'undefined')
+        cancelAnimationFrame(loopFramesRaf);
       loopFramesRaf = 0;
     },
   };

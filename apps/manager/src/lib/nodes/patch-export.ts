@@ -233,7 +233,11 @@ export function exportGraphForPatch(
       if (incoming.length === 0 || outgoing.length === 0) {
         // Special case: a disabled chain head (no upstream) should be dropped for "empty chain" ports
         // so the patch can still deploy and downstream nodes can start from identity.
-        if (incoming.length === 0 && outgoing.length > 0 && shouldDropWhenDisabledStart(type, ports))
+        if (
+          incoming.length === 0 &&
+          outgoing.length > 0 &&
+          shouldDropWhenDisabledStart(type, ports)
+        )
           removed.add(nodeId);
         continue;
       }
@@ -284,9 +288,10 @@ export function exportGraphForPatch(
       const def = registry.get(String(n.type));
       for (const field of def?.configSchema ?? []) {
         const fieldRecord =
-          field && typeof field === 'object' ? (field as Record<string, unknown>) : null;
+          field && typeof field === 'object' ? (field as unknown as Record<string, unknown>) : null;
         if (fieldRecord?.type !== 'asset-picker') continue;
-        const key = typeof fieldRecord.key === 'string' ? fieldRecord.key : String(fieldRecord?.key ?? '');
+        const key =
+          typeof fieldRecord.key === 'string' ? fieldRecord.key : String(fieldRecord?.key ?? '');
         if (!key) continue;
         const configRecord =
           n.config && typeof n.config === 'object' ? (n.config as Record<string, unknown>) : null;

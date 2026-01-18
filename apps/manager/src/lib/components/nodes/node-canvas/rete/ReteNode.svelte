@@ -8,7 +8,7 @@
   import { onDestroy, tick } from 'svelte';
   import { nodeEngine, nodeRegistry } from '$lib/nodes';
   import { readCustomNodeState } from '$lib/nodes/custom-nodes/instance';
-  import type { NodeInstance } from '$lib/nodes/types';
+  import type { Connection, NodeInstance } from '$lib/nodes/types';
 
   type NodeExtraData = {
     width?: number;
@@ -31,18 +31,18 @@
   export let emit: (props: SvelteArea2D<ClassicScheme>) => void;
 
   let nodeEl: HTMLDivElement | null = null;
-  let customNodeState = null;
+  let customNodeState: ReturnType<typeof readCustomNodeState> = null;
 
   // Feature: Node minimize/collapse UI (manager-only visual state).
   // Collapsing only affects layout/visibility; graph execution + connections remain intact.
+  const dataRecord = data as unknown as Record<string, unknown>;
   const toggleCollapsed = (event: Event) => {
     event.stopPropagation();
-    // Important: derive next state from `data.collapsed` to avoid Svelte reactive cycles.
-    const next = !(data as AnyRecord)?.collapsed;
-    (data as AnyRecord).collapsed = next;
+    const next = !Boolean(dataRecord.collapsed);
+    dataRecord.collapsed = next;
   };
 
-  $: isCollapsed = isGroupPortNode ? true : Boolean((data as AnyRecord)?.collapsed);
+  $: isCollapsed = isGroupPortNode ? true : Boolean(dataRecord.collapsed);
 
   $: inputs = sortByIndex(Object.entries(data.inputs));
   $: controls = sortByIndex(Object.entries(data.controls));
@@ -52,16 +52,38 @@
     return arg;
   }
 
+  type ControlPayload = Parameters<typeof emit>[0]['data'] extends {
+    type: 'control';
+    payload: infer P;
+  }
+    ? P
+    : never;
+
+  const recordOrNull = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+
+  const controlPayload = (value: unknown): ControlPayload | undefined => {
+    const rec = recordOrNull(value);
+    const control = rec?.control;
+    if (!control || typeof control !== 'object') return undefined;
+    return control as unknown as ControlPayload;
+  };
+
+  const isSocketDisabled = (value: unknown): boolean => Boolean(recordOrNull(value)?.disabled);
+
+  const stringList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.map((v) => String(v)) : [];
+
   // MIDI activity highlight state (set by NodeCanvas).
-  $: isActive = Boolean((data as AnyRecord).active);
-  $: activeInputs = new Set<string>((((data as AnyRecord).activeInputs ?? []) as string[]).map(String));
-  $: activeOutputs = new Set<string>((((data as AnyRecord).activeOutputs ?? []) as string[]).map(String));
-  $: isDeployedPatch = Boolean((data as AnyRecord).deployedPatch);
-  $: isStopped = Boolean((data as AnyRecord).stopped);
-  $: isGroupDisabled = Boolean((data as AnyRecord).groupDisabled);
-  $: isGroupSelected = Boolean((data as AnyRecord).groupSelected);
-  $: isGroupMinimized = Boolean((data as AnyRecord).groupMinimized);
-  $: isHidden = Boolean((data as AnyRecord).hidden);
+  $: isActive = Boolean(dataRecord.active);
+  $: activeInputs = new Set<string>(stringList(dataRecord.activeInputs));
+  $: activeOutputs = new Set<string>(stringList(dataRecord.activeOutputs));
+  $: isDeployedPatch = Boolean(dataRecord.deployedPatch);
+  $: isStopped = Boolean(dataRecord.stopped);
+  $: isGroupDisabled = Boolean(dataRecord.groupDisabled);
+  $: isGroupSelected = Boolean(dataRecord.groupSelected);
+  $: isGroupMinimized = Boolean(dataRecord.groupMinimized);
+  $: isHidden = Boolean(dataRecord.hidden);
 
   // Live Port Values
   // Values are derived from NodeEngine runtime outputs and graph connections.
@@ -80,7 +102,9 @@
   $: isGroupPortNode = ['group-activate', 'group-gate', 'group-proxy'].includes(instanceType);
   $: isGroupFrameNode = instanceType === 'group-frame';
   $: proxyDirection =
-    instanceType === 'group-proxy' ? String((nodeEngine.getNode(nodeId)?.config as AnyRecord)?.direction ?? 'output') : '';
+    instanceType === 'group-proxy'
+      ? String((nodeEngine.getNode(nodeId)?.config as AnyRecord)?.direction ?? 'output')
+      : '';
 
   $: {
     // Keep in sync with runtime config changes (e.g. Uncouple promotes child → mother).
@@ -93,7 +117,7 @@
   let groupFrameDisabled = false;
   $: groupFrameDisabled = (() => {
     if (!isGroupFrameNode) return false;
-    const instance = nodeEngine.getNode(nodeId) as AnyRecord;
+    const instance = nodeEngine.getNode(nodeId);
     return Boolean(instance?.config?.disabled);
   })();
 
@@ -153,9 +177,9 @@
 
     for (const c of $graphStateStore.connections ?? []) {
       if (String(c.targetNodeId) !== nodeId) continue;
-      const targetPortId = String((c as AnyRecord).targetPortId ?? '');
+      const targetPortId = String(c.targetPortId ?? '');
       if (!removedPorts.has(targetPortId)) continue;
-      const id = String((c as AnyRecord).id ?? '');
+      const id = String(c.id ?? '');
       if (!id) continue;
       nodeEngine.removeConnection(id);
     }
@@ -164,7 +188,7 @@
   };
 
   const toggleGroupMinimized = () => {
-    const instance = nodeEngine.getNode(nodeId) as AnyRecord;
+    const instance = nodeEngine.getNode(nodeId);
     const raw = instance?.config?.groupId;
     const groupId = typeof raw === 'string' ? raw : raw ? String(raw) : '';
     if (!groupId) return;
@@ -173,7 +197,7 @@
   };
 
   const toggleGroupDisabled = () => {
-    const instance = nodeEngine.getNode(nodeId) as AnyRecord;
+    const instance = nodeEngine.getNode(nodeId);
     const raw = instance?.config?.groupId;
     const groupId = typeof raw === 'string' ? raw : raw ? String(raw) : '';
     if (!groupId) return;
@@ -197,8 +221,8 @@
     window.dispatchEvent(new CustomEvent('shugu:custom-node-expand', { detail: { nodeId } }));
   };
 
-
   let inputConnections: Record<string, ConnectionInfo[]> = {};
+  const inputConnectionCount = (portId: string): number => inputConnections[portId]?.length ?? 0;
   $: if (nodeId) {
     const byInput: Record<string, ConnectionInfo[]> = {};
     for (const c of $graphStateStore.connections ?? []) {
@@ -249,7 +273,8 @@
 
     if (portType === 'boolean')
       return typeof value === 'boolean' ? (value ? 'true' : 'false') : null;
-    if (portType === 'string' || portType === 'asset') return typeof value === 'string' ? value : null;
+    if (portType === 'string' || portType === 'asset')
+      return typeof value === 'string' ? value : null;
     if (portType === 'color') return typeof value === 'string' ? value : null;
     if (portType === 'client' && typeof value === 'object' && value) {
       const clientId = (value as AnyRecord).clientId;
@@ -285,33 +310,36 @@
   let groupFramePortAreaHeight = 0;
 
   $: if (isGroupFrameNode && nodeId) {
-    const instance = nodeEngine.getNode(nodeId) as AnyRecord;
+    const instance = nodeEngine.getNode(nodeId);
     const rawGroupId = instance?.config?.groupId;
-    const groupId = typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
+    const groupId =
+      typeof rawGroupId === 'string' ? rawGroupId : rawGroupId ? String(rawGroupId) : '';
     const groupTop = Number(instance?.position?.y ?? 0);
     const proxyHalfHeight = 10;
 
     const nodeById = new Map(
       ($graphStateStore.nodes ?? []).map((n: NodeInstance) => [String(n.id), n] as const)
     );
-    const connections = Array.isArray($graphStateStore.connections) ? $graphStateStore.connections : [];
+    const connections = Array.isArray($graphStateStore.connections)
+      ? $graphStateStore.connections
+      : [];
 
-    const incomingToProxy = new Map<string, AnyRecord>();
-    const outgoingFromProxy = new Map<string, AnyRecord[]>();
+    const incomingToProxy = new Map<string, Connection>();
+    const outgoingFromProxy = new Map<string, Connection[]>();
     for (const c of connections) {
-      const targetId = String((c as AnyRecord).targetNodeId ?? '');
-      const sourceId = String((c as AnyRecord).sourceNodeId ?? '');
-      const targetPortId = String((c as AnyRecord).targetPortId ?? '');
-      const sourcePortId = String((c as AnyRecord).sourcePortId ?? '');
+      const targetId = String(c.targetNodeId ?? '');
+      const sourceId = String(c.sourceNodeId ?? '');
+      const targetPortId = String(c.targetPortId ?? '');
+      const sourcePortId = String(c.sourcePortId ?? '');
       if (!targetId || !sourceId || !targetPortId || !sourcePortId) continue;
 
       const targetNode = nodeById.get(targetId);
       const sourceNode = nodeById.get(sourceId);
 
-      if (String((targetNode as AnyRecord)?.type ?? '') === 'group-proxy' && targetPortId === 'in') {
+      if (String(targetNode?.type ?? '') === 'group-proxy' && targetPortId === 'in') {
         incomingToProxy.set(targetId, c);
       }
-      if (String((sourceNode as AnyRecord)?.type ?? '') === 'group-proxy' && sourcePortId === 'out') {
+      if (String(sourceNode?.type ?? '') === 'group-proxy' && sourcePortId === 'out') {
         const list = outgoingFromProxy.get(sourceId) ?? [];
         list.push(c);
         outgoingFromProxy.set(sourceId, list);
@@ -321,10 +349,10 @@
     const portLabelFor = (nodeId: string, side: 'input' | 'output', portId: string): string => {
       const node = nodeById.get(String(nodeId));
       if (!node) return String(portId);
-      const def = nodeRegistry.get(String((node as AnyRecord).type ?? ''));
+      const def = nodeRegistry.get(String(node.type ?? ''));
       const ports = side === 'input' ? def?.inputs : def?.outputs;
-      const port = (ports ?? []).find((p: AnyRecord) => String(p.id) === String(portId)) ?? null;
-      return String((port as AnyRecord)?.label ?? (port as AnyRecord)?.id ?? portId);
+      const port = (ports ?? []).find((p) => String(p.id) === String(portId)) ?? null;
+      return String(port?.label ?? port?.id ?? portId);
     };
 
     const validPortTypes = new Set([
@@ -345,8 +373,8 @@
       'any',
     ]);
 
-    const resolveProxyPortType = (node: AnyRecord): string => {
-      const raw = node?.config?.portType;
+    const resolveProxyPortType = (node: NodeInstance): string => {
+      const raw = node.config?.portType;
       const t = typeof raw === 'string' ? raw : raw ? String(raw) : '';
       return validPortTypes.has(t) ? t : 'any';
     };
@@ -354,35 +382,30 @@
     const ports: GroupFrameProxyPort[] = [];
 
     for (const node of $graphStateStore.nodes ?? []) {
-      if (String((node as AnyRecord).type ?? '') !== 'group-proxy') continue;
-      const proxyId = String((node as AnyRecord).id ?? '');
+      if (String(node.type ?? '') !== 'group-proxy') continue;
+      const proxyId = String(node.id ?? '');
       if (!proxyId) continue;
-      const proxyGroupId = String(((node as AnyRecord).config as AnyRecord)?.groupId ?? '');
+      const proxyGroupId = String(node.config?.groupId ?? '');
       if (!proxyGroupId || proxyGroupId !== groupId) continue;
 
-      const direction =
-        String(((node as AnyRecord).config as AnyRecord)?.direction ?? 'output') === 'input' ? 'input' : 'output';
+      const direction = String(node.config?.direction ?? 'output') === 'input' ? 'input' : 'output';
       const portType = resolveProxyPortType(node);
-      const centerY = Number((node as AnyRecord).position?.y ?? 0) + proxyHalfHeight;
+      const centerY = Number(node.position?.y ?? 0) + proxyHalfHeight;
 
       let label = '';
       if (direction === 'input') {
         const internal = outgoingFromProxy.get(proxyId) ?? [];
         const first = internal[0] ?? null;
         if (first) {
-          label = portLabelFor(
-            String((first as AnyRecord).targetNodeId),
-            'input',
-            String((first as AnyRecord).targetPortId)
-          );
+          label = portLabelFor(String(first.targetNodeId), 'input', String(first.targetPortId));
         }
       } else {
         const internal = incomingToProxy.get(proxyId) ?? null;
         if (internal) {
           label = portLabelFor(
-            String((internal as AnyRecord).sourceNodeId),
+            String(internal.sourceNodeId),
             'output',
-            String((internal as AnyRecord).sourcePortId)
+            String(internal.sourcePortId)
           );
         }
       }
@@ -591,7 +614,7 @@
   let portValueText: PortValueText = { inputs: {}, outputs: {} };
 
   $: if (nodeId) {
-    if (Boolean((data as AnyRecord).deployedLoop) || isDeployedPatch) {
+    if (Boolean(dataRecord.deployedLoop) || isDeployedPatch) {
       portValueText = { inputs: {}, outputs: {} };
     } else {
       // Depend on tickTimeStore to refresh live values (MIDI/sensors/etc).
@@ -622,18 +645,27 @@
   }
 </script>
 
-  <div
-    bind:this={nodeEl}
+<div
+  bind:this={nodeEl}
   class="node {isCollapsed ? 'collapsed' : ''} {data.selected ? 'selected' : ''} {data.localLoop
     ? 'local-loop'
     : ''} {data.deployedLoop ? 'deployed-loop' : ''} {isDeployedPatch
     ? 'deployed-patch'
-    : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupPortNode ? 'group-port' : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled || (isGroupFrameNode && groupFrameDisabled) ? 'group-disabled' : ''}"
+    : ''} {isStopped ? 'stopped' : ''} {isActive ? 'active' : ''} {isGroupPortNode
+    ? 'group-port'
+    : ''} {isGroupSelected ? 'group-selected' : ''} {isGroupDisabled ||
+  (isGroupFrameNode && groupFrameDisabled)
+    ? 'group-disabled'
+    : ''}"
   class:hidden={isHidden}
   class:group-minimized={isGroupMinimized}
   class:group-frame={isGroupFrameNode}
-  class:group-proxy-input={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection === 'input'}
-  class:group-proxy-output={isGroupPortNode && instanceType === 'group-proxy' && proxyDirection !== 'input'}
+  class:group-proxy-input={isGroupPortNode &&
+    instanceType === 'group-proxy' &&
+    proxyDirection === 'input'}
+  class:group-proxy-output={isGroupPortNode &&
+    instanceType === 'group-proxy' &&
+    proxyDirection !== 'input'}
   style:width={Number.isFinite(data.width) ? `${data.width}px` : undefined}
   style:height={!isCollapsed && Number.isFinite(data.height) ? `${data.height}px` : undefined}
   data-testid="node"
@@ -808,19 +840,22 @@
                     <div class="port-value input" data-testid={'input-value-' + key}>
                       {portValueText.inputs[String(key)]}
                     </div>
-                  {:else if input.control && (inputConnections[String(key)]?.length ?? 0) === 0}
+                  {:else if controlPayload(input) && inputConnectionCount(String(key)) === 0}
                     <Ref
                       class="port-control port-inline-input"
                       data-testid="input-control"
-                      init={(element) =>
+                      init={(element) => {
+                        const payload = controlPayload(input);
+                        if (!payload) return;
                         emit({
                           type: 'render',
                           data: {
                             type: 'control',
                             element,
-                            payload: any(input).control,
+                            payload,
                           },
-                        })}
+                        });
+                      }}
                       unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
                     />
                   {/if}
@@ -843,32 +878,36 @@
             >
               <div class="port-body">
                 <div class="output-line">
-                  <div class="port-label" data-testid="output-title">{output.label || ''}</div>
-                  {#if portValueText.outputs[String(key)] && !any(output).control}
+                  {#if portValueText.outputs[String(key)] && !controlPayload(output)}
+                    <div class="port-label" data-testid="output-title">{output.label || ''}</div>
                     <div class="port-value output" data-testid={'output-value-' + key}>
                       {portValueText.outputs[String(key)]}
                     </div>
                   {/if}
-                  {#if any(output).control}
+                  {#if controlPayload(output)}
+                    <div class="port-label" data-testid="output-title">{output.label || ''}</div>
                     <Ref
                       class="port-control port-inline-value"
                       data-testid="output-control"
-                      init={(element) =>
+                      init={(element) => {
+                        const payload = controlPayload(output);
+                        if (!payload) return;
                         emit({
                           type: 'render',
                           data: {
                             type: 'control',
                             element,
-                            payload: any(output).control,
+                            payload,
                           },
-                        })}
+                        });
+                      }}
                       unmount={(ref) => emit({ type: 'unmount', data: { element: ref } })}
                     />
                   {/if}
                 </div>
               </div>
               <Ref
-                class={`output-socket port-${portTypeFor('output', String(key))} ${any(output).disabled ? 'socket-disabled' : ''}`}
+                class={`output-socket port-${portTypeFor('output', String(key))} ${isSocketDisabled(output) ? 'socket-disabled' : ''}`}
                 data-testid="output-socket"
                 data-port-id={key}
                 init={(element) =>
@@ -947,7 +986,7 @@
           data-rete-port-key={key}
         >
           <Ref
-            class={`output-socket port-${portTypeFor('output', String(key))} ${any(output).disabled ? 'socket-disabled' : ''}`}
+            class={`output-socket port-${portTypeFor('output', String(key))} ${isSocketDisabled(output) ? 'socket-disabled' : ''}`}
             data-port-id={key}
             init={(element) =>
               emit({
@@ -1252,7 +1291,6 @@
     border-color: rgba(255, 255, 255, 0.18);
   }
 
-
   .group-frame-expand {
     appearance: none;
     display: inline-flex;
@@ -1462,7 +1500,6 @@
     margin-right: -10px;
     flex: 0 0 auto;
   }
-
 
   :global(.output-socket.socket-disabled) {
     opacity: 0.35;

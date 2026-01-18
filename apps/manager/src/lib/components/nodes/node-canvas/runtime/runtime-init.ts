@@ -1,11 +1,6 @@
 /**
  * Purpose: Centralized runtime wiring for NodeCanvas (patch runtime, client selection, sleep sockets).
  */
-import type { Readable } from 'svelte/store';
-import type { GraphState } from '$lib/nodes/types';
-import type { NodeRegistry } from '@shugu/node-core';
-import type { GraphViewAdapter } from '../adapters';
-import type { NodeEngine } from '$lib/nodes/engine';
 import type { SleepNodeSocketSync } from './sleep-node-sockets';
 import { createSleepNodeSocketSync } from './sleep-node-sockets';
 import type { PatchRuntime } from './patch-runtime';
@@ -13,26 +8,32 @@ import { createPatchRuntime } from './patch-runtime';
 import type { ClientSelectionBinding } from './client-selection-binding';
 import { createClientSelectionBinding } from './client-selection-binding';
 
+type SleepSyncOptions = Parameters<typeof createSleepNodeSocketSync>[0];
+type PatchRuntimeOptions = Parameters<typeof createPatchRuntime>[0];
+type ClientSelectionOptions = Parameters<typeof createClientSelectionBinding>[0];
+
 type RuntimeInitOptions = {
-  nodeEngine: NodeEngine;
-  nodeRegistry: NodeRegistry;
-  adapter: GraphViewAdapter;
-  getGraphState: () => GraphState;
-  graphStateStore: Readable<GraphState>;
-  isRunningStore: Readable<boolean>;
-  groupDisabledNodeIds: Readable<Set<string>>;
-  executorStatusByClient: Readable<Record<string, unknown>>;
-  showExecutorLogs: Readable<boolean>;
-  logsClientId: Readable<string>;
-  loopController: unknown;
-  managerState: Readable<Record<string, unknown>>;
-  displayTransport: unknown;
-  getSDK: () => unknown;
-  ensureDisplayLocalFilesRegisteredFromValue: (value: unknown) => void;
-  sensorData: Readable<Record<string, unknown>>;
-  getAreaPlugin: () => unknown;
-  getNodeMap: () => Map<string, unknown>;
-  sockets: unknown;
+  nodeEngine: PatchRuntimeOptions['nodeEngine'] & ClientSelectionOptions['nodeEngine'];
+  nodeRegistry: PatchRuntimeOptions['nodeRegistry'] & SleepSyncOptions['nodeRegistry'];
+  adapter: PatchRuntimeOptions['adapter'];
+  getGraphState: PatchRuntimeOptions['getGraphState'] &
+    SleepSyncOptions['getGraphState'] &
+    ClientSelectionOptions['getGraphState'];
+  graphStateStore: ClientSelectionOptions['graphStateStore'];
+  isRunningStore: PatchRuntimeOptions['isRunningStore'];
+  groupDisabledNodeIds: PatchRuntimeOptions['groupDisabledNodeIds'];
+  executorStatusByClient: PatchRuntimeOptions['executorStatusByClient'];
+  showExecutorLogs: PatchRuntimeOptions['showExecutorLogs'];
+  logsClientId: PatchRuntimeOptions['logsClientId'];
+  loopController: PatchRuntimeOptions['loopController'];
+  managerState: PatchRuntimeOptions['managerState'] & ClientSelectionOptions['managerState'];
+  displayTransport: PatchRuntimeOptions['displayTransport'];
+  getSDK: PatchRuntimeOptions['getSDK'];
+  ensureDisplayLocalFilesRegisteredFromValue: PatchRuntimeOptions['ensureDisplayLocalFilesRegisteredFromValue'];
+  sensorData: ClientSelectionOptions['sensorData'];
+  getAreaPlugin: SleepSyncOptions['getAreaPlugin'] & ClientSelectionOptions['getAreaPlugin'];
+  getNodeMap: SleepSyncOptions['getNodeMap'] & ClientSelectionOptions['getNodeMap'];
+  sockets: SleepSyncOptions['sockets'];
 };
 
 export type RuntimeInitResult = {

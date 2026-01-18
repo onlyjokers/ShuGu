@@ -32,7 +32,10 @@ type GraphSyncOptions = {
 };
 
 export type GraphSyncController = {
-  schedule: (state: { nodes: NodeInstance[]; connections: EngineConnection[] }) => Promise<void> | null;
+  schedule: (state: {
+    nodes: NodeInstance[];
+    connections: EngineConnection[];
+  }) => Promise<void> | null;
 };
 
 export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
@@ -47,7 +50,10 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
     return true;
   };
 
-  const shouldRebuildCustomNode = (instance: NodeInstance, reteNode: ClassicPreset.Node): boolean => {
+  const shouldRebuildCustomNode = (
+    instance: NodeInstance,
+    reteNode: ClassicPreset.Node
+  ): boolean => {
     if (!String(instance.type ?? '').startsWith(CUSTOM_NODE_TYPE_PREFIX)) return false;
     const def = opts.nodeRegistry.get(String(instance.type));
     if (!def) return false;
@@ -142,10 +148,12 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
             // ignore
           }
           opts.nodeMap.delete(n.id);
-          reteNode = null;
+          reteNode = undefined;
         }
+
         if (!reteNode) {
-          const existing = opts.editor.getNode(n.id);
+          const existingBase = opts.editor.getNode(n.id);
+          const existing = existingBase as unknown as ClassicPreset.Node | undefined;
           if (existing) {
             reteNode = existing;
             opts.nodeMap.set(n.id, reteNode);
@@ -166,13 +174,17 @@ export function createGraphSync(opts: GraphSyncOptions): GraphSyncController {
           }
         }
 
+        if (!reteNode) continue;
         await ensureCmdAggregatorInputs(n, reteNode, state.connections);
         await opts.areaPlugin.translate(reteNode.id, { x: n.position.x, y: n.position.y });
       }
 
       for (const c of state.connections) {
         if (opts.connectionMap.has(c.id)) continue;
-        const existing = opts.editor.getConnection(c.id);
+        const existingBase = opts.editor.getConnection(c.id);
+        const existing = existingBase as unknown as
+          | ClassicPreset.Connection<ClassicPreset.Node, ClassicPreset.Node>
+          | undefined;
         if (existing) {
           opts.connectionMap.set(c.id, existing);
           continue;

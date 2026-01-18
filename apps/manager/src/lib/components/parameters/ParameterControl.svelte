@@ -27,8 +27,12 @@
       }[]
     | undefined;
 
+  // Typed stores for widgets
+  let numberStore: Writable<number> = writable(0);
+  let booleanStore: Writable<boolean> = writable(false);
+  let stringStore: Writable<string> = writable('');
+
   $: param = parameterRegistry.get(path) as Parameter<unknown> | undefined;
-  $: store = param ? (parameterWritable(param) as Writable<unknown>) : store;
   $: widget = param?.metadata?.widgetType;
   $: type = param?.type;
   $: min = param?.min;
@@ -41,6 +45,19 @@
     | undefined;
   $: step = param?.metadata?.step;
 
+  $: {
+    store = param ? (parameterWritable(param) as Writable<unknown>) : store;
+
+    // Keep typed stores aligned with current param type.
+    if (param?.type === 'number') {
+      numberStore = parameterWritable(param as Parameter<number>);
+    } else if (param?.type === 'boolean') {
+      booleanStore = parameterWritable(param as Parameter<boolean>);
+    } else {
+      stringStore = param ? parameterWritable(param as unknown as Parameter<string>) : stringStore;
+    }
+  }
+
   function handleTrigger() {
     param?.setValue(true, 'ui');
     // Immediately reset to default to avoid sticky button
@@ -52,7 +69,7 @@
   <div class="param-missing">Missing param: {path}</div>
 {:else if type === 'number' && (widget === 'slider' || widget === undefined)}
   <Slider
-    bind:value={$store}
+    bind:value={$numberStore}
     min={min ?? 0}
     max={max ?? 1}
     step={step ?? 0.01}
@@ -62,7 +79,7 @@
 {:else if type === 'number'}
   <Input
     type="number"
-    bind:value={$store}
+    bind:value={$numberStore}
     min={min ?? 0}
     max={max ?? 1}
     step={step ?? 0.01}
@@ -71,14 +88,14 @@
   />
 {:else if type === 'boolean'}
   <Toggle
-    bind:checked={$store}
+    bind:checked={$booleanStore}
     label={label ?? param.metadata?.label ?? param.path}
     description={description ?? param.metadata?.description}
     class="param-toggle"
   />
 {:else if type === 'enum'}
   <Select
-    bind:value={$store}
+    bind:value={$stringStore}
     options={enumOptions?.map((opt) => ({
       value: opt.value,
       label: opt.label ?? opt.value,
@@ -91,7 +108,11 @@
     {label ?? param.metadata?.label ?? param.path}
   </Button>
 {:else}
-  <Input bind:value={$store} label={label ?? param.metadata?.label ?? param.path} {disabled} />
+  <Input
+    bind:value={$stringStore}
+    label={label ?? param.metadata?.label ?? param.path}
+    {disabled}
+  />
 {/if}
 
 <style>

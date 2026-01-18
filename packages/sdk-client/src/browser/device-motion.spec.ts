@@ -17,8 +17,8 @@ describe('device motion guards', () => {
       DeviceMotionEvent: Motion,
       DeviceOrientationEvent: Orientation,
     } as unknown as Window & {
-      DeviceMotionEvent: typeof DeviceMotionEvent;
-      DeviceOrientationEvent: typeof DeviceOrientationEvent;
+      DeviceMotionEvent: typeof Motion;
+      DeviceOrientationEvent: typeof Orientation;
     };
     assert.equal(getDeviceMotionEventCtor(win), Motion);
     assert.equal(getDeviceOrientationEventCtor(win), Orientation);

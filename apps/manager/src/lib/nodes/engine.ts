@@ -18,90 +18,21 @@ import { exportGraphForPatch } from './patch-export';
 import { customNodeDefinitions } from './custom-nodes/store';
 import { compileGraphForPatch } from './custom-nodes/flatten';
 import { diffGraphState } from './graph-changes';
+import { capabilityForNodeType } from './engine/capabilities';
+import { hashString } from './engine/hash';
+import { shouldComputeWhileOffloaded } from './engine/offload';
+import { stripLegacyToneFields } from './engine/legacy-tone';
+import { detectLocalClientLoops } from './engine/local-loop-detection';
 
 export type LocalLoop = {
   id: string;
   nodeIds: string[];
   connectionIds: string[];
   requiredCapabilities: string[];
-  clientsInvolved: string[]; // list of client-node ids (usually one)
+  clientsInvolved: string[];
 };
 
 const TICK_INTERVAL = 33; // ~30 FPS
-
-function shouldComputeWhileOffloaded(type: string): boolean {
-  // UI/Debug: keep pure nodes running locally so values can be inspected even when a patch/loop is offloaded.
-  // This must stay conservative: do not include nodes with side-effects (commands, parameter writes, etc).
-  const t = String(type ?? '');
-  if (!t) return false;
-  if (t.startsWith('logic-')) return true;
-  return false;
-}
-
-function capabilityForNodeType(type: string | undefined): string | null {
-  if (!type) return null;
-  if (type === 'proc-client-sensors') return 'sensors';
-  if (type === 'proc-flashlight') return 'flashlight';
-  if (type === 'proc-screen-color') return 'screen';
-  if (type === 'proc-synth-update') return 'sound';
-  if (type === 'tone-osc') return 'sound';
-  if (type === 'audio-data') return 'sound';
-  if (type === 'tone-delay') return 'sound';
-  if (type === 'tone-resonator') return 'sound';
-  if (type === 'tone-pitch') return 'sound';
-  if (type === 'tone-reverb') return 'sound';
-  if (type === 'tone-granular') return 'sound';
-  if (type === 'tone-lfo') return 'sound';
-  if (type === 'play-media') return 'sound';
-  if (type === 'proc-scene-switch') return 'visual';
-  if (type === 'audio-out') return 'sound';
-  if (type === 'load-audio-from-assets') return 'sound';
-  if (type === 'load-audio-from-local') return 'sound';
-  if (type === 'load-image-from-assets') return 'visual';
-  if (type === 'load-image-from-local') return 'visual';
-  if (type === 'load-video-from-assets') return 'visual';
-  if (type === 'load-video-from-local') return 'visual';
-  if (type === 'image-out') return 'visual';
-  if (type === 'video-out') return 'visual';
-  if (type === 'effect-out') return 'visual';
-  if (type === 'scene-out') return 'visual';
-  return null;
-}
-
-function hashString(input: string): string {
-  let hash = 0;
-  for (let i = 0; i < input.length; i++) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-  return hash.toString(36);
-}
-
-const LEGACY_TONE_FIELDS_BY_TYPE = new Map<string, string[]>([
-  ['tone-delay', ['bus', 'order', 'enabled']],
-  ['tone-resonator', ['bus', 'order', 'enabled']],
-  ['tone-pitch', ['bus', 'order', 'enabled']],
-  ['tone-reverb', ['bus', 'order', 'enabled']],
-  ['tone-osc', ['bus', 'enabled']],
-  ['tone-granular', ['bus', 'enabled']],
-  ['tone-lfo', ['enabled']],
-  ['load-audio-from-assets', ['bus']],
-  ['load-audio-from-local', ['bus']],
-]);
-
-function stripLegacyToneFields(
-  type: string,
-  config: Record<string, unknown>,
-  inputValues: Record<string, unknown>
-): void {
-  const keys = LEGACY_TONE_FIELDS_BY_TYPE.get(String(type ?? ''));
-  if (!keys || keys.length === 0) return;
-  for (const key of keys) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    if (Object.prototype.hasOwnProperty.call(config, key)) delete config[key];
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    if (Object.prototype.hasOwnProperty.call(inputValues, key)) delete inputValues[key];
-  }
-}
 
 class NodeEngineClass {
   private runtime: NodeRuntime;
@@ -308,7 +239,9 @@ class NodeEngineClass {
       const nextOptions = nextOptionsByNodeId.get(String(node.id));
       if (!nextOptions) return node;
       const configRecord =
-        node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+        node.config && typeof node.config === 'object'
+          ? (node.config as Record<string, unknown>)
+          : null;
       const raw = Array.isArray(configRecord?.options) ? configRecord.options : [];
       const currentOptions = raw.map((value) => String(value)).filter((value) => value !== '');
       if (optionsEqual(currentOptions, nextOptions)) return node;
@@ -441,7 +374,8 @@ class NodeEngineClass {
       const direction = String(sourceConfig?.direction ?? 'output');
       if (direction === 'output') {
         const alreadyConnected = snapshot.connections.some(
-          (c) => c.sourceNodeId === connection.sourceNodeId && c.sourcePortId === connection.sourcePortId
+          (c) =>
+            c.sourceNodeId === connection.sourceNodeId && c.sourcePortId === connection.sourcePortId
         );
         if (alreadyConnected) {
           this.lastError.set('Group proxy output can only be connected once');
@@ -459,7 +393,9 @@ class NodeEngineClass {
 
     const resolveProxyPortType = (node: NodeInstance): PortType => {
       const configRecord =
-        node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+        node.config && typeof node.config === 'object'
+          ? (node.config as Record<string, unknown>)
+          : null;
       const raw = configRecord?.portType;
       const t = typeof raw === 'string' ? raw : raw ? String(raw) : '';
       if (
@@ -856,7 +792,9 @@ class NodeEngineClass {
       for (const node of nodes) {
         if (String(node.type) !== 'cmd-aggregator') continue;
         const configRecord =
-          node.config && typeof node.config === 'object' ? (node.config as Record<string, unknown>) : null;
+          node.config && typeof node.config === 'object'
+            ? (node.config as Record<string, unknown>)
+            : null;
         const raw = configRecord?.inCount;
         const configured = typeof raw === 'number' ? raw : Number(raw);
         const configuredCount = Number.isFinite(configured)
@@ -942,101 +880,7 @@ class NodeEngineClass {
   }
 
   private detectLocalClientLoops(): LocalLoop[] {
-    const { nodes, connections } = this.runtime.getGraphRef();
-    const nodeById = new Map(nodes.map((n) => [n.id, n]));
-
-    const adj = new Map<string, string[]>();
-    for (const n of nodes) adj.set(n.id, []);
-    for (const conn of connections) {
-      const outs = adj.get(conn.sourceNodeId) ?? [];
-      outs.push(conn.targetNodeId);
-      adj.set(conn.sourceNodeId, outs);
-    }
-
-    const isClient = (id: string) => nodeById.get(id)?.type === 'client-object';
-    const isClientSensors = (id: string) => nodeById.get(id)?.type === 'proc-client-sensors';
-
-    const indexById = new Map<string, number>();
-    const lowById = new Map<string, number>();
-    const stack: string[] = [];
-    const onStack = new Set<string>();
-    let index = 0;
-    const sccs: string[][] = [];
-
-    const strongconnect = (v: string) => {
-      indexById.set(v, index);
-      lowById.set(v, index);
-      index++;
-      stack.push(v);
-      onStack.add(v);
-
-      for (const w of adj.get(v) ?? []) {
-        if (!indexById.has(w)) {
-          strongconnect(w);
-          lowById.set(v, Math.min(lowById.get(v)!, lowById.get(w)!));
-        } else if (onStack.has(w)) {
-          lowById.set(v, Math.min(lowById.get(v)!, indexById.get(w)!));
-        }
-      }
-
-      if (lowById.get(v) === indexById.get(v)) {
-        const component: string[] = [];
-        while (stack.length > 0) {
-          const w = stack.pop()!;
-          onStack.delete(w);
-          component.push(w);
-          if (w === v) break;
-        }
-        sccs.push(component);
-      }
-    };
-
-    for (const n of nodes) {
-      if (!indexById.has(n.id)) strongconnect(n.id);
-    }
-
-    const loops: LocalLoop[] = [];
-    for (const component of sccs) {
-      if (component.length === 0) continue;
-      const nodeSet = new Set(component);
-
-      // Single node SCC must have a self-loop to be a cycle.
-      if (component.length === 1) {
-        const only = component[0];
-        const hasSelf = connections.some((c) => c.sourceNodeId === only && c.targetNodeId === only);
-        if (!hasSelf) continue;
-      }
-
-      const clientNodes = component.filter(isClient);
-      if (clientNodes.length !== 1) continue;
-      const hasSensors = component.some(isClientSensors);
-      if (!hasSensors) continue;
-
-      const connIds = connections
-        .filter((c) => nodeSet.has(c.sourceNodeId) && nodeSet.has(c.targetNodeId))
-        .map((c) => c.id);
-
-      const caps = new Set<string>();
-      for (const nid of component) {
-        const cap = capabilityForNodeType(nodeById.get(nid)?.type);
-        if (cap) caps.add(cap);
-      }
-
-      const key = component.slice().sort().join(',');
-      const loopId = `loop:${clientNodes[0]}:${hashString(key)}`;
-
-      loops.push({
-        id: loopId,
-        nodeIds: component.slice(),
-        connectionIds: connIds,
-        requiredCapabilities: Array.from(caps),
-        clientsInvolved: clientNodes,
-      });
-    }
-
-    // Stable ordering for UI.
-    loops.sort((a, b) => a.id.localeCompare(b.id));
-    return loops;
+    return detectLocalClientLoops(this.runtime.getGraphRef());
   }
 
   /**
@@ -1152,11 +996,20 @@ class NodeEngineClass {
     };
     assetRefs: string[];
   } {
-    const snapshot = compileGraphForPatch(this.runtime.exportGraph(), get(customNodeDefinitions) ?? []);
+    const snapshot = compileGraphForPatch(
+      this.runtime.exportGraph(),
+      get(customNodeDefinitions) ?? []
+    );
     const ids = Array.from(new Set((rootNodeIds ?? []).map(String).filter(Boolean))).sort();
     if (ids.length === 0) throw new Error('No patch root ids provided.');
 
-    const patchRootTypes = new Set(['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out']);
+    const patchRootTypes = new Set([
+      'audio-out',
+      'image-out',
+      'video-out',
+      'effect-out',
+      'scene-out',
+    ]);
     const nodeById = new Map((snapshot.nodes ?? []).map((n) => [String(n.id), n]));
     const roots = ids.map((id) => {
       const node = nodeById.get(String(id)) ?? null;
@@ -1292,9 +1145,17 @@ class NodeEngineClass {
     assetRefs: string[];
   } {
     const snapshot = this.runtime.exportGraph();
-    const patchRootTypes = ['audio-out', 'image-out', 'video-out', 'effect-out', 'scene-out'] as const;
+    const patchRootTypes = [
+      'audio-out',
+      'image-out',
+      'video-out',
+      'effect-out',
+      'scene-out',
+    ] as const;
     const patchRootTypeSet = new Set(patchRootTypes);
-    const roots = (snapshot.nodes ?? []).filter((n) => patchRootTypeSet.has(String(n.type) as (typeof patchRootTypes)[number]));
+    const roots = (snapshot.nodes ?? []).filter((n) =>
+      patchRootTypeSet.has(String(n.type) as (typeof patchRootTypes)[number])
+    );
     if (roots.length === 0) {
       throw new Error(`No patch root node found (${patchRootTypes.join(', ')}). Add one first.`);
     }
@@ -1324,3 +1185,5 @@ class NodeEngineClass {
 
 // Singleton instance
 export const nodeEngine = new NodeEngineClass();
+
+export type NodeEngine = typeof nodeEngine;

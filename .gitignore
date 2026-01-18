@@ -36,6 +36,9 @@ vite-cache*
 *.swo
 .DS_Store
 
+# Local agent artifacts
+.sisyphus/
+
 # Logs
 *.log
 npm-debug.log*

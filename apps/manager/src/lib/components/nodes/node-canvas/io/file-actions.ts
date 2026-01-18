@@ -100,7 +100,7 @@ const parseNodeGraphFile = (payload: unknown): ParsedNodeGraphFile | null => {
     Array.isArray(graphValue.connections)
   ) {
     return {
-      graph: graphValue as GraphState,
+      graph: graphValue as unknown as GraphState,
       groups: parseNodeGroups(wrapped.groups),
       collapsedNodeIds: parseCollapsedNodeIds(wrapped.ui),
     };
@@ -108,7 +108,7 @@ const parseNodeGraphFile = (payload: unknown): ParsedNodeGraphFile | null => {
 
   if (Array.isArray(wrapped.nodes) && Array.isArray(wrapped.connections)) {
     return {
-      graph: wrapped as GraphState,
+      graph: wrapped as unknown as GraphState,
       groups: parseNodeGroups(wrapped.groups),
       collapsedNodeIds: parseCollapsedNodeIds(wrapped.ui),
     };
@@ -206,7 +206,7 @@ function remapImportedGroups(sourceGroups: NodeGroup[], nodeIdMap: Map<string, s
 function computeTemplateOffset(nodes: GraphState['nodes'], anchor: { x: number; y: number }) {
   const positions = (nodes ?? [])
     .map((node) => {
-      const record = isRecord(node) ? node : {};
+      const record = (isRecord(node) ? node : ({} as unknown)) as Record<string, unknown>;
       const position = isRecord(record.position) ? record.position : {};
       return {
         x: coerceGraphNumber(position.x, 0),
@@ -344,7 +344,7 @@ export function createFileActions(opts: FileActionsOptions) {
     let skippedConnections = 0;
 
     for (const c of sourceConnections) {
-      const record = isRecord(c) ? c : {};
+      const record = (isRecord(c) ? c : ({} as unknown)) as Record<string, unknown>;
       const sourceNodeId = nodeIdMap.get(String(record.sourceNodeId ?? ''));
       const targetNodeId = nodeIdMap.get(String(record.targetNodeId ?? ''));
       if (!sourceNodeId || !targetNodeId) {
@@ -355,9 +355,9 @@ export function createFileActions(opts: FileActionsOptions) {
       const conn: Connection = {
         id: generateId('conn'),
         sourceNodeId,
-        sourcePortId: String(record.sourcePortId ?? ''),
+        sourcePortId: String((record as Record<string, unknown>).sourcePortId ?? ''),
         targetNodeId,
-        targetPortId: String(record.targetPortId ?? ''),
+        targetPortId: String((record as Record<string, unknown>).targetPortId ?? ''),
       };
 
       const ok = opts.nodeEngine.addConnection(conn);

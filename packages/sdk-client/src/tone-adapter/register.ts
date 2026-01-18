@@ -30,7 +30,11 @@ import {
   setLatestDeps,
   toneModule,
 } from './state.js';
-import { maybeStopTransport, scheduleGraphWiring, updateAudioGraphSnapshot } from './engine-host.js';
+import {
+  maybeStopTransport,
+  scheduleGraphWiring,
+  updateAudioGraphSnapshot,
+} from './engine-host.js';
 import {
   analyzeAudioDataInstance,
   createAudioDataInstance,
@@ -221,12 +225,12 @@ export function registerToneClientDefinitions(
       }
 
       if (instance.lastFrequency === null || Math.abs(instance.lastFrequency - frequency) > 0.001) {
-        instance.osc.frequency.rampTo(frequency, DEFAULT_RAMP_SECONDS);
+        instance.osc.frequency?.rampTo?.(frequency, DEFAULT_RAMP_SECONDS);
         instance.lastFrequency = frequency;
       }
 
       if (instance.lastAmplitude === null || Math.abs(instance.lastAmplitude - amplitude) > 0.001) {
-        instance.gain.gain.rampTo(amplitude, DEFAULT_RAMP_SECONDS);
+        instance.gain.gain?.rampTo?.(amplitude, DEFAULT_RAMP_SECONDS);
         instance.lastAmplitude = amplitude;
       }
 
@@ -460,7 +464,9 @@ export function registerToneClientDefinitions(
       }
 
       if (!toneModule) {
-        void ensureTone().catch((error) => console.warn('[tone-adapter] Tone.js load failed', error));
+        void ensureTone().catch((error) =>
+          console.warn('[tone-adapter] Tone.js load failed', error)
+        );
         return empty;
       }
 
@@ -534,13 +540,25 @@ export function registerToneClientDefinitions(
     category: 'Audio',
     inputs: [
       { id: 'in', label: 'In', type: 'audio', kind: 'sink' },
-      { id: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: MIN_TONE_DELAY_TIME_SECONDS },
+      {
+        id: 'time',
+        label: 'Time (s)',
+        type: 'number',
+        defaultValue: 0.25,
+        min: MIN_TONE_DELAY_TIME_SECONDS,
+      },
       { id: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
       { id: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'time', label: 'Time (s)', type: 'number', defaultValue: 0.25, min: MIN_TONE_DELAY_TIME_SECONDS },
+      {
+        key: 'time',
+        label: 'Time (s)',
+        type: 'number',
+        defaultValue: 0.25,
+        min: MIN_TONE_DELAY_TIME_SECONDS,
+      },
       { key: 'feedback', label: 'Feedback', type: 'number', defaultValue: 0.35, min: 0, max: 1 },
       { key: 'wet', label: 'Wet', type: 'number', defaultValue: 0.3, min: 0, max: 1 },
     ],
@@ -634,7 +652,13 @@ export function registerToneClientDefinitions(
     ],
     outputs: [{ id: 'value', label: 'Out', type: 'audio', kind: 'sink' }],
     configSchema: [
-      { key: 'url', label: 'Audio Asset', type: 'asset-picker', assetKind: 'audio', defaultValue: '' },
+      {
+        key: 'url',
+        label: 'Audio Asset',
+        type: 'asset-picker',
+        assetKind: 'audio',
+        defaultValue: '',
+      },
       { key: 'loop', label: 'Loop', type: 'boolean', defaultValue: true },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
@@ -711,19 +735,19 @@ export function registerToneClientDefinitions(
       if (instance.lastParams.overlap !== overlap) instance.player.overlap = overlap;
       if (instance.lastParams.loop !== loop) instance.player.loop = loop;
       if (instance.lastParams.volume !== volume)
-        instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
+        instance.gain.gain?.rampTo?.(volume, DEFAULT_RAMP_SECONDS);
 
       if (instance.playing !== playing) {
         instance.playing = playing;
         if (playing) {
           try {
-            instance.player.start();
+            instance.player.start?.();
           } catch {
             // ignore
           }
         } else {
           try {
-            instance.player.stop();
+            instance.player.stop?.();
           } catch {
             // ignore
           }
@@ -838,7 +862,7 @@ export function registerToneClientDefinitions(
           instance.loadingUrl = null;
           try {
             if (wasStarted) instance.manualStopPending = true;
-            instance.player.stop();
+            instance.player.stop?.();
           } catch {
             instance.manualStopPending = false;
           }
@@ -851,7 +875,7 @@ export function registerToneClientDefinitions(
         if (instance.lastParams.detune !== detune) instance.player.detune = detune;
         if (instance.lastParams.loop !== loop) instance.player.loop = loop;
         if (instance.lastParams.volume !== volume)
-          instance.gain.gain.rampTo(volume, DEFAULT_RAMP_SECONDS);
+          instance.gain.gain?.rampTo?.(volume, DEFAULT_RAMP_SECONDS);
 
         const clipStartRaw = Math.max(0, toNumber(inputs.startSec, 0));
         const clipEndRaw = toNumber(inputs.endSec, -1);
@@ -881,7 +905,9 @@ export function registerToneClientDefinitions(
           const rawPos = instance.startOffsetSec + direction * elapsed * playbackRate;
           let position = rawPos;
           const duration =
-            opts.resolvedClipEnd !== null ? Math.max(0, opts.resolvedClipEnd - opts.clipStart) : null;
+            opts.resolvedClipEnd !== null
+              ? Math.max(0, opts.resolvedClipEnd - opts.clipStart)
+              : null;
           if (opts.loop && duration !== null && duration > 0 && opts.resolvedClipEnd !== null) {
             if (opts.reverse) {
               const rel = opts.resolvedClipEnd - rawPos;
@@ -1010,7 +1036,12 @@ export function registerToneClientDefinitions(
           const direction = activeReverse ? -1 : 1;
           const rawPos = instance.startOffsetSec + direction * elapsed * playbackRate;
           let pausedOffset = rawPos;
-          if (loop && resolvedClipDuration && resolvedClipDuration > 0 && resolvedClipEnd !== null) {
+          if (
+            loop &&
+            resolvedClipDuration &&
+            resolvedClipDuration > 0 &&
+            resolvedClipEnd !== null
+          ) {
             if (activeReverse) {
               const rel = resolvedClipEnd - rawPos;
               const wrapped =
@@ -1031,7 +1062,7 @@ export function registerToneClientDefinitions(
           instance.pausedOffsetSec = pausedOffset;
           try {
             instance.manualStopPending = true;
-            instance.player.stop();
+            instance.player.stop?.();
           } catch {
             instance.manualStopPending = false;
           }
@@ -1066,7 +1097,7 @@ export function registerToneClientDefinitions(
             try {
               instance.manualStopPending = false;
               if (instance.started) instance.manualStopPending = true;
-              instance.player.stop();
+              instance.player.stop?.();
             } catch {
               instance.manualStopPending = false;
             }
@@ -1083,14 +1114,14 @@ export function registerToneClientDefinitions(
           try {
             if (instance.started) {
               instance.manualStopPending = true;
-              instance.player.stop();
+              instance.player.stop?.();
             }
           } catch {
             instance.manualStopPending = false;
           }
 
           try {
-            instance.player.start(undefined, offset);
+            instance.player.start?.(undefined, offset);
             instance.started = true;
             instance.startedAt = toneModule!.now();
             instance.startOffsetSec = nextPos;
@@ -1185,7 +1216,13 @@ export function registerToneClientDefinitions(
 
         // Fallback: if Tone reports the player stopped but we missed the `onstop` callback,
         // treat it as a finish when Play is still enabled.
-        if (playing && instance.started && !loop && !instance.ended && !instance.manualStopPending) {
+        if (
+          playing &&
+          instance.started &&
+          !loop &&
+          !instance.ended &&
+          !instance.manualStopPending
+        ) {
           const playerStopped = (() => {
             try {
               return String(instance.player?.state ?? '') === 'stopped';
@@ -1195,8 +1232,9 @@ export function registerToneClientDefinitions(
           })();
 
           if (playerStopped) {
-            const fallbackEndPos =
-              reverse ? clipStart : resolvedClipEnd ?? bufferDuration ?? instance.pausedOffsetSec;
+            const fallbackEndPos = reverse
+              ? clipStart
+              : (resolvedClipEnd ?? bufferDuration ?? instance.pausedOffsetSec);
             if (typeof fallbackEndPos === 'number' && Number.isFinite(fallbackEndPos)) {
               instance.pausedOffsetSec = Math.max(0, fallbackEndPos);
             }
@@ -1208,7 +1246,13 @@ export function registerToneClientDefinitions(
           }
         }
 
-        if (playing && instance.started && !loop && resolvedClipEnd !== null && !instance.manualStopPending) {
+        if (
+          playing &&
+          instance.started &&
+          !loop &&
+          resolvedClipEnd !== null &&
+          !instance.manualStopPending
+        ) {
           const nowPos = playbackPositionSec({
             clipStart,
             resolvedClipEnd,
@@ -1224,7 +1268,7 @@ export function registerToneClientDefinitions(
               instance.pausedOffsetSec = reverse ? clipStart : resolvedClipEnd;
               instance.ended = true;
               try {
-                instance.player.stop();
+                instance.player.stop?.();
               } catch {
                 // ignore
               }
@@ -1275,7 +1319,15 @@ export function registerToneClientDefinitions(
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        id: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
     ],
     configSchema: [
       {
@@ -1287,7 +1339,15 @@ export function registerToneClientDefinitions(
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        key: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
       {
         key: 'timeline',
         label: 'Timeline',
@@ -1327,7 +1387,15 @@ export function registerToneClientDefinitions(
       { id: 'reverse', label: 'Reverse', type: 'boolean', defaultValue: false },
       { id: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { id: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { id: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        id: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
     ],
     configSchema: [
       {
@@ -1339,7 +1407,15 @@ export function registerToneClientDefinitions(
       },
       { key: 'playbackRate', label: 'Rate', type: 'number', defaultValue: 1, min: 0 },
       { key: 'detune', label: 'Detune', type: 'number', defaultValue: 0 },
-      { key: 'volume', label: 'Volume', type: 'number', defaultValue: 0, min: -1, max: 100, step: 0.01 },
+      {
+        key: 'volume',
+        label: 'Volume',
+        type: 'number',
+        defaultValue: 0,
+        min: -1,
+        max: 100,
+        step: 0.01,
+      },
       {
         key: 'timeline',
         label: 'Timeline',

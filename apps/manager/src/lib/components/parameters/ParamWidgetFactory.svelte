@@ -13,12 +13,34 @@
     contextmenu: { parameter: Parameter<unknown>; event: MouseEvent };
   }>();
 
-  function handleContextMenu(e: CustomEvent<{ parameter: Parameter<unknown>; event: MouseEvent }>) {
-    dispatch('contextmenu', e.detail);
-  }
+  const dispatchContextMenu = (event: MouseEvent) => {
+    dispatch('contextmenu', { parameter, event });
+  };
+
+  const forwardContextMenu = (e: CustomEvent<{ parameter: unknown; event: MouseEvent }>) => {
+    dispatchContextMenu(e.detail.event);
+  };
 
   // Determine widget type
   $: widgetType = parameter.metadata?.widgetType ?? inferWidgetType(parameter);
+
+  let numberParameter: Parameter<number> | null = null;
+  let booleanParameter: Parameter<boolean> | null = null;
+  let stringParameter: Parameter<string> | null = null;
+
+  $: {
+    numberParameter = null;
+    booleanParameter = null;
+    stringParameter = null;
+
+    if (widgetType === 'slider' || widgetType === 'knob') {
+      numberParameter = parameter as unknown as Parameter<number>;
+    } else if (widgetType === 'toggle') {
+      booleanParameter = parameter as unknown as Parameter<boolean>;
+    } else if (widgetType === 'color' || widgetType === 'select') {
+      stringParameter = parameter as unknown as Parameter<string>;
+    }
+  }
 
   function inferWidgetType(param: Parameter<unknown>): string {
     switch (param.type) {
@@ -42,14 +64,14 @@
   }
 </script>
 
-{#if widgetType === 'slider' || widgetType === 'knob'}
-  <ParamSlider {parameter} {label} on:contextmenu={handleContextMenu} />
-{:else if widgetType === 'toggle'}
-  <ParamToggle {parameter} {label} on:contextmenu={handleContextMenu} />
-{:else if widgetType === 'color'}
-  <ParamColor {parameter} {label} on:contextmenu={handleContextMenu} />
-{:else if widgetType === 'select'}
-  <ParamSelect {parameter} {label} on:contextmenu={handleContextMenu} />
+{#if (widgetType === 'slider' || widgetType === 'knob') && numberParameter}
+  <ParamSlider parameter={numberParameter} {label} on:contextmenu={forwardContextMenu} />
+{:else if widgetType === 'toggle' && booleanParameter}
+  <ParamToggle parameter={booleanParameter} {label} on:contextmenu={forwardContextMenu} />
+{:else if widgetType === 'color' && stringParameter}
+  <ParamColor parameter={stringParameter} {label} on:contextmenu={forwardContextMenu} />
+{:else if widgetType === 'select' && stringParameter}
+  <ParamSelect parameter={stringParameter} {label} on:contextmenu={forwardContextMenu} />
 {:else}
   <!-- Fallback: simple text display -->
   <div class="param-fallback">

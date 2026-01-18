@@ -9,6 +9,14 @@ import { buildGroupPortIndex, isGroupPortNodeType } from '../utils/group-port-ut
 type Bounds = { left: number; top: number; right: number; bottom: number };
 type AnyRecord = Record<string, unknown>;
 
+type AnyGroupFrame = {
+  group?: { id?: unknown };
+  left?: unknown;
+  top?: unknown;
+  width?: unknown;
+  height?: unknown;
+};
+
 export interface FocusController {
   focusNodeIds(nodeIdsRaw: string[], opts?: { force?: boolean }): void;
   focusGroupById(groupId: string): void;
@@ -24,7 +32,7 @@ export interface CreateFocusControllerOptions {
   requestFramesUpdate: () => void;
   requestMinimapUpdate: () => void;
   getNodeGroups: () => AnyRecord[];
-  getGroupFrames: () => AnyRecord[];
+  getGroupFrames: () => AnyGroupFrame[];
 }
 
 export function createFocusController(opts: CreateFocusControllerOptions): FocusController {
@@ -39,7 +47,8 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
     getGroupFrames,
   } = opts;
 
-  const clampNumber = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+  const clampNumber = (value: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, value));
 
   const mergeBounds = (base: Bounds | null, next: Bounds | null): Bounds | null => {
     if (!next) return base;
@@ -109,8 +118,10 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
     if (!container) return;
 
     const state = getGraphState();
-    const nodeById = new Map((state.nodes ?? []).map((n) => [String((n as AnyRecord).id), n]));
-    const typeByNodeId = new Map((state.nodes ?? []).map((n) => [String((n as AnyRecord).id), String((n as AnyRecord).type ?? '')]));
+    const nodeById = new Map((state.nodes ?? []).map((n) => [String(n.id), n]));
+    const typeByNodeId = new Map(
+      (state.nodes ?? []).map((n) => [String(n.id), String(n.type ?? '')])
+    );
 
     const ids = (nodeIdsRaw ?? []).map((id) => String(id)).filter(Boolean);
     const nodeIds = ids.filter((id) => {
@@ -121,10 +132,10 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
 
     const getNodeBoundsApprox = (nodeId: string): Bounds | null => {
       const node = nodeById.get(String(nodeId));
-      const pos = (node as AnyRecord)?.position;
-      const x = Number(pos?.x ?? 0);
-      const y = Number(pos?.y ?? 0);
+      const x = Number(node?.position?.x ?? 0);
+      const y = Number(node?.position?.y ?? 0);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
       const w = 230;
       const h = 100;
       return { left: x, top: y, right: x + w, bottom: y + h };
@@ -186,7 +197,12 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
       const top = Number(frame?.top);
       const width = Number(frame?.width);
       const height = Number(frame?.height);
-      if (Number.isFinite(left) && Number.isFinite(top) && Number.isFinite(width) && Number.isFinite(height)) {
+      if (
+        Number.isFinite(left) &&
+        Number.isFinite(top) &&
+        Number.isFinite(width) &&
+        Number.isFinite(height)
+      ) {
         bounds = { left, top, right: left + width, bottom: top + height };
       }
     }
@@ -194,12 +210,12 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
     if (groupIds.size > 0) {
       const state = exportGraph();
       const index = buildGroupPortIndex(state);
-      const nodeById = new Map((state.nodes ?? []).map((n) => [String((n as AnyRecord).id), n]));
+      const nodeById = new Map((state.nodes ?? []).map((n) => [String(n.id), n]));
 
       const getPortBoundsApprox = (nodeId: string): Bounds | null => {
         const node = nodeById.get(String(nodeId));
-        const x = Number((node as AnyRecord)?.position?.x ?? 0);
-        const y = Number((node as AnyRecord)?.position?.y ?? 0);
+        const x = Number(node?.position?.x ?? 0);
+        const y = Number(node?.position?.y ?? 0);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
         const w = 80;
         const h = 44;
@@ -209,14 +225,18 @@ export function createFocusController(opts: CreateFocusControllerOptions): Focus
       for (const gid of groupIds) {
         const portId = index.get(String(gid))?.gateId;
         if (!portId) continue;
-        bounds = mergeBounds(bounds, adapter.getNodeBounds(String(portId)) ?? getPortBoundsApprox(portId));
+        bounds = mergeBounds(
+          bounds,
+          adapter.getNodeBounds(String(portId)) ?? getPortBoundsApprox(portId)
+        );
       }
     }
 
     const nodeIdsSet = new Set<string>();
     for (const gid of groupIds) {
       const g = byId.get(gid);
-      for (const nid of g?.nodeIds ?? []) {
+      const nodeIds = Array.isArray(g?.nodeIds) ? g.nodeIds : [];
+      for (const nid of nodeIds) {
         const id = String(nid);
         if (id) nodeIdsSet.add(id);
       }

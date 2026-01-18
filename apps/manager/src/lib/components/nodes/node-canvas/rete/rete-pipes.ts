@@ -69,7 +69,9 @@ export function bindRetePipes(opts: RetePipeOptions) {
         connectionMap.set(engineConn.id, c);
         const targetNode = nodeMap.get(engineConn.targetNodeId);
         const targetRecord = (targetNode ?? {}) as AnyRecord;
-        const input = (targetRecord.inputs as Record<string, AnyRecord> | undefined)?.[engineConn.targetPortId];
+        const input = (targetRecord.inputs as Record<string, AnyRecord> | undefined)?.[
+          engineConn.targetPortId
+        ];
         const control = input?.control as ControlLike | undefined;
         if (control && Boolean(control.readonly) !== true) {
           control.readonly = true;
@@ -99,7 +101,9 @@ export function bindRetePipes(opts: RetePipeOptions) {
       const control = input?.control as ControlLike | undefined;
       if (control) {
         const stillConnected = Array.from(connectionMap.values()).some(
-          (conn) => String((conn as AnyRecord).target) === targetId && String((conn as AnyRecord).targetInput) === portId
+          (conn) =>
+            String((conn as AnyRecord).target) === targetId &&
+            String((conn as AnyRecord).targetInput) === portId
         );
         if (Boolean(control.readonly) !== stillConnected) {
           control.readonly = stillConnected;
@@ -118,19 +122,23 @@ export function bindRetePipes(opts: RetePipeOptions) {
   });
 
   if (!areaPlugin) return;
-  areaPlugin.addPipe(async (ctx: AnyRecord) => {
+  areaPlugin.addPipe(async (ctx) => {
+    if (!ctx || typeof ctx !== 'object') return ctx;
+    const ctxRecord = ctx as AnyRecord;
     // During graph sync we translate nodes programmatically (engine -> view). Rete also emits an initial
     // `nodetranslated` from NodeView construction (0,0), which must NOT be treated as a user move,
     // otherwise it overwrites engine positions and makes import/paste layouts "fly" to the top-left.
     const syncing = isSyncing();
-    if (ctx?.type === 'nodepicked') {
-      setSelectedNode(String(ctx.data?.id ?? ''));
+    if (ctxRecord.type === 'nodepicked') {
+      const data = (ctxRecord.data as AnyRecord | undefined) ?? {};
+      setSelectedNode(String(data.id ?? ''));
     }
-    if (ctx?.type === 'nodetranslate') {
+    if (ctxRecord.type === 'nodetranslate') {
+      const data = (ctxRecord.data as AnyRecord | undefined) ?? {};
       if (syncing) return ctx;
       if (isProgrammaticTranslate() || isMultiDragTranslate()) return ctx;
 
-      const id = String(ctx.data?.id ?? '');
+      const id = String(data.id ?? '');
       const selectedIds = get(groupSelectionNodeIds);
       if (id && selectedIds.size > 1 && selectedIds.has(id)) {
         multiDragLeaderId = id;
@@ -142,9 +150,10 @@ export function bindRetePipes(opts: RetePipeOptions) {
         multiDragLeaderLastPos = null;
       }
     }
-    if (ctx?.type === 'nodedragged') {
+    if (ctxRecord.type === 'nodedragged') {
+      const data = (ctxRecord.data as AnyRecord | undefined) ?? {};
       if (syncing) return ctx;
-      const id = String(ctx.data?.id ?? '');
+      const id = String(data.id ?? '');
       const selectedIds = get(groupSelectionNodeIds);
       const movedNodeIds =
         multiDragLeaderId && id === multiDragLeaderId && selectedIds.size > 1 && selectedIds.has(id)
@@ -167,18 +176,28 @@ export function bindRetePipes(opts: RetePipeOptions) {
         }
       }
     }
-    if (ctx?.type === 'translated' || ctx?.type === 'zoomed' || ctx?.type === 'nodetranslated') {
+    if (
+      ctxRecord.type === 'translated' ||
+      ctxRecord.type === 'zoomed' ||
+      ctxRecord.type === 'nodetranslated'
+    ) {
       requestMinimapUpdate();
       requestFramesUpdate();
     }
-    if (ctx?.type === 'pointerdown') {
-      const target = ctx.data?.event?.target as HTMLElement | undefined;
+    if (ctxRecord.type === 'pointerdown') {
+      const data = (ctxRecord.data as AnyRecord | undefined) ?? {};
+      const event = data.event as { target?: unknown } | undefined;
+      const target = (event?.target as HTMLElement | null) ?? null;
       const clickedNode = target?.closest?.('.node');
       if (!clickedNode) setSelectedNode('');
     }
-    if (ctx?.type === 'nodetranslated') {
+    if (ctxRecord.type === 'nodetranslated') {
+      const data = (ctxRecord.data as AnyRecord | undefined) ?? {};
       if (syncing) return ctx;
-      const { id, position, previous } = ctx.data ?? {};
+      const id = data.id;
+      const position = data.position as { x?: unknown; y?: unknown } | undefined;
+      const previous = data.previous as { x?: unknown; y?: unknown } | undefined;
+
       if (id && position) {
         // Ignore no-op translations (including NodeView's initial translate(0,0) on construction).
         if (
@@ -200,6 +219,8 @@ export function bindRetePipes(opts: RetePipeOptions) {
           selectedIds.size > 1 &&
           !isProgrammaticTranslate()
         ) {
+          if (typeof position.x !== 'number' || typeof position.y !== 'number') return ctx;
+
           if (!multiDragLeaderLastPos) {
             multiDragLeaderLastPos = { x: position.x, y: position.y };
           } else {
@@ -227,6 +248,7 @@ export function bindRetePipes(opts: RetePipeOptions) {
           }
         }
 
+        if (typeof position.x !== 'number' || typeof position.y !== 'number') return ctx;
         nodeEngine.updateNodePosition(nodeId, { x: position.x, y: position.y });
       }
     }

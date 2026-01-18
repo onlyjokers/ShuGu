@@ -173,7 +173,7 @@ function applyToneLfoWiring(): void {
 
   for (const inst of lfoInstances.values()) {
     try {
-      inst.lfo.disconnect();
+      inst.lfo.disconnect?.();
     } catch {
       // ignore
     }
@@ -188,7 +188,7 @@ function applyToneLfoWiring(): void {
     if (!destination) continue;
 
     try {
-      inst.lfo.connect(destination);
+      inst.lfo.connect(destination as unknown as AudioParam);
       nextActiveTargets.add(toneLfoTargetKey(conn.targetNodeId, conn.targetPortId));
     } catch (error) {
       console.warn('[tone-adapter] lfo connect failed', conn, error);
@@ -202,35 +202,35 @@ function applyToneLfoWiring(): void {
 function disconnectAllAudioOutputs(): void {
   for (const inst of oscInstances.values()) {
     try {
-      inst.gain.disconnect();
+      inst.gain.disconnect?.();
     } catch {
       // ignore
     }
   }
   for (const inst of audioDataInstances.values()) {
     try {
-      inst.output.disconnect();
+      inst.output.disconnect?.();
     } catch {
       // ignore
     }
   }
   for (const inst of effectInstances.values()) {
     try {
-      inst.wrapper.output.disconnect();
+      inst.wrapper.output.disconnect?.();
     } catch {
       // ignore
     }
   }
   for (const inst of granularInstances.values()) {
     try {
-      inst.gain.disconnect();
+      inst.gain.disconnect?.();
     } catch {
       // ignore
     }
   }
   for (const inst of playerInstances.values()) {
     try {
-      inst.gain.disconnect();
+      inst.gain.disconnect?.();
     } catch {
       // ignore
     }
@@ -256,7 +256,7 @@ function applyGraphWiring(): boolean {
     if (target?.type === 'audio-out') {
       ensureMasterGain();
       try {
-        output.connect(masterGain ?? toneModule.Destination);
+        output.connect(masterGain ?? (toneModule.Destination as unknown as AudioNode));
       } catch (error) {
         missing = true;
         console.warn('[tone-adapter] audio connect to audio-out failed', error);

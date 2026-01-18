@@ -1,10 +1,34 @@
 // Purpose: Custom Node conversion actions (uncouple, nodalize, denodalize).
 import { get, type Readable } from 'svelte/store';
-import type { Connection, GraphState, NodeInstance } from '$lib/nodes/types';
+import type { Connection, GraphState, NodeInstance, PortType } from '$lib/nodes/types';
 import type { CustomNodeDefinition, CustomNodePort } from '$lib/nodes/custom-nodes/types';
 import type { CustomNodeInstanceState } from '$lib/nodes/custom-nodes/instance';
 import type { NodeRegistry } from '@shugu/node-core';
 import { asRecord, getNumber, getString } from '../../../../utils/value-guards';
+
+const validPortTypes = new Set<PortType>([
+  'number',
+  'boolean',
+  'string',
+  'asset',
+  'color',
+  'audio',
+  'image',
+  'video',
+  'scene',
+  'effect',
+  'client',
+  'command',
+  'fuzzy',
+  'array',
+  'any',
+]);
+
+const coercePortType = (value: unknown): PortType => {
+  const t =
+    typeof value === 'string' ? (value as PortType) : value ? (String(value) as PortType) : 'any';
+  return validPortTypes.has(t) ? t : 'any';
+};
 import type { GroupFrame } from '../controllers/group-controller';
 import type { NodeGroup } from '../groups/types';
 import { cloneGraphState } from './custom-node-graph';
@@ -422,8 +446,7 @@ export const createCustomNodeActions = (opts: CustomNodeActionsOptions): CustomN
       const portKey = `p:${id}`;
       portKeyByProxyId.set(id, portKey);
 
-      const portTypeRaw = typeof node.config?.portType === 'string' ? node.config.portType : 'any';
-      const type = portTypeRaw ? portTypeRaw : 'any';
+      const type = coercePortType(node.config?.portType);
       const pinned = Boolean(node.config?.pinned);
 
       const pos = positionFor(id);

@@ -8,12 +8,7 @@ import type { AsciiEffectRuntime } from './ascii.js';
 import { applyAsciiEffect } from './ascii.js';
 import type { ConvolutionEffectRuntime } from './convolution.js';
 import { applyConvolutionEffect } from './convolution.js';
-import {
-  asVisualEffect,
-  getAsciiCellSize,
-  getConvolutionScale,
-  getEffectType,
-} from './effect-guards.js';
+import { getAsciiCellSize, getConvolutionScale, getEffectType } from './effect-guards.js';
 
 export type VisualEffectPipeline = AsciiEffectRuntime &
   ConvolutionEffectRuntime & {
@@ -31,9 +26,20 @@ export type VisualEffectRenderParams = {
   container: HTMLElement | null;
   outputCanvas: HTMLCanvasElement | null;
   outputCtx: CanvasRenderingContext2D | null;
-  drawBaseFrame: (ctx: CanvasRenderingContext2D, width: number, height: number, dpr: number) => void;
+  drawBaseFrame: (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    dpr: number
+  ) => void;
   melSceneEnabled?: boolean;
-  asciiOverlay?: (ctx: CanvasRenderingContext2D, width: number, height: number, cols: number, rows: number) => void;
+  asciiOverlay?: (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    cols: number,
+    rows: number
+  ) => void;
   devicePixelRatio?: number;
 };
 
@@ -192,31 +198,13 @@ export function renderVisualEffects(
   for (const effect of Array.isArray(effects) ? effects : []) {
     if (!effect || typeof effect !== 'object') continue;
     const type = getEffectType(effect);
-    const visualEffect = asVisualEffect(effect);
-    if (!visualEffect) continue;
 
     const applied = (() => {
       if (type === 'convolution') {
-        return applyConvolutionEffect(
-          pipeline,
-          srcCanvas,
-          dstCtx,
-          width,
-          height,
-          dpr,
-          visualEffect
-        );
+        return applyConvolutionEffect(pipeline, srcCanvas, dstCtx, width, height, dpr, effect);
       }
       if (type === 'ascii') {
-        const result = applyAsciiEffect(
-          pipeline,
-          srcCanvas,
-          dstCtx,
-          width,
-          height,
-          dpr,
-          visualEffect
-        );
+        const result = applyAsciiEffect(pipeline, srcCanvas, dstCtx, width, height, dpr, effect);
         if (result && asciiOverlay) {
           asciiOverlay(dstCtx, width, height, result.cols, result.rows);
         }
